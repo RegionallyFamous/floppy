@@ -41,6 +41,8 @@ final class Floppy_Compatibility {
 		$checks['cron'] = self::check( ! ( defined( 'DISABLE_WP_CRON' ) && DISABLE_WP_CRON ), 'WP-Cron', 'WP-Cron is disabled; configure a real cron runner for Floppy maintenance.' );
 		$checks['tables'] = self::check( empty( Floppy_Schema::validate() ), 'Database tables', 'One or more Floppy database tables are missing.' );
 		$checks['db_engine'] = self::check( self::database_supports_indexes( $wpdb ), 'Database engine', 'Floppy needs a MySQL-compatible engine with indexed InnoDB-style tables.' );
+		$checks['capabilities'] = self::check( self::capabilities_installed(), 'Floppy capabilities', 'Floppy-specific capabilities need to be installed for site users.' );
+		$checks['quota_policy'] = self::check( (int) Floppy_Settings::get_value( 'user_quota_bytes', 0 ) > 0, 'Quota policy', 'Configure a non-zero per-user quota before broad team use.' );
 
 		$probe = get_option( 'floppy_private_probe' );
 		if ( ! is_array( $probe ) ) {
@@ -92,5 +94,19 @@ final class Floppy_Compatibility {
 		$engine = $wpdb->get_var( "SHOW TABLE STATUS LIKE '{$wpdb->posts}'" ); // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared
 
 		return null !== $engine;
+	}
+
+	/**
+	 * Check that at least one role owns the Floppy read capability.
+	 */
+	private static function capabilities_installed(): bool {
+		foreach ( wp_roles()->roles as $role_name => $role_data ) {
+			$role = get_role( $role_name );
+			if ( $role && $role->has_cap( Floppy_Permissions::CAP_READ ) ) {
+				return true;
+			}
+		}
+
+		return false;
 	}
 }

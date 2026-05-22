@@ -5,13 +5,20 @@ import UniformTypeIdentifiers
 
 final class FloppyFileProviderExtension: NSObject, NSFileProviderReplicatedExtension {
     private let domain: NSFileProviderDomain
-    private let apiClient: FloppyAPIClient
+    private let apiClient: FloppyAPIClient?
+    private let configurationError: Error?
     private let ledger: LocalLedger
 
     required init(domain: NSFileProviderDomain) {
         self.domain = domain
-        self.apiClient = (try? FloppyFileProviderConfiguration.makeAPIClient(for: domain))
-            ?? FloppyAPIClient(siteURL: URL(string: "https://invalid.local")!)
+        do {
+            self.apiClient = try FloppyFileProviderConfiguration.makeAPIClient(for: domain)
+            self.configurationError = nil
+        } catch {
+            self.apiClient = nil
+            self.configurationError = error
+            FloppyDiagnostics.fileProvider.error("File Provider configuration failed: \(error.localizedDescription, privacy: .public)")
+        }
         self.ledger = FloppyFileProviderConfiguration.makeLedger(for: domain)
         super.init()
     }
@@ -35,14 +42,9 @@ final class FloppyFileProviderExtension: NSObject, NSFileProviderReplicatedExten
                 return
             }
 
-            guard let itemID = identifier.floppyItemID else {
-                completionHandler(nil, NSFileProviderError(.noSuchItem))
-                return
-            }
-
-            if let item = await ledger.item(id: itemID) {
+            if let item = await resolveItem(identifier) {
                 progress.completedUnitCount = 1
-                completionHandler(FloppyFileProviderItem(item: item), nil)
+                completionHandler(await fileProviderItem(for: item), nil)
             } else {
                 completionHandler(nil, NSFileProviderError(.noSuchItem))
             }
@@ -51,6 +53,10 @@ final class FloppyFileProviderExtension: NSObject, NSFileProviderReplicatedExten
     }
 
     func enumerator(for containerItemIdentifier: NSFileProviderItemIdentifier, request: NSFileProviderRequest) throws -> NSFileProviderEnumerator {
+        guard let apiClient else {
+            throw NSFileProviderError(.notAuthenticated)
+        }
+
         if containerItemIdentifier == .workingSet {
             return FloppyFileProviderEnumerator(workingSetWith: apiClient, ledger: ledger)
         }
@@ -70,14 +76,17 @@ final class FloppyFileProviderExtension: NSObject, NSFileProviderReplicatedExten
     ) -> Progress {
         let progress = Progress(totalUnitCount: 100)
 
-        guard let itemID = itemIdentifier.floppyItemID else {
+        guard itemIdentifier.floppyItemUUID != nil || itemIdentifier.floppyLegacyItemID != nil else {
             completionHandler(nil, nil, NSFileProviderError(.noSuchItem))
             return progress
         }
 
         let task = Task {
             do {
-                guard let item = await ledger.item(id: itemID) else {
+                guard let apiClient else {
+                    throw NSFileProviderError(.notAuthenticated)
+                }
+                guard let item = await resolveItem(itemIdentifier) else {
                     throw NSFileProviderError(.noSuchItem)
                 }
 
@@ -87,7 +96,7 @@ final class FloppyFileProviderExtension: NSObject, NSFileProviderReplicatedExten
                 try await apiClient.download(file: item, to: destination)
                 try await ledger.markMaterialized(item: item, localURL: destination)
                 progress.completedUnitCount = 100
-                completionHandler(destination, FloppyFileProviderItem(item: item), nil)
+                completionHandler(destination, await fileProviderItem(for: item), nil)
             } catch {
                 completionHandler(nil, nil, error)
             }
@@ -111,7 +120,10 @@ final class FloppyFileProviderExtension: NSObject, NSFileProviderReplicatedExten
         let progress = Progress(totalUnitCount: 100)
         let task = Task {
             do {
-                let parentID = itemTemplate.parentItemIdentifier == .rootContainer ? 0 : (itemTemplate.parentItemIdentifier.floppyItemID ?? 0)
+                guard let apiClient else {
+                    throw NSFileProviderError(.notAuthenticated)
+                }
+                let parentID = try await resolveParentID(itemTemplate.parentItemIdentifier)
                 let item: FloppyItem
                 if itemTemplate.contentType == .folder {
                     item = try await apiClient.createFolder(name: itemTemplate.filename, parentID: parentID)
@@ -124,7 +136,7 @@ final class FloppyFileProviderExtension: NSObject, NSFileProviderReplicatedExten
 
                 try await ledger.upsert(item: item)
                 progress.completedUnitCount = 100
-                completionHandler(FloppyFileProviderItem(item: item), [], false, nil)
+                completionHandler(await fileProviderItem(for: item), [], false, nil)
             } catch {
                 completionHandler(nil, fields, false, error)
             }
@@ -144,29 +156,36 @@ final class FloppyFileProviderExtension: NSObject, NSFileProviderReplicatedExten
     ) -> Progress {
         let progress = Progress(totalUnitCount: 100)
 
-        guard let itemID = item.itemIdentifier.floppyItemID else {
+        guard item.itemIdentifier.floppyItemUUID != nil || item.itemIdentifier.floppyLegacyItemID != nil else {
             completionHandler(nil, changedFields, false, NSFileProviderError(.noSuchItem))
             return progress
         }
 
         let task = Task {
             do {
-                guard var current = await ledger.item(id: itemID) else {
+                guard let apiClient else {
+                    throw NSFileProviderError(.notAuthenticated)
+                }
+                guard var current = await resolveItem(item.itemIdentifier) else {
                     throw NSFileProviderError(.noSuchItem)
                 }
 
                 if changedFields.contains(.filename), current.name != item.filename {
-                    current = try await apiClient.renameFile(id: current.id, name: item.filename, metadataVersion: version.floppyMetadataVersion)
+                    current = current.kind == .folder
+                        ? try await apiClient.renameFolder(id: current.id, name: item.filename, metadataVersion: version.floppyMetadataVersion)
+                        : try await apiClient.renameFile(id: current.id, name: item.filename, metadataVersion: version.floppyMetadataVersion)
                 }
 
                 if changedFields.contains(.parentItemIdentifier) {
-                    let parentID = item.parentItemIdentifier == .rootContainer ? 0 : (item.parentItemIdentifier.floppyItemID ?? 0)
+                    let parentID = try await resolveParentID(item.parentItemIdentifier)
                     if current.parentID != parentID {
-                        current = try await apiClient.moveFile(id: current.id, parentID: parentID, metadataVersion: current.metadataVersion)
+                        current = current.kind == .folder
+                            ? try await apiClient.moveFolder(id: current.id, parentID: parentID, metadataVersion: current.metadataVersion)
+                            : try await apiClient.moveFile(id: current.id, parentID: parentID, metadataVersion: current.metadataVersion)
                     }
                 }
 
-                if let newContents {
+                if let newContents, current.kind == .file {
                     let data = try Data(contentsOf: newContents)
                     current = try await apiClient.replaceFile(
                         id: current.id,
@@ -179,7 +198,7 @@ final class FloppyFileProviderExtension: NSObject, NSFileProviderReplicatedExten
 
                 try await ledger.upsert(item: current)
                 progress.completedUnitCount = 100
-                completionHandler(FloppyFileProviderItem(item: current), [], false, nil)
+                completionHandler(await fileProviderItem(for: current), [], false, nil)
             } catch {
                 completionHandler(nil, changedFields, false, error)
             }
@@ -198,18 +217,27 @@ final class FloppyFileProviderExtension: NSObject, NSFileProviderReplicatedExten
     ) -> Progress {
         let progress = Progress(totalUnitCount: 1)
 
-        guard let itemID = identifier.floppyItemID else {
+        guard identifier.floppyItemUUID != nil || identifier.floppyLegacyItemID != nil else {
             completionHandler(NSFileProviderError(.noSuchItem))
             return progress
         }
 
         let task = Task {
             do {
-                guard let item = await ledger.item(id: itemID), item.kind == .file else {
+                guard let apiClient else {
+                    throw NSFileProviderError(.notAuthenticated)
+                }
+                guard let item = await resolveItem(identifier) else {
                     throw NSFileProviderError(.cannotSynchronize)
                 }
 
-                if options.contains(.recursive) {
+                if item.kind == .folder {
+                    if options.contains(.recursive) {
+                        try await apiClient.deleteFolder(id: item.id)
+                    } else {
+                        try await apiClient.trashFolder(id: item.id, metadataVersion: version.floppyMetadataVersion)
+                    }
+                } else if options.contains(.recursive) {
                     try await apiClient.deleteFile(id: item.id)
                 } else {
                     try await apiClient.trashFile(id: item.id, metadataVersion: version.floppyMetadataVersion)
@@ -224,6 +252,45 @@ final class FloppyFileProviderExtension: NSObject, NSFileProviderReplicatedExten
 
         progress.cancellationHandler = { task.cancel() }
         return progress
+    }
+
+    private func resolveItem(_ identifier: NSFileProviderItemIdentifier) async -> FloppyItem? {
+        if let uuid = identifier.floppyItemUUID {
+            return await ledger.item(uuid: uuid)
+        }
+        if let legacyID = identifier.floppyLegacyItemID {
+            return await ledger.item(id: legacyID)
+        }
+        return nil
+    }
+
+    private func resolveParentID(_ identifier: NSFileProviderItemIdentifier) async throws -> Int64 {
+        if identifier == .rootContainer {
+            return 0
+        }
+        if let uuid = identifier.floppyItemUUID, let parent = await ledger.item(uuid: uuid) {
+            return parent.id
+        }
+        if let legacyID = identifier.floppyLegacyItemID {
+            return legacyID
+        }
+        throw NSFileProviderError(.noSuchItem)
+    }
+
+    private func fileProviderItem(for item: FloppyItem) async -> FloppyFileProviderItem {
+        FloppyFileProviderItem(item: item, parentItemIdentifier: await parentIdentifier(for: item))
+    }
+
+    private func parentIdentifier(for item: FloppyItem) async -> NSFileProviderItemIdentifier {
+        guard item.parentID != 0 else {
+            return .rootContainer
+        }
+
+        if let parent = await ledger.item(id: item.parentID) {
+            return parent.fileProviderIdentifier
+        }
+
+        return NSFileProviderItemIdentifier(FloppyFileProviderIdentifierCodec.legacyItemIdentifierRawValue(id: item.parentID))
     }
 }
 

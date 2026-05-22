@@ -14,7 +14,10 @@ let package = Package(
     ],
     targets: [
         .target(
-            name: "FloppyCore"
+            name: "FloppyCore",
+            linkerSettings: [
+                .linkedLibrary("sqlite3")
+            ]
         ),
         .executableTarget(
             name: "FloppyMac",

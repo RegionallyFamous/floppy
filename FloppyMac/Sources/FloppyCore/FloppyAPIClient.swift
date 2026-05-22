@@ -85,8 +85,18 @@ public struct FloppyAPIClient: Sendable {
         try await request(path: "health")
     }
 
-    public func listFiles(parentID: Int64 = 0, afterID: Int64 = 0, limit: Int = 100) async throws -> FloppyListResponse {
-        try await request(path: "files?parent_id=\(parentID)&after_id=\(afterID)&limit=\(limit)")
+    public func listFiles(parentID: Int64 = 0, cursor: String = "", afterID: Int64 = 0, limit: Int = 100) async throws -> FloppyListResponse {
+        var components = URLComponents()
+        components.queryItems = [
+            URLQueryItem(name: "parent_id", value: String(parentID)),
+            URLQueryItem(name: "limit", value: String(limit))
+        ]
+        if !cursor.isEmpty {
+            components.queryItems?.append(URLQueryItem(name: "cursor", value: cursor))
+        } else if afterID > 0 {
+            components.queryItems?.append(URLQueryItem(name: "after_id", value: String(afterID)))
+        }
+        return try await request(path: "files?\(components.percentEncodedQuery ?? "")")
     }
 
     public func syncChanges(cursor: UInt64 = 0, limit: Int = 250) async throws -> FloppyChangeFeed {
@@ -95,6 +105,17 @@ public struct FloppyAPIClient: Sendable {
 
     public func devices() async throws -> FloppyDeviceList {
         try await request(path: "devices")
+    }
+
+    public func revokeDevice(deviceUUID: String) async throws {
+        do {
+            let _: EmptyResponse = try await request(path: "devices/\(deviceUUID)/revoke", method: "POST", body: EmptyRequestBody())
+        } catch FloppyAPIError.httpStatus(let status, _) where status == 404 || status == 405 {
+            FloppyDiagnostics.api.info("Falling back to DELETE device revoke route for \(deviceUUID, privacy: .private)")
+            let request = try makeRequest(path: "devices/\(deviceUUID)", method: "DELETE")
+            let (data, response) = try await session.data(for: request)
+            try validate(response: response, data: data)
+        }
     }
 
     public func authorizeDevice(deviceName: String) async throws -> FloppyDeviceAuthorization {
@@ -107,6 +128,15 @@ public struct FloppyAPIClient: Sendable {
         }
 
         return try await request(path: "devices/authorize", method: "POST", body: Body(deviceName: deviceName))
+    }
+
+    public func exchangeDeviceCode(code: String, state: String) async throws -> FloppyDeviceAuthorization {
+        struct Body: Encodable {
+            let code: String
+            let state: String
+        }
+
+        return try await request(path: "devices/exchange", method: "POST", body: Body(code: code, state: state), requiresToken: false)
     }
 
     public func wordPressRESTRoot() async throws -> WordPressRESTRoot {
@@ -190,6 +220,34 @@ public struct FloppyAPIClient: Sendable {
         return try await request(path: "files/\(id)/move", method: "POST", body: Body(parentID: parentID, metadataVersion: metadataVersion))
     }
 
+    public func renameFolder(id: Int64, name: String, metadataVersion: String) async throws -> FloppyItem {
+        struct Body: Encodable {
+            let name: String
+            let metadataVersion: String
+
+            enum CodingKeys: String, CodingKey {
+                case name
+                case metadataVersion = "metadata_version"
+            }
+        }
+
+        return try await request(path: "folders/\(id)/rename", method: "POST", body: Body(name: name, metadataVersion: metadataVersion))
+    }
+
+    public func moveFolder(id: Int64, parentID: Int64, metadataVersion: String) async throws -> FloppyItem {
+        struct Body: Encodable {
+            let parentID: Int64
+            let metadataVersion: String
+
+            enum CodingKeys: String, CodingKey {
+                case parentID = "parent_id"
+                case metadataVersion = "metadata_version"
+            }
+        }
+
+        return try await request(path: "folders/\(id)/move", method: "POST", body: Body(parentID: parentID, metadataVersion: metadataVersion))
+    }
+
     public func trashFile(id: Int64, metadataVersion: String) async throws {
         struct Body: Encodable {
             let metadataVersion: String
@@ -202,8 +260,26 @@ public struct FloppyAPIClient: Sendable {
         let _: EmptyResponse = try await request(path: "files/\(id)/trash", method: "POST", body: Body(metadataVersion: metadataVersion))
     }
 
+    public func trashFolder(id: Int64, metadataVersion: String) async throws {
+        struct Body: Encodable {
+            let metadataVersion: String
+
+            enum CodingKeys: String, CodingKey {
+                case metadataVersion = "metadata_version"
+            }
+        }
+
+        let _: EmptyResponse = try await request(path: "folders/\(id)/trash", method: "POST", body: Body(metadataVersion: metadataVersion))
+    }
+
     public func deleteFile(id: Int64) async throws {
         let request = try makeRequest(path: "files/\(id)", method: "DELETE")
+        let (data, response) = try await session.data(for: request)
+        try validate(response: response, data: data)
+    }
+
+    public func deleteFolder(id: Int64) async throws {
+        let request = try makeRequest(path: "folders/\(id)", method: "DELETE")
         let (data, response) = try await session.data(for: request)
         try validate(response: response, data: data)
     }
@@ -245,7 +321,11 @@ public struct FloppyAPIClient: Sendable {
         if let authorizationHeader {
             request.setValue(authorizationHeader, forHTTPHeaderField: "Authorization")
         }
-        let (temporaryURL, response) = try await session.download(for: request)
+        let policy = FloppyDownloadOriginPolicy(siteURL: siteURL, restURL: restURL)
+        try policy.validate(downloadURL)
+
+        let (temporaryURL, response) = try await session.download(for: request, delegate: FloppyDownloadRedirectDelegate(policy: policy))
+        try policy.validate(response: response)
         try validate(response: response, data: Data())
         if FileManager.default.fileExists(atPath: url.path) {
             try FileManager.default.removeItem(at: url)
@@ -362,6 +442,7 @@ private extension URL {
 }
 
 public struct EmptyResponse: Codable, Equatable, Sendable {}
+public struct EmptyRequestBody: Codable, Equatable, Sendable {}
 
 extension FloppyAPIClient {
     public static func parseApplicationPasswordCallback(_ url: URL) throws -> WordPressApplicationCredential {
@@ -397,12 +478,15 @@ extension FloppyAPIClient {
 
         let items = try uniqueQueryItems(url)
 
-        guard
-            let site = items["site"].flatMap(URL.init(string:)),
-            let deviceUUID = items["device_uuid"],
-            let token = items["token"],
-            let scope = items["scope"]
-        else {
+        guard let site = items["site"].flatMap(URL.init(string:)) else {
+            throw FloppyAPIError.invalidResponse
+        }
+
+        if let code = items["code"], !code.isEmpty {
+            return FloppyDeviceApproval(siteURL: site, deviceUUID: "", token: "", scope: "", state: items["state"] ?? "", exchangeCode: code)
+        }
+
+        guard let deviceUUID = items["device_uuid"], let token = items["token"], let scope = items["scope"] else {
             throw FloppyAPIError.invalidResponse
         }
 

@@ -6,13 +6,16 @@
 
 .floppy-shell {
 	display: grid;
-	grid-template-columns: 188px minmax(0, 1fr);
+	grid-template-columns: 204px minmax(0, 1fr);
 	background: #f6f7f7;
 	color: #1d2327;
 	font-size: 13px;
 }
 
 .floppy-sidebar {
+	display: flex;
+	flex-direction: column;
+	gap: 4px;
 	border-right: 1px solid #dcdcde;
 	background: #fff;
 	padding: 14px 10px;
@@ -21,9 +24,27 @@
 .floppy-brand {
 	display: flex;
 	align-items: center;
-	gap: 8px;
+	gap: 10px;
 	padding: 6px 8px 14px;
 	font-size: 16px;
+}
+
+.floppy-brand > div {
+	display: grid;
+	gap: 1px;
+}
+
+.floppy-brand span:last-child {
+	color: #646970;
+	font-size: 11px;
+}
+
+.floppy-brand span:last-child.is-busy {
+	color: #3858e9;
+}
+
+.floppy-brand span:last-child.is-error {
+	color: #b32d2e;
 }
 
 .floppy-nav {
@@ -32,7 +53,7 @@
 	gap: 8px;
 	width: 100%;
 	min-height: 36px;
-	margin: 2px 0;
+	margin: 0;
 	padding: 7px 8px;
 	border: 0;
 	border-radius: 6px;
@@ -48,6 +69,10 @@
 	color: #005c3a;
 }
 
+.floppy-nav.is-active {
+	box-shadow: inset 3px 0 0 #008a5b;
+}
+
 .floppy-main {
 	display: grid;
 	grid-template-rows: auto minmax(0, 1fr);
@@ -58,23 +83,43 @@
 	display: flex;
 	align-items: center;
 	justify-content: space-between;
-	min-height: 52px;
+	min-height: 56px;
+	gap: 12px;
 	padding: 8px 14px;
 	border-bottom: 1px solid #dcdcde;
 	background: #fff;
 }
 
 .floppy-breadcrumb,
-.floppy-actions {
+.floppy-actions,
+.floppy-button-row {
 	display: flex;
 	align-items: center;
 	gap: 8px;
+}
+
+.floppy-breadcrumb > div {
+	display: grid;
+	gap: 2px;
+	min-width: 0;
+}
+
+.floppy-breadcrumb strong {
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.floppy-breadcrumb span:last-child {
+	color: #646970;
+	font-size: 11px;
 }
 
 .floppy-icon-button {
 	display: inline-flex;
 	align-items: center;
 	justify-content: center;
+	flex: 0 0 auto;
 	width: 34px;
 	height: 34px;
 	border: 1px solid #c3c4c7;
@@ -95,6 +140,25 @@
 	padding: 16px;
 }
 
+.floppy-loading-panel,
+.floppy-empty {
+	display: grid;
+	align-content: center;
+	justify-items: center;
+	gap: 8px;
+	min-height: 148px;
+	padding: 18px;
+	border: 1px dashed #c3c4c7;
+	border-radius: 8px;
+	background: #fff;
+	color: #50575e;
+	text-align: center;
+}
+
+.floppy-empty strong {
+	color: #1d2327;
+}
+
 .floppy-drop-zone {
 	min-height: 100%;
 }
@@ -105,9 +169,30 @@
 	background: #f0fff8;
 }
 
+.floppy-surface-head {
+	display: flex;
+	align-items: flex-start;
+	justify-content: space-between;
+	gap: 16px;
+	margin: 0 0 14px;
+}
+
+.floppy-surface-head h2,
+.floppy-panel h2 {
+	margin: 0 0 4px;
+	font-size: 16px;
+	line-height: 1.25;
+}
+
+.floppy-surface-head p,
+.floppy-panel p {
+	margin: 0;
+	color: #646970;
+}
+
 .floppy-list--grid {
 	display: grid;
-	grid-template-columns: repeat(auto-fill, minmax(132px, 1fr));
+	grid-template-columns: repeat(auto-fill, minmax(148px, 1fr));
 	gap: 12px;
 }
 
@@ -118,9 +203,9 @@
 
 .floppy-item {
 	display: grid;
-	grid-template-rows: auto minmax(20px, auto) auto;
+	grid-template-rows: auto minmax(20px, auto) auto auto;
 	gap: 8px;
-	min-height: 118px;
+	min-height: 132px;
 	padding: 12px;
 	border: 1px solid #dcdcde;
 	border-radius: 8px;
@@ -131,40 +216,96 @@
 }
 
 .floppy-list--list .floppy-item {
-	grid-template-columns: 28px minmax(0, 1fr) auto;
+	grid-template-columns: 28px minmax(0, 1fr) auto auto;
 	grid-template-rows: auto;
 	align-items: center;
-	min-height: 44px;
+	min-height: 46px;
 }
 
-.floppy-item:hover {
+.floppy-item:hover,
+.floppy-target:hover,
+.floppy-device:hover {
 	border-color: #008a5b;
 	box-shadow: 0 1px 2px rgba(0, 0, 0, 0.06);
 }
 
-.floppy-item .dashicons {
+.floppy-item .dashicons,
+.floppy-target .dashicons,
+.floppy-device .dashicons,
+.floppy-stat .dashicons,
+.floppy-event .dashicons {
 	color: #008a5b;
 }
 
-.floppy-item strong {
+.floppy-item strong,
+.floppy-target strong {
 	overflow-wrap: anywhere;
 }
 
-.floppy-item span:last-child {
+.floppy-item span:last-child,
+.floppy-item small,
+.floppy-target small,
+.floppy-device small,
+.floppy-event small,
+.floppy-event time {
 	color: #646970;
+	font-size: 11px;
 }
 
-.floppy-empty,
-.floppy-panel {
-	padding: 18px;
+.floppy-panel-grid {
+	display: grid;
+	grid-template-columns: repeat(2, minmax(0, 1fr));
+	gap: 14px;
+}
+
+.floppy-panel,
+.floppy-stat,
+.floppy-device,
+.floppy-event {
 	border: 1px solid #dcdcde;
 	border-radius: 8px;
 	background: #fff;
 }
 
-.floppy-panel h2 {
-	margin: 0 0 12px;
-	font-size: 16px;
+.floppy-panel {
+	padding: 16px;
+}
+
+.floppy-panel--wide {
+	grid-column: 1 / -1;
+}
+
+.floppy-stat {
+	display: grid;
+	grid-template-columns: 34px minmax(0, 1fr);
+	grid-template-rows: auto auto;
+	column-gap: 10px;
+	align-items: center;
+	padding: 14px;
+}
+
+.floppy-stat .dashicons {
+	grid-row: 1 / span 2;
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	width: 32px;
+	height: 32px;
+	border-radius: 8px;
+	background: #e7f5ee;
+}
+
+.floppy-stat strong {
+	font-size: 18px;
+	line-height: 1.1;
+}
+
+.floppy-stat small {
+	color: #646970;
+}
+
+.floppy-table-wrap {
+	overflow-x: auto;
 }
 
 .floppy-panel table {
@@ -173,7 +314,7 @@
 }
 
 .floppy-panel td {
-	padding: 8px;
+	padding: 9px 8px;
 	border-top: 1px solid #dcdcde;
 	vertical-align: top;
 }
@@ -182,20 +323,281 @@
 	display: none;
 }
 
-.floppy-inline-form {
+.floppy-inline-form,
+.floppy-form {
 	display: grid;
-	grid-template-columns: minmax(0, 1fr) auto auto;
-	gap: 8px;
+	gap: 10px;
 	margin: 0 0 12px;
-	padding: 10px;
+	padding: 12px;
 	border: 1px solid #c3c4c7;
 	border-radius: 8px;
 	background: #fff;
 }
 
+.floppy-inline-form {
+	grid-template-columns: minmax(0, 1fr) auto auto;
+}
+
 .floppy-inline-form input,
-.floppy-inline-form button {
+.floppy-inline-form button,
+.floppy-form input,
+.floppy-form select,
+.floppy-form button {
 	min-height: 34px;
+}
+
+.floppy-form label {
+	display: grid;
+	gap: 5px;
+}
+
+.floppy-form label > span {
+	color: #50575e;
+	font-size: 12px;
+	font-weight: 600;
+}
+
+.floppy-form-actions {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 8px;
+}
+
+.floppy-target-list,
+.floppy-device-list,
+.floppy-event-list {
+	display: grid;
+	gap: 8px;
+}
+
+.floppy-target {
+	display: grid;
+	grid-template-columns: 28px minmax(0, 1fr);
+	gap: 10px;
+	align-items: center;
+	width: 100%;
+	padding: 10px;
+	border: 1px solid #dcdcde;
+	border-radius: 8px;
+	background: #fff;
+	color: #1d2327;
+	text-align: left;
+	cursor: pointer;
+}
+
+.floppy-target span:last-child {
+	display: grid;
+	gap: 2px;
+}
+
+.floppy-target.is-active {
+	border-color: #3858e9;
+	background: #f3f6ff;
+}
+
+.floppy-device {
+	display: grid;
+	grid-template-columns: minmax(0, 1fr) auto;
+	gap: 12px;
+	padding: 14px;
+}
+
+.floppy-device > div:first-child {
+	display: grid;
+	grid-template-columns: 28px minmax(0, 1fr);
+	gap: 10px;
+	align-items: center;
+}
+
+.floppy-device > div:first-child .dashicons {
+	grid-row: 1 / span 2;
+}
+
+.floppy-device dl,
+.floppy-definition-list {
+	display: grid;
+	gap: 8px;
+	margin: 0;
+}
+
+.floppy-device dl {
+	grid-column: 1 / -1;
+	grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.floppy-device dl div,
+.floppy-definition-list div {
+	display: grid;
+	gap: 2px;
+}
+
+.floppy-device dt,
+.floppy-definition-list dt {
+	color: #646970;
+	font-size: 11px;
+	font-weight: 600;
+	text-transform: uppercase;
+}
+
+.floppy-device dd,
+.floppy-definition-list dd {
+	margin: 0;
+}
+
+.floppy-device .button {
+	justify-self: start;
+}
+
+.floppy-error-text {
+	grid-column: 1 / -1;
+	color: #b32d2e;
+}
+
+.floppy-event {
+	display: grid;
+	grid-template-columns: 28px minmax(0, 1fr) auto;
+	gap: 10px;
+	align-items: center;
+	padding: 10px 12px;
+}
+
+.floppy-event > div {
+	display: grid;
+	gap: 2px;
+	min-width: 0;
+}
+
+.floppy-event time {
+	white-space: nowrap;
+}
+
+.floppy-pill {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	min-height: 24px;
+	padding: 2px 8px;
+	border-radius: 999px;
+	background: #f0f0f1;
+	color: #3c434a;
+	font-size: 12px;
+	font-weight: 600;
+	white-space: nowrap;
+}
+
+.floppy-pill.is-active,
+.floppy-pill.is-pass {
+	background: #e7f5ee;
+	color: #005c3a;
+}
+
+.floppy-pill.is-fail,
+.floppy-pill.is-revoked {
+	background: #fcf0f1;
+	color: #b32d2e;
+}
+
+.floppy-callout {
+	display: grid;
+	gap: 4px;
+	margin: 0 0 12px;
+	padding: 12px;
+	border: 1px solid #dcdcde;
+	border-left: 4px solid #3858e9;
+	border-radius: 8px;
+	background: #fff;
+}
+
+.floppy-callout.is-info {
+	border-left-color: #008a5b;
+	background: #f0fff8;
+}
+
+.floppy-callout span {
+	color: #646970;
+}
+
+.floppy-segmented {
+	display: inline-grid;
+	grid-template-columns: repeat(4, minmax(0, 1fr));
+	width: 100%;
+	max-width: 420px;
+	margin: 0 0 12px;
+	border: 1px solid #c3c4c7;
+	border-radius: 8px;
+	overflow: hidden;
+	background: #fff;
+}
+
+.floppy-segmented button {
+	min-height: 34px;
+	border: 0;
+	border-right: 1px solid #c3c4c7;
+	background: #fff;
+	color: #1d2327;
+	cursor: pointer;
+}
+
+.floppy-segmented button:last-child {
+	border-right: 0;
+}
+
+.floppy-segmented button.is-active {
+	background: #3858e9;
+	color: #fff;
+}
+
+.floppy-onboarding {
+	display: grid;
+	gap: 12px;
+}
+
+.floppy-steps {
+	display: grid;
+	grid-template-columns: repeat(4, minmax(0, 1fr));
+	gap: 10px;
+	margin: 0;
+	padding: 0;
+	list-style: none;
+	counter-reset: floppy-steps;
+}
+
+.floppy-steps li {
+	display: grid;
+	gap: 6px;
+	align-content: start;
+	padding: 12px;
+	border: 1px solid #dcdcde;
+	border-radius: 8px;
+	background: #f9f9f9;
+	counter-increment: floppy-steps;
+}
+
+.floppy-steps li::before {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	width: 24px;
+	height: 24px;
+	border-radius: 999px;
+	background: #1d2327;
+	color: #fff;
+	content: counter(floppy-steps);
+	font-size: 12px;
+	font-weight: 700;
+}
+
+.floppy-steps span {
+	color: #646970;
+}
+
+.floppy-settings {
+	display: grid;
+	gap: 14px;
+}
+
+.floppy-dock-tile {
+	--floppy-dock-accent: #008a5b;
 }
 
 .floppy-admin-grid {
@@ -205,6 +607,12 @@
 	max-width: 1180px;
 }
 
+.floppy-admin-kicker {
+	max-width: 760px;
+	color: #50575e;
+	font-size: 14px;
+}
+
 .floppy-admin-panel {
 	padding: 16px;
 	border: 1px solid #c3c4c7;
@@ -212,9 +620,87 @@
 	background: #fff;
 }
 
+.floppy-admin-hero {
+	display: grid;
+	gap: 16px;
+	padding: 0;
+	border: 0;
+	background: transparent;
+}
+
+.floppy-admin-overview {
+	display: grid;
+	grid-template-columns: repeat(4, minmax(0, 1fr));
+	gap: 10px;
+}
+
+.floppy-admin-metric {
+	display: grid;
+	gap: 5px;
+	padding: 12px;
+	border: 1px solid #dcdcde;
+	border-radius: 8px;
+	background: #fff;
+}
+
+.floppy-admin-metric strong {
+	font-size: 17px;
+}
+
+.floppy-admin-metric span {
+	color: #646970;
+}
+
+.floppy-admin-steps {
+	display: grid;
+	grid-template-columns: repeat(3, minmax(0, 1fr));
+	gap: 10px;
+	margin: 0;
+	padding: 0;
+	list-style: none;
+	counter-reset: floppy-admin-steps;
+}
+
+.floppy-admin-steps li {
+	display: grid;
+	gap: 6px;
+	padding: 12px;
+	border: 1px solid #dcdcde;
+	border-radius: 8px;
+	background: #fff;
+	counter-increment: floppy-admin-steps;
+}
+
+.floppy-admin-steps li::before {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	width: 24px;
+	height: 24px;
+	border-radius: 999px;
+	background: #3858e9;
+	color: #fff;
+	content: counter(floppy-admin-steps);
+	font-weight: 700;
+}
+
+.floppy-admin-steps span,
+.floppy-admin-note {
+	color: #646970;
+}
+
 .floppy-admin-actions {
 	display: inline-block;
 	margin: 12px 8px 0 0;
+}
+
+@media (max-width: 960px) {
+	.floppy-panel-grid,
+	.floppy-admin-overview,
+	.floppy-admin-steps,
+	.floppy-steps {
+		grid-template-columns: 1fr 1fr;
+	}
 }
 
 @media (max-width: 760px) {
@@ -223,7 +709,7 @@
 	}
 
 	.floppy-sidebar {
-		display: flex;
+		flex-direction: row;
 		gap: 4px;
 		overflow-x: auto;
 		border-right: 0;
@@ -237,5 +723,36 @@
 	.floppy-nav {
 		width: auto;
 		white-space: nowrap;
+	}
+
+	.floppy-toolbar,
+	.floppy-surface-head,
+	.floppy-device {
+		align-items: stretch;
+		flex-direction: column;
+	}
+
+	.floppy-toolbar {
+		display: grid;
+	}
+
+	.floppy-panel-grid,
+	.floppy-admin-overview,
+	.floppy-admin-steps,
+	.floppy-steps,
+	.floppy-device dl {
+		grid-template-columns: 1fr;
+	}
+
+	.floppy-inline-form {
+		grid-template-columns: 1fr;
+	}
+
+	.floppy-event {
+		grid-template-columns: 28px minmax(0, 1fr);
+	}
+
+	.floppy-event time {
+		grid-column: 2;
 	}
 }

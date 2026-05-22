@@ -75,6 +75,19 @@ final class Floppy_Rest {
 			)
 		);
 
+		foreach ( array( 'rename', 'move', 'trash', 'restore' ) as $action ) {
+			register_rest_route(
+				self::NAMESPACE,
+				'/folders/(?P<id>[\d]+)/' . $action,
+				array(
+					'methods'             => WP_REST_Server::CREATABLE,
+					'callback'            => array( __CLASS__, 'folder_' . $action ),
+					'permission_callback' => array( __CLASS__, 'require_write' ),
+					'args'                => array( 'id' => array( 'sanitize_callback' => 'absint' ) ),
+				)
+			);
+		}
+
 		register_rest_route(
 			self::NAMESPACE,
 			'/upload',
@@ -163,6 +176,17 @@ final class Floppy_Rest {
 
 		register_rest_route(
 			self::NAMESPACE,
+			'/folders/(?P<id>[\d]+)',
+			array(
+				'methods'             => WP_REST_Server::DELETABLE,
+				'callback'            => array( __CLASS__, 'delete_folder' ),
+				'permission_callback' => array( __CLASS__, 'require_write' ),
+				'args'                => array( 'id' => array( 'sanitize_callback' => 'absint' ) ),
+			)
+		);
+
+		register_rest_route(
+			self::NAMESPACE,
 			'/sync/changes',
 			array(
 				'methods'             => WP_REST_Server::READABLE,
@@ -193,11 +217,21 @@ final class Floppy_Rest {
 
 		register_rest_route(
 			self::NAMESPACE,
+			'/devices/exchange',
+			array(
+				'methods'             => WP_REST_Server::CREATABLE,
+				'callback'            => array( __CLASS__, 'exchange_device_code' ),
+				'permission_callback' => '__return_true',
+			)
+		);
+
+		register_rest_route(
+			self::NAMESPACE,
 			'/devices/(?P<uuid>[a-f0-9-]+)/revoke',
 			array(
 				'methods'             => WP_REST_Server::CREATABLE,
 				'callback'            => array( __CLASS__, 'revoke_device' ),
-				'permission_callback' => array( __CLASS__, 'require_browser_session' ),
+				'permission_callback' => array( __CLASS__, 'require_device_revoke' ),
 			)
 		);
 
@@ -239,9 +273,13 @@ final class Floppy_Rest {
 				'version'      => FLOPPY_VERSION,
 				'namespace'    => self::NAMESPACE,
 				'rest_url'     => esc_url_raw( rest_url( self::NAMESPACE ) ),
-				'auth'         => array( 'browser_device_approval', 'wordpress_session' ),
+				'auth'         => array( 'browser_device_approval', 'device_code_exchange', 'wordpress_session', 'application_password_bootstrap' ),
 				'desktop_mode' => function_exists( 'desktop_mode_register_window' ),
 				'private'      => true,
+				'limits'       => array(
+					'max_file_size'   => (int) Floppy_Settings::get_value( 'max_file_size', wp_max_upload_size() ),
+					'max_batch_files' => (int) Floppy_Settings::get_value( 'max_batch_files', 50 ),
+				),
 			)
 		);
 	}
@@ -262,43 +300,113 @@ final class Floppy_Rest {
 		$user_id   = get_current_user_id();
 		$parent_id = absint( $request->get_param( 'parent_id' ) );
 		$after_id  = absint( $request->get_param( 'after_id' ) );
+		$cursor    = sanitize_text_field( (string) $request->get_param( 'cursor' ) );
+		$shared    = rest_sanitize_boolean( $request->get_param( 'shared' ) );
 		$limit     = max( 1, min( 100, absint( $request->get_param( 'limit' ) ?: 50 ) ) );
 
+		if ( $shared ) {
+			return self::list_shared_items( $cursor, $after_id, $limit, $user_id );
+		}
+
 		if ( $parent_id && ! Floppy_Permissions::can_read( 'folder', $parent_id, $user_id ) ) {
-			return new WP_Error( 'floppy_forbidden', __( 'You cannot read this folder.', 'floppy' ), array( 'status' => 403 ) );
+			return self::not_found_or_forbidden( 'folder', $parent_id, 'read' );
 		}
 
-		$folder_rows = self::query_children( Floppy_Schema::table( 'folders' ), $parent_id, $after_id, $limit, $user_id );
-		$file_rows   = self::query_children( Floppy_Schema::table( 'files' ), $parent_id, $after_id, $limit, $user_id );
-
+		$rows = self::query_children_page( $parent_id, $cursor, $after_id, $limit + 1, $user_id );
+		$has_more = count( $rows ) > $limit;
+		if ( $has_more ) {
+			array_pop( $rows );
+		}
 		$items = array();
-		foreach ( $folder_rows as $row ) {
-			if ( Floppy_Permissions::can_read( 'folder', (int) $row['id'], $user_id ) ) {
+		$next_cursor = '';
+		foreach ( $rows as $row ) {
+			if ( 'folder' === $row['kind'] && Floppy_Permissions::can_read( 'folder', (int) $row['id'], $user_id ) ) {
 				$items[] = self::serialize_folder( $row );
-			}
-		}
-		foreach ( $file_rows as $row ) {
-			if ( Floppy_Permissions::can_read( 'file', (int) $row['id'], $user_id ) ) {
+				$next_cursor = 'folder:' . (int) $row['id'];
+			} elseif ( 'file' === $row['kind'] && Floppy_Permissions::can_read( 'file', (int) $row['id'], $user_id ) ) {
 				$items[] = self::serialize_file( $row );
+				$next_cursor = 'file:' . (int) $row['id'];
 			}
 		}
-
-		usort(
-			$items,
-			static function ( $a, $b ) {
-				if ( $a['kind'] === $b['kind'] ) {
-					return strnatcasecmp( $a['name'], $b['name'] );
-				}
-
-				return 'folder' === $a['kind'] ? -1 : 1;
-			}
-		);
 
 		return new WP_REST_Response(
 			array(
-				'parent_id' => $parent_id,
-				'limit'     => $limit,
-				'items'     => $items,
+				'parent_id'   => $parent_id,
+				'limit'       => $limit,
+				'cursor'      => $cursor,
+				'next_cursor' => $next_cursor,
+				'has_more'    => $has_more,
+				'items'       => $items,
+			)
+		);
+	}
+
+	/**
+	 * List directly shared files and folders for the current user.
+	 */
+	private static function list_shared_items( string $cursor, int $after_id, int $limit, int $user_id ): WP_REST_Response {
+		global $wpdb;
+
+		$user = get_userdata( $user_id );
+		$roles = $user ? array_values( (array) $user->roles ) : array();
+		$cursor_kind = '';
+		$cursor_id = $after_id;
+		if ( preg_match( '/^(folder|file):(\d+)$/', $cursor, $matches ) ) {
+			$cursor_kind = $matches[1];
+			$cursor_id = (int) $matches[2];
+		}
+
+		$folder_after = 'file' === $cursor_kind ? PHP_INT_MAX : $cursor_id;
+		$file_after = 'folder' === $cursor_kind ? 0 : $cursor_id;
+		$principals = array( array( 'user', (string) $user_id ) );
+		foreach ( $roles as $role ) {
+			$principals[] = array( 'role', (string) $role );
+		}
+
+		$grant_clauses = array();
+		$grant_values = array();
+		foreach ( $principals as $principal ) {
+			$grant_clauses[] = '(g.principal_type = %s AND g.principal_ref = %s)';
+			$grant_values[] = $principal[0];
+			$grant_values[] = $principal[1];
+		}
+		$grant_sql = implode( ' OR ', $grant_clauses );
+
+		$sql = $wpdb->prepare(
+			"(SELECT 'folder' AS kind, 0 AS kind_order, f.id, f.uuid, 0 AS attachment_id, f.owner_id, f.parent_id, f.name, f.normalized_name, '' AS mime_type, 0 AS size_bytes, '' AS content_hash, '' AS storage_key, '' AS content_version, f.metadata_version, f.status, 'private' AS visibility, f.created_at_gmt, f.updated_at_gmt FROM " . Floppy_Schema::table( 'acl_grants' ) . ' g INNER JOIN ' . Floppy_Schema::table( 'folders' ) . " f ON g.target_type = 'folder' AND g.target_id = f.id WHERE g.state = 'accepted' AND ($grant_sql) AND f.status = 'active' AND f.id > %d)
+			UNION ALL
+			(SELECT 'file' AS kind, 1 AS kind_order, f.id, f.uuid, f.attachment_id, f.owner_id, f.parent_id, f.name, f.normalized_name, f.mime_type, f.size_bytes, f.content_hash, f.storage_key, f.content_version, f.metadata_version, f.status, f.visibility, f.created_at_gmt, f.updated_at_gmt FROM " . Floppy_Schema::table( 'acl_grants' ) . ' g INNER JOIN ' . Floppy_Schema::table( 'files' ) . " f ON g.target_type = 'file' AND g.target_id = f.id WHERE g.state = 'accepted' AND ($grant_sql) AND f.status = 'active' AND f.id > %d)
+			ORDER BY kind_order ASC, id ASC LIMIT %d",
+			array_merge( $grant_values, array( $folder_after ), $grant_values, array( $file_after, $limit + 1 ) )
+		); // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared
+
+		$rows = $wpdb->get_results( $sql, ARRAY_A );
+		$has_more = count( $rows ) > $limit;
+		if ( $has_more ) {
+			array_pop( $rows );
+		}
+
+		$items = array();
+		$next_cursor = '';
+		foreach ( $rows as $row ) {
+			if ( 'folder' === $row['kind'] && Floppy_Permissions::can_read( 'folder', (int) $row['id'], $user_id ) ) {
+				$items[] = self::serialize_folder( $row );
+				$next_cursor = 'folder:' . (int) $row['id'];
+			} elseif ( 'file' === $row['kind'] && Floppy_Permissions::can_read( 'file', (int) $row['id'], $user_id ) ) {
+				$items[] = self::serialize_file( $row );
+				$next_cursor = 'file:' . (int) $row['id'];
+			}
+		}
+
+		return new WP_REST_Response(
+			array(
+				'parent_id'   => 0,
+				'shared'      => true,
+				'limit'       => $limit,
+				'cursor'      => $cursor,
+				'next_cursor' => $next_cursor,
+				'has_more'    => $has_more,
+				'items'       => $items,
 			)
 		);
 	}
@@ -314,10 +422,10 @@ final class Floppy_Rest {
 		$name      = Floppy_Storage::normalize_filename( (string) $request->get_param( 'name' ) );
 
 		if ( $parent_id && ! Floppy_Permissions::can_write( 'folder', $parent_id, $user_id ) ) {
-			return new WP_Error( 'floppy_forbidden', __( 'You cannot create folders here.', 'floppy' ), array( 'status' => 403 ) );
+			return self::not_found_or_forbidden( 'folder', $parent_id, 'write' );
 		}
 
-		$collision = self::name_collision( 'folders', $parent_id, $name );
+		$collision = self::item_name_collision( $parent_id, $name );
 		if ( is_wp_error( $collision ) ) {
 			return $collision;
 		}
@@ -349,6 +457,55 @@ final class Floppy_Rest {
 	}
 
 	/**
+	 * Rename a folder.
+	 */
+	public static function folder_rename( WP_REST_Request $request ) {
+		$id = absint( $request['id'] );
+		$name = Floppy_Storage::normalize_filename( (string) $request->get_param( 'name' ) );
+
+		return self::update_folder_metadata( $id, $request, array( 'name' => $name, 'normalized_name' => Floppy_Storage::normalize_lookup_name( $name ) ), 'folder.renamed' );
+	}
+
+	/**
+	 * Move a folder.
+	 */
+	public static function folder_move( WP_REST_Request $request ) {
+		$id = absint( $request['id'] );
+		$parent_id = absint( $request->get_param( 'parent_id' ) );
+
+		if ( $parent_id === $id || self::folder_is_descendant( $parent_id, $id ) ) {
+			return new WP_Error( 'floppy_invalid_folder_move', __( 'A folder cannot be moved into itself or one of its descendants.', 'floppy' ), array( 'status' => 409 ) );
+		}
+
+		if ( $parent_id && ! Floppy_Permissions::can_write( 'folder', $parent_id ) ) {
+			return self::not_found_or_forbidden( 'folder', $parent_id, 'write' );
+		}
+
+		return self::update_folder_metadata( $id, $request, array( 'parent_id' => $parent_id ), 'folder.moved' );
+	}
+
+	/**
+	 * Trash a folder and visible descendants.
+	 */
+	public static function folder_trash( WP_REST_Request $request ) {
+		return self::update_folder_tree_status( absint( $request['id'] ), $request, 'trashed', 'folder.trashed' );
+	}
+
+	/**
+	 * Restore a folder and descendants.
+	 */
+	public static function folder_restore( WP_REST_Request $request ) {
+		return self::update_folder_tree_status( absint( $request['id'] ), $request, 'active', 'folder.restored' );
+	}
+
+	/**
+	 * Delete a folder and tombstone descendants.
+	 */
+	public static function delete_folder( WP_REST_Request $request ) {
+		return self::update_folder_tree_status( absint( $request['id'] ), $request, 'deleted', 'folder.deleted' );
+	}
+
+	/**
 	 * Search visible files and folders by name.
 	 */
 	public static function search( WP_REST_Request $request ): WP_REST_Response {
@@ -361,7 +518,8 @@ final class Floppy_Rest {
 			return new WP_REST_Response( array( 'items' => array() ) );
 		}
 
-		$like = '%' . $wpdb->esc_like( Floppy_Storage::normalize_lookup_name( $q ) ) . '%';
+		$normalized = Floppy_Storage::normalize_lookup_name( $q );
+		$like = $wpdb->esc_like( $normalized ) . '%';
 		$folders = $wpdb->get_results(
 			$wpdb->prepare(
 				'SELECT * FROM ' . Floppy_Schema::table( 'folders' ) . " WHERE status = 'active' AND normalized_name LIKE %s ORDER BY updated_at_gmt DESC, id DESC LIMIT %d",
@@ -391,7 +549,12 @@ final class Floppy_Rest {
 			}
 		}
 
-		return new WP_REST_Response( array( 'items' => array_slice( $items, 0, $limit ) ) );
+		return new WP_REST_Response(
+			array(
+				'items'      => array_slice( $items, 0, $limit ),
+				'query_mode' => 'prefix',
+			)
+		);
 	}
 
 	/**
@@ -406,7 +569,7 @@ final class Floppy_Rest {
 			return $rate;
 		}
 
-		if ( ! current_user_can( 'upload_files' ) ) {
+		if ( ! current_user_can( Floppy_Permissions::CAP_WRITE ) && ! current_user_can( Floppy_Permissions::CAP_MANAGE ) ) {
 			return new WP_Error( 'floppy_forbidden', __( 'You cannot upload files.', 'floppy' ), array( 'status' => 403 ) );
 		}
 
@@ -426,6 +589,16 @@ final class Floppy_Rest {
 			return new WP_Error( 'floppy_missing_file', __( 'Upload a file using the "file" field.', 'floppy' ), array( 'status' => 400 ) );
 		}
 
+		$max_batch = (int) Floppy_Settings::get_value( 'max_batch_files', 50 );
+		if ( count( $files ) > $max_batch ) {
+			return new WP_Error( 'floppy_upload_batch_too_large', __( 'This upload batch is larger than the Floppy batch limit.', 'floppy' ), array( 'status' => 413 ) );
+		}
+
+		$quota = self::check_quota( $user_id, (int) ( $file['size'] ?? 0 ) );
+		if ( is_wp_error( $quota ) ) {
+			return $quota;
+		}
+
 		$stored = Floppy_Storage::store_upload( $file );
 		if ( isset( $stored['error'] ) && is_wp_error( $stored['error'] ) ) {
 			return $stored['error'];
@@ -437,7 +610,7 @@ final class Floppy_Rest {
 			return $scan;
 		}
 
-		$collision = self::name_collision( 'files', $parent_id, $stored['name'] );
+		$collision = self::item_name_collision( $parent_id, $stored['name'] );
 		if ( is_wp_error( $collision ) ) {
 			@unlink( $stored['path'] ); // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged
 			return $collision;
@@ -494,7 +667,7 @@ final class Floppy_Rest {
 			return $rate;
 		}
 
-		if ( ! current_user_can( 'upload_files' ) ) {
+		if ( ! current_user_can( Floppy_Permissions::CAP_WRITE ) && ! current_user_can( Floppy_Permissions::CAP_MANAGE ) ) {
 			return new WP_Error( 'floppy_forbidden', __( 'You cannot upload files.', 'floppy' ), array( 'status' => 403 ) );
 		}
 
@@ -513,6 +686,10 @@ final class Floppy_Rest {
 		$max = (int) Floppy_Settings::get_value( 'max_file_size', wp_max_upload_size() );
 		if ( $total_size <= 0 || $total_size > $max ) {
 			return new WP_Error( 'floppy_invalid_upload_size', __( 'Invalid upload size.', 'floppy' ), array( 'status' => 413 ) );
+		}
+		$quota = self::check_quota( $user_id, $total_size );
+		if ( is_wp_error( $quota ) ) {
+			return $quota;
 		}
 		if ( Floppy_Storage::has_dangerous_extension( $filename ) ) {
 			return new WP_Error( 'floppy_dangerous_file_type', __( 'This file type is not allowed in private storage.', 'floppy' ), array( 'status' => 415 ) );
@@ -662,6 +839,11 @@ final class Floppy_Rest {
 			return new WP_Error( 'floppy_upload_hash_mismatch', __( 'Upload hash did not match.', 'floppy' ), array( 'status' => 409 ) );
 		}
 
+		$quota = self::check_quota( (int) $session['user_id'], (int) $session['total_size'] );
+		if ( is_wp_error( $quota ) ) {
+			return $quota;
+		}
+
 		$final_uuid = wp_generate_uuid4();
 		$ext = pathinfo( $session['filename'], PATHINFO_EXTENSION );
 		$final_key = Floppy_Storage::storage_key( $final_uuid, $ext );
@@ -719,7 +901,7 @@ final class Floppy_Rest {
 			return $rate;
 		}
 
-		if ( ! current_user_can( 'upload_files' ) ) {
+		if ( ! current_user_can( Floppy_Permissions::CAP_WRITE ) && ! current_user_can( Floppy_Permissions::CAP_MANAGE ) ) {
 			return new WP_Error( 'floppy_forbidden', __( 'You cannot upload files.', 'floppy' ), array( 'status' => 403 ) );
 		}
 
@@ -729,7 +911,7 @@ final class Floppy_Rest {
 		}
 
 		if ( ! Floppy_Permissions::can_write( 'file', $id, $user_id ) ) {
-			return new WP_Error( 'floppy_forbidden', __( 'You cannot modify this file.', 'floppy' ), array( 'status' => 403 ) );
+			return self::not_found_or_forbidden( 'file', $id, 'write' );
 		}
 
 		$row = Floppy_Permissions::get_target_row( 'file', $id );
@@ -750,6 +932,12 @@ final class Floppy_Rest {
 		$file  = $files['file'] ?? null;
 		if ( ! is_array( $file ) ) {
 			return new WP_Error( 'floppy_missing_file', __( 'Upload a file using the "file" field.', 'floppy' ), array( 'status' => 400 ) );
+		}
+
+		$quota_delta = max( 0, (int) ( $file['size'] ?? 0 ) - (int) $row['size_bytes'] );
+		$quota = self::check_quota( $user_id, $quota_delta );
+		if ( is_wp_error( $quota ) ) {
+			return $quota;
 		}
 
 		$file['name'] = $row['name'];
@@ -833,7 +1021,7 @@ final class Floppy_Rest {
 		$parent_id = absint( $request->get_param( 'parent_id' ) );
 
 		if ( $parent_id && ! Floppy_Permissions::can_write( 'folder', $parent_id ) ) {
-			return new WP_Error( 'floppy_forbidden', __( 'You cannot move files into this folder.', 'floppy' ), array( 'status' => 403 ) );
+			return self::not_found_or_forbidden( 'folder', $parent_id, 'write' );
 		}
 
 		return self::update_file_metadata( $id, $request, array( 'parent_id' => $parent_id ), 'file.moved' );
@@ -887,7 +1075,7 @@ final class Floppy_Rest {
 	 */
 	private static function stream_file( int $id, bool $inline ) {
 		if ( ! Floppy_Permissions::can_read( 'file', $id ) ) {
-			return new WP_Error( 'floppy_forbidden', __( 'You cannot download this file.', 'floppy' ), array( 'status' => 403 ) );
+			return self::not_found_or_forbidden( 'file', $id, 'read' );
 		}
 
 		$rate = Floppy_Rate_Limiter::check( 'download', 600, HOUR_IN_SECONDS );
@@ -900,6 +1088,10 @@ final class Floppy_Rest {
 			return new WP_Error( 'floppy_file_not_found', __( 'File not found.', 'floppy' ), array( 'status' => 404 ) );
 		}
 
+		if ( $inline && ! self::mime_can_preview_inline( (string) $row['mime_type'] ) ) {
+			return new WP_Error( 'floppy_preview_not_available', __( 'Inline preview is not available for this file type.', 'floppy' ), array( 'status' => 415 ) );
+		}
+
 		$path = Floppy_Storage::path_for_key( $row['storage_key'] );
 		if ( ! is_readable( $path ) ) {
 			return new WP_Error( 'floppy_blob_missing', __( 'The private blob is missing from storage.', 'floppy' ), array( 'status' => 500 ) );
@@ -908,10 +1100,13 @@ final class Floppy_Rest {
 		Floppy_Audit::log( 'file.downloaded', 'file', $id, $row['name'] );
 
 		nocache_headers();
+		header( 'Cache-Control: private, no-store, max-age=0' );
+		header( 'X-Content-Type-Options: nosniff' );
+		header( 'Accept-Ranges: bytes' );
 		header( 'Content-Type: ' . ( $row['mime_type'] ?: 'application/octet-stream' ) );
-		header( 'Content-Length: ' . filesize( $path ) );
 		header( 'Content-Disposition: ' . ( $inline ? 'inline' : 'attachment' ) . '; filename="' . str_replace( '"', '', $row['name'] ) . '"' );
-		readfile( $path ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_read_readfile
+
+		self::stream_path_with_range_support( $path );
 		exit;
 	}
 
@@ -952,6 +1147,29 @@ final class Floppy_Rest {
 		}
 
 		return new WP_REST_Response( $device, 201 );
+	}
+
+	/**
+	 * Exchange a short-lived browser approval code for a scoped device token.
+	 */
+	public static function exchange_device_code( WP_REST_Request $request ) {
+		if ( ! is_ssl() ) {
+			return new WP_Error( 'floppy_https_required', __( 'Device code exchange requires HTTPS.', 'floppy' ), array( 'status' => 403 ) );
+		}
+
+		$rate = Floppy_Rate_Limiter::check( 'device-exchange', 20, HOUR_IN_SECONDS );
+		if ( is_wp_error( $rate ) ) {
+			return $rate;
+		}
+
+		$code = sanitize_text_field( (string) $request->get_param( 'code' ) );
+		$state = sanitize_text_field( (string) $request->get_param( 'state' ) );
+		$exchange = Floppy_Auth::exchange_device_code( $code, $state );
+		if ( is_wp_error( $exchange ) ) {
+			return $exchange;
+		}
+
+		return new WP_REST_Response( $exchange, 201 );
 	}
 
 	/**
@@ -1072,21 +1290,42 @@ final class Floppy_Rest {
 	 * Require file read scope.
 	 */
 	public static function require_read() {
-		return self::require_scope( 'files:read' );
+		$scope = self::require_scope( 'files:read' );
+		if ( is_wp_error( $scope ) ) {
+			return $scope;
+		}
+
+		return Floppy_Permissions::user_can_site( get_current_user_id(), 'read' )
+			? true
+			: new WP_Error( 'floppy_rest_forbidden', __( 'You do not have access to Floppy files.', 'floppy' ), array( 'status' => 403 ) );
 	}
 
 	/**
 	 * Require file write scope.
 	 */
 	public static function require_write() {
-		return self::require_scope( 'files:write' );
+		$scope = self::require_scope( 'files:write' );
+		if ( is_wp_error( $scope ) ) {
+			return $scope;
+		}
+
+		return Floppy_Permissions::user_can_site( get_current_user_id(), 'write' )
+			? true
+			: new WP_Error( 'floppy_rest_forbidden', __( 'You cannot write Floppy files.', 'floppy' ), array( 'status' => 403 ) );
 	}
 
 	/**
 	 * Require sync scope.
 	 */
 	public static function require_sync() {
-		return self::require_scope( 'sync' );
+		$scope = self::require_scope( 'sync' );
+		if ( is_wp_error( $scope ) ) {
+			return $scope;
+		}
+
+		return Floppy_Permissions::user_can_site( get_current_user_id(), 'read' )
+			? true
+			: new WP_Error( 'floppy_rest_forbidden', __( 'You do not have access to Floppy sync.', 'floppy' ), array( 'status' => 403 ) );
 	}
 
 	/**
@@ -1118,6 +1357,28 @@ final class Floppy_Rest {
 			return new WP_Error( 'floppy_browser_session_required', __( 'Device authorization requires a WordPress session or temporary Application Password.', 'floppy' ), array( 'status' => 403 ) );
 		}
 
+		return Floppy_Permissions::user_can_site( get_current_user_id(), 'read' )
+			? true
+			: new WP_Error( 'floppy_rest_forbidden', __( 'You do not have access to Floppy device authorization.', 'floppy' ), array( 'status' => 403 ) );
+	}
+
+	/**
+	 * Allow browser sessions to revoke any owned device and device tokens to revoke themselves.
+	 */
+	public static function require_device_revoke( WP_REST_Request $request ) {
+		$user = self::require_user();
+		if ( is_wp_error( $user ) ) {
+			return $user;
+		}
+
+		if ( Floppy_Auth::is_device_auth() ) {
+			$current_uuid = (string) ( $GLOBALS['floppy_device_uuid'] ?? '' );
+			$requested_uuid = sanitize_text_field( (string) $request['uuid'] );
+			return hash_equals( $current_uuid, $requested_uuid )
+				? true
+				: new WP_Error( 'floppy_forbidden', __( 'Device tokens can only revoke themselves.', 'floppy' ), array( 'status' => 403 ) );
+		}
+
 		return true;
 	}
 
@@ -1145,7 +1406,9 @@ final class Floppy_Rest {
 			return new WP_Error( 'floppy_browser_session_required', __( 'Administrator diagnostics require a browser session.', 'floppy' ), array( 'status' => 403 ) );
 		}
 
-		return current_user_can( 'manage_options' ) ? true : new WP_Error( 'floppy_rest_forbidden', __( 'Administrator access required.', 'floppy' ), array( 'status' => 403 ) );
+		return current_user_can( Floppy_Permissions::CAP_MANAGE ) || current_user_can( 'manage_options' )
+			? true
+			: new WP_Error( 'floppy_rest_forbidden', __( 'Administrator access required.', 'floppy' ), array( 'status' => 403 ) );
 	}
 
 	/**
@@ -1162,19 +1425,41 @@ final class Floppy_Rest {
 		return array(
 			'parent_id' => array( 'sanitize_callback' => 'absint', 'default' => 0 ),
 			'after_id'  => array( 'sanitize_callback' => 'absint', 'default' => 0 ),
+			'cursor'    => array( 'sanitize_callback' => 'sanitize_text_field', 'default' => '' ),
+			'shared'    => array( 'sanitize_callback' => 'rest_sanitize_boolean', 'default' => false ),
 			'limit'     => array( 'sanitize_callback' => 'absint', 'default' => 50 ),
 		);
 	}
 
 	/**
-	 * Query child rows.
+	 * Query a stable, folder-first children page without PHP sorting.
 	 */
-	private static function query_children( string $table, int $parent_id, int $after_id, int $limit, int $user_id ): array {
+	private static function query_children_page( int $parent_id, string $cursor, int $after_id, int $limit, int $user_id ): array {
 		global $wpdb;
 
-		$sql = $parent_id
-			? $wpdb->prepare( "SELECT * FROM $table WHERE parent_id = %d AND status = 'active' AND id > %d ORDER BY id ASC LIMIT %d", $parent_id, $after_id, $limit ) // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared
-			: $wpdb->prepare( "SELECT * FROM $table WHERE owner_id = %d AND parent_id = 0 AND status = 'active' AND id > %d ORDER BY id ASC LIMIT %d", $user_id, $after_id, $limit ); // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared
+		$cursor_kind = '';
+		$cursor_id = $after_id;
+		if ( preg_match( '/^(folder|file):(\d+)$/', $cursor, $matches ) ) {
+			$cursor_kind = $matches[1];
+			$cursor_id = (int) $matches[2];
+		}
+
+		$folder_after = 'file' === $cursor_kind ? PHP_INT_MAX : $cursor_id;
+		$file_after = 'folder' === $cursor_kind ? 0 : $cursor_id;
+		$folder_owner_sql = $parent_id ? '' : $wpdb->prepare( ' AND owner_id = %d', $user_id );
+		$file_owner_sql = $parent_id ? '' : $wpdb->prepare( ' AND owner_id = %d', $user_id );
+
+		$sql = $wpdb->prepare(
+			"(SELECT 'folder' AS kind, 0 AS kind_order, id, uuid, 0 AS attachment_id, owner_id, parent_id, name, normalized_name, '' AS mime_type, 0 AS size_bytes, '' AS content_hash, '' AS storage_key, '' AS content_version, metadata_version, status, 'private' AS visibility, created_at_gmt, updated_at_gmt FROM " . Floppy_Schema::table( 'folders' ) . " WHERE parent_id = %d AND status = 'active' AND id > %d $folder_owner_sql)
+			UNION ALL
+			(SELECT 'file' AS kind, 1 AS kind_order, id, uuid, attachment_id, owner_id, parent_id, name, normalized_name, mime_type, size_bytes, content_hash, storage_key, content_version, metadata_version, status, visibility, created_at_gmt, updated_at_gmt FROM " . Floppy_Schema::table( 'files' ) . " WHERE parent_id = %d AND status = 'active' AND id > %d $file_owner_sql)
+			ORDER BY kind_order ASC, id ASC LIMIT %d",
+			$parent_id,
+			$folder_after,
+			$parent_id,
+			$file_after,
+			$limit
+		); // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared
 
 		return $wpdb->get_results( $sql, ARRAY_A );
 	}
@@ -1186,7 +1471,7 @@ final class Floppy_Rest {
 		global $wpdb;
 
 		if ( ! Floppy_Permissions::can_write( 'file', $id ) ) {
-			return new WP_Error( 'floppy_forbidden', __( 'You cannot modify this file.', 'floppy' ), array( 'status' => 403 ) );
+			return self::not_found_or_forbidden( 'file', $id, 'write' );
 		}
 
 		$row = Floppy_Permissions::get_target_row( 'file', $id );
@@ -1200,14 +1485,14 @@ final class Floppy_Rest {
 		}
 
 		if ( isset( $updates['name'] ) ) {
-			$collision = self::name_collision( 'files', (int) $row['parent_id'], (string) $updates['name'], $id );
+			$collision = self::item_name_collision( (int) $row['parent_id'], (string) $updates['name'], 'file', $id );
 			if ( is_wp_error( $collision ) ) {
 				return $collision;
 			}
 		}
 
 		if ( isset( $updates['parent_id'] ) ) {
-			$collision = self::name_collision( 'files', (int) $updates['parent_id'], (string) $row['name'], $id );
+			$collision = self::item_name_collision( (int) $updates['parent_id'], (string) $row['name'], 'file', $id );
 			if ( is_wp_error( $collision ) ) {
 				return $collision;
 			}
@@ -1236,25 +1521,328 @@ final class Floppy_Rest {
 	}
 
 	/**
-	 * Prevent duplicate names inside a parent.
+	 * Compare-and-swap folder metadata update.
 	 */
-	private static function name_collision( string $table_name, int $parent_id, string $name, int $ignore_id = 0 ) {
+	private static function update_folder_metadata( int $id, WP_REST_Request $request, array $updates, string $event_type ) {
 		global $wpdb;
 
-		$table = Floppy_Schema::table( $table_name );
-		$normalized = Floppy_Storage::normalize_lookup_name( $name );
-		$sql = $wpdb->prepare(
-			"SELECT id FROM $table WHERE parent_id = %d AND normalized_name = %s AND status != 'deleted' AND id != %d LIMIT 1", // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared
-			$parent_id,
-			$normalized,
-			$ignore_id
-		);
+		if ( ! Floppy_Permissions::can_write( 'folder', $id ) ) {
+			return self::not_found_or_forbidden( 'folder', $id, 'write' );
+		}
 
-		if ( $wpdb->get_var( $sql ) ) {
-			return new WP_Error( 'floppy_name_collision', __( 'An item with that name already exists in this folder.', 'floppy' ), array( 'status' => 409 ) );
+		$row = Floppy_Permissions::get_target_row( 'folder', $id );
+		if ( ! $row ) {
+			return new WP_Error( 'floppy_folder_not_found', __( 'Folder not found.', 'floppy' ), array( 'status' => 404 ) );
+		}
+
+		$known_version = (string) $request->get_param( 'metadata_version' );
+		if ( $known_version && $known_version !== $row['metadata_version'] ) {
+			return new WP_Error( 'floppy_conflict', __( 'The folder changed on the server. Refresh before applying this change.', 'floppy' ), array( 'status' => 409, 'server' => self::serialize_folder( $row ) ) );
+		}
+
+		if ( isset( $updates['name'] ) ) {
+			$collision = self::item_name_collision( (int) $row['parent_id'], (string) $updates['name'], 'folder', $id );
+			if ( is_wp_error( $collision ) ) {
+				return $collision;
+			}
+		}
+
+		if ( isset( $updates['parent_id'] ) ) {
+			$collision = self::item_name_collision( (int) $updates['parent_id'], (string) $row['name'], 'folder', $id );
+			if ( is_wp_error( $collision ) ) {
+				return $collision;
+			}
+		}
+
+		$updates['metadata_version'] = wp_generate_uuid4();
+		$updates['updated_at_gmt'] = current_time( 'mysql', true );
+		$formats = array();
+		foreach ( $updates as $value ) {
+			$formats[] = is_int( $value ) ? '%d' : '%s';
+		}
+
+		$wpdb->update( Floppy_Schema::table( 'folders' ), $updates, array( 'id' => $id ), $formats, array( '%d' ) );
+		$next = Floppy_Permissions::get_target_row( 'folder', $id );
+		$seq = Floppy_Sync::append_event( $event_type, 'folder', $id, $next ?: array() );
+		$next['last_sync_seq'] = $seq;
+		Floppy_Audit::log( $event_type, 'folder', $id );
+
+		return new WP_REST_Response( self::serialize_folder( $next ) + array( 'last_sync_seq' => $seq ) );
+	}
+
+	/**
+	 * Recursively update folder tree status and emit sync/tombstone records.
+	 */
+	private static function update_folder_tree_status( int $id, WP_REST_Request $request, string $status, string $event_type ) {
+		global $wpdb;
+
+		if ( ! Floppy_Permissions::can_write( 'folder', $id ) ) {
+			return self::not_found_or_forbidden( 'folder', $id, 'write' );
+		}
+
+		$row = Floppy_Permissions::get_target_row( 'folder', $id );
+		if ( ! $row ) {
+			return new WP_Error( 'floppy_folder_not_found', __( 'Folder not found.', 'floppy' ), array( 'status' => 404 ) );
+		}
+
+		$known_version = (string) $request->get_param( 'metadata_version' );
+		if ( $known_version && $known_version !== $row['metadata_version'] ) {
+			return new WP_Error( 'floppy_conflict', __( 'The folder changed on the server. Refresh before applying this change.', 'floppy' ), array( 'status' => 409, 'server' => self::serialize_folder( $row ) ) );
+		}
+
+		$tree = self::folder_tree_ids( $id );
+		$folder_ids = $tree['folders'];
+		$file_ids = $tree['files'];
+		$deleted_at = 'active' === $status ? null : current_time( 'mysql', true );
+		$now = current_time( 'mysql', true );
+		$deleted_sql = null === $deleted_at ? 'NULL' : $wpdb->prepare( '%s', $deleted_at );
+
+		if ( $folder_ids ) {
+			$wpdb->query(
+				$wpdb->prepare(
+					'UPDATE ' . Floppy_Schema::table( 'folders' ) . ' SET status = %s, deleted_at_gmt = ' . $deleted_sql . ', metadata_version = UUID(), updated_at_gmt = %s WHERE id IN (' . implode( ',', array_map( 'absint', $folder_ids ) ) . ')',
+					$status,
+					$now
+				)
+			);
+		}
+
+		if ( $file_ids ) {
+			$wpdb->query(
+				$wpdb->prepare(
+					'UPDATE ' . Floppy_Schema::table( 'files' ) . ' SET status = %s, deleted_at_gmt = ' . $deleted_sql . ', metadata_version = UUID(), updated_at_gmt = %s WHERE id IN (' . implode( ',', array_map( 'absint', $file_ids ) ) . ')',
+					$status,
+					$now
+				)
+			);
+		}
+
+		$last_seq = 0;
+		foreach ( $folder_ids as $folder_id ) {
+			$updated = Floppy_Permissions::get_target_row( 'folder', (int) $folder_id );
+			$payload = array_merge( $updated ?: array(), Floppy_Permissions::audience_for( 'folder', (int) $folder_id ) );
+			$last_seq = Floppy_Sync::append_event( $event_type, 'folder', (int) $folder_id, $payload );
+			if ( 'deleted' === $status && $updated ) {
+				Floppy_Sync::tombstone( 'folder', (int) $folder_id, (int) $updated['owner_id'], $last_seq );
+			}
+		}
+
+		foreach ( $file_ids as $file_id ) {
+			$updated = Floppy_Permissions::get_target_row( 'file', (int) $file_id );
+			$file_event = str_replace( 'folder.', 'file.', $event_type );
+			$payload = array_merge( $updated ?: array(), Floppy_Permissions::audience_for( 'file', (int) $file_id ) );
+			$last_seq = Floppy_Sync::append_event( $file_event, 'file', (int) $file_id, $payload );
+			if ( 'deleted' === $status && $updated ) {
+				Floppy_Sync::tombstone( 'file', (int) $file_id, (int) $updated['owner_id'], $last_seq );
+			}
+		}
+
+		$next = Floppy_Permissions::get_target_row( 'folder', $id );
+		Floppy_Audit::log( $event_type, 'folder', $id, '', array( 'folders' => count( $folder_ids ), 'files' => count( $file_ids ) ) );
+
+		return new WP_REST_Response(
+			self::serialize_folder( $next ) + array(
+				'last_sync_seq' => $last_seq,
+				'folders'       => count( $folder_ids ),
+				'files'         => count( $file_ids ),
+			)
+		);
+	}
+
+	/**
+	 * Prevent duplicate file/folder names inside a parent.
+	 */
+	private static function item_name_collision( int $parent_id, string $name, string $ignore_type = '', int $ignore_id = 0 ) {
+		global $wpdb;
+
+		$normalized = Floppy_Storage::normalize_lookup_name( $name );
+		foreach ( array( 'folders' => 'folder', 'files' => 'file' ) as $table_name => $kind ) {
+			$table = Floppy_Schema::table( $table_name );
+			$ignore_sql = ( $ignore_id && $ignore_type === $kind ) ? $wpdb->prepare( ' AND id != %d', $ignore_id ) : '';
+			$sql = $wpdb->prepare(
+				"SELECT id FROM $table WHERE parent_id = %d AND normalized_name = %s AND status != 'deleted' $ignore_sql LIMIT 1", // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared
+				$parent_id,
+				$normalized
+			);
+
+			if ( $wpdb->get_var( $sql ) ) {
+				return new WP_Error( 'floppy_name_collision', __( 'An item with that name already exists in this folder.', 'floppy' ), array( 'status' => 409 ) );
+			}
 		}
 
 		return true;
+	}
+
+	/**
+	 * Return a folder tree as folder ids and file ids.
+	 */
+	private static function folder_tree_ids( int $root_folder_id ): array {
+		global $wpdb;
+
+		$folders = array( $root_folder_id );
+		$files = array();
+		$queue = array( $root_folder_id );
+		$seen = array( $root_folder_id => true );
+
+		while ( $queue ) {
+			$batch = array_splice( $queue, 0, 100 );
+			$in = implode( ',', array_map( 'absint', $batch ) );
+			$child_folders = $wpdb->get_col( "SELECT id FROM " . Floppy_Schema::table( 'folders' ) . " WHERE parent_id IN ($in) AND status != 'deleted'" ); // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared
+			$child_files = $wpdb->get_col( "SELECT id FROM " . Floppy_Schema::table( 'files' ) . " WHERE parent_id IN ($in) AND status != 'deleted'" ); // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared
+
+			foreach ( $child_folders as $folder_id ) {
+				$folder_id = (int) $folder_id;
+				if ( empty( $seen[ $folder_id ] ) ) {
+					$seen[ $folder_id ] = true;
+					$folders[] = $folder_id;
+					$queue[] = $folder_id;
+				}
+			}
+
+			foreach ( $child_files as $file_id ) {
+				$files[] = (int) $file_id;
+			}
+		}
+
+		return array(
+			'folders' => $folders,
+			'files'   => array_values( array_unique( $files ) ),
+		);
+	}
+
+	/**
+	 * Check whether one folder sits inside another folder.
+	 */
+	private static function folder_is_descendant( int $candidate_folder_id, int $ancestor_folder_id ): bool {
+		if ( $candidate_folder_id <= 0 ) {
+			return false;
+		}
+
+		global $wpdb;
+		$seen = array();
+		while ( $candidate_folder_id > 0 && empty( $seen[ $candidate_folder_id ] ) ) {
+			if ( $candidate_folder_id === $ancestor_folder_id ) {
+				return true;
+			}
+			$seen[ $candidate_folder_id ] = true;
+			$candidate_folder_id = (int) $wpdb->get_var(
+				$wpdb->prepare(
+					'SELECT parent_id FROM ' . Floppy_Schema::table( 'folders' ) . ' WHERE id = %d LIMIT 1',
+					$candidate_folder_id
+				)
+			);
+		}
+
+		return false;
+	}
+
+	/**
+	 * Enforce per-user and site storage quotas.
+	 */
+	private static function check_quota( int $user_id, int $incoming_bytes ) {
+		if ( $incoming_bytes <= 0 || current_user_can( Floppy_Permissions::CAP_MANAGE ) ) {
+			return true;
+		}
+
+		global $wpdb;
+		$user_quota = (int) Floppy_Settings::get_value( 'user_quota_bytes', 0 );
+		$site_quota = (int) Floppy_Settings::get_value( 'site_quota_bytes', 0 );
+
+		if ( $user_quota > 0 ) {
+			$user_used = (int) $wpdb->get_var(
+				$wpdb->prepare(
+					'SELECT COALESCE(SUM(size_bytes),0) FROM ' . Floppy_Schema::table( 'files' ) . " WHERE owner_id = %d AND status != 'deleted'",
+					$user_id
+				)
+			);
+			if ( $user_used + $incoming_bytes > $user_quota ) {
+				return new WP_Error( 'floppy_user_quota_exceeded', __( 'This upload would exceed your Floppy storage quota.', 'floppy' ), array( 'status' => 507, 'used' => $user_used, 'quota' => $user_quota ) );
+			}
+		}
+
+		if ( $site_quota > 0 ) {
+			$site_used = (int) $wpdb->get_var( 'SELECT COALESCE(SUM(size_bytes),0) FROM ' . Floppy_Schema::table( 'files' ) . " WHERE status != 'deleted'" ); // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared
+			if ( $site_used + $incoming_bytes > $site_quota ) {
+				return new WP_Error( 'floppy_site_quota_exceeded', __( 'This upload would exceed the site Floppy storage quota.', 'floppy' ), array( 'status' => 507, 'used' => $site_used, 'quota' => $site_quota ) );
+			}
+		}
+
+		return true;
+	}
+
+	/**
+	 * Hide invisible item ids while still returning 403 for visible-but-not-writable items.
+	 */
+	private static function not_found_or_forbidden( string $target_type, int $target_id, string $capability ) {
+		if ( 'write' === $capability && Floppy_Permissions::can_read( $target_type, $target_id ) ) {
+			return new WP_Error( 'floppy_forbidden', __( 'You cannot modify this Floppy item.', 'floppy' ), array( 'status' => 403 ) );
+		}
+
+		return new WP_Error( 'floppy_item_not_found', __( 'Floppy item not found.', 'floppy' ), array( 'status' => 404 ) );
+	}
+
+	/**
+	 * Only allow browser-inline previews for passive file types.
+	 */
+	private static function mime_can_preview_inline( string $mime_type ): bool {
+		if ( 0 === strpos( $mime_type, 'image/' ) || 0 === strpos( $mime_type, 'text/' ) ) {
+			return true;
+		}
+
+		return in_array( $mime_type, array( 'application/pdf' ), true );
+	}
+
+	/**
+	 * Stream a file with byte range support.
+	 */
+	private static function stream_path_with_range_support( string $path ): void {
+		$size = filesize( $path );
+		$start = 0;
+		$end = max( 0, $size - 1 );
+		$range = isset( $_SERVER['HTTP_RANGE'] ) ? (string) wp_unslash( $_SERVER['HTTP_RANGE'] ) : ''; // phpcs:ignore WordPress.Security.ValidatedSanitizedInput.InputNotSanitized
+
+		if ( preg_match( '/bytes=(\d*)-(\d*)/', $range, $matches ) ) {
+			if ( '' === $matches[1] && '' !== $matches[2] ) {
+				$suffix = min( (int) $matches[2], $size );
+				$start = $size - $suffix;
+			} else {
+				$start = '' === $matches[1] ? 0 : (int) $matches[1];
+				$end = '' === $matches[2] ? $end : min( $end, (int) $matches[2] );
+			}
+
+			if ( $start > $end || $start < 0 || $end >= $size ) {
+				status_header( 416 );
+				header( 'Content-Range: bytes */' . $size );
+				exit;
+			}
+
+			status_header( 206 );
+			header( 'Content-Range: bytes ' . $start . '-' . $end . '/' . $size );
+		}
+
+		$length = $end - $start + 1;
+		header( 'Content-Length: ' . $length );
+
+		$handle = fopen( $path, 'rb' ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_read_fopen
+		if ( ! $handle ) {
+			status_header( 500 );
+			return;
+		}
+
+		fseek( $handle, $start );
+		$remaining = $length;
+		while ( $remaining > 0 && ! feof( $handle ) ) {
+			$chunk = fread( $handle, min( 8192, $remaining ) ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_read_fread
+			if ( false === $chunk || '' === $chunk ) {
+				break;
+			}
+			echo $chunk; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped
+			$remaining -= strlen( $chunk );
+			if ( function_exists( 'flush' ) ) {
+				flush();
+			}
+		}
+		fclose( $handle );
 	}
 
 	/**
@@ -1289,7 +1877,7 @@ final class Floppy_Rest {
 	private static function create_file_row_from_stored( array $stored, int $user_id, int $parent_id ) {
 		global $wpdb;
 
-		$collision = self::name_collision( 'files', $parent_id, $stored['name'] );
+		$collision = self::item_name_collision( $parent_id, $stored['name'] );
 		if ( is_wp_error( $collision ) ) {
 			return $collision;
 		}

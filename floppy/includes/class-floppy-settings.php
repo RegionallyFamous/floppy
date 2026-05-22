@@ -19,6 +19,7 @@ final class Floppy_Settings {
 			'max_file_size'          => min( wp_max_upload_size(), 512 * MB_IN_BYTES ),
 			'max_batch_files'        => 50,
 			'user_quota_bytes'       => 20 * GB_IN_BYTES,
+			'site_quota_bytes'       => 0,
 			'sync_retention_days'    => 45,
 			'tombstone_retention_days' => 90,
 			'allowed_mimes'          => array_keys( get_allowed_mime_types() ),

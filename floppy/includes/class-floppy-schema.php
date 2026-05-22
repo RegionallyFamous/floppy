@@ -57,6 +57,7 @@ final class Floppy_Schema {
 			KEY owner_parent_name (owner_id,parent_id,normalized_name(120)),
 			KEY parent_name (parent_id,normalized_name(120)),
 			KEY parent_status_id (parent_id,status,id),
+			KEY normalized_status_id (normalized_name(120),status,id),
 			KEY updated_id (updated_at_gmt,id),
 			KEY attachment_id (attachment_id),
 			KEY content_hash (content_hash),
@@ -80,6 +81,7 @@ final class Floppy_Schema {
 			KEY owner_parent_name (owner_id,parent_id,normalized_name(120)),
 			KEY parent_name (parent_id,normalized_name(120)),
 			KEY parent_status_id (parent_id,status,id),
+			KEY normalized_status_id (normalized_name(120),status,id),
 			KEY updated_id (updated_at_gmt,id)
 		) $charset;";
 
@@ -234,9 +236,43 @@ final class Floppy_Schema {
 			$found = $wpdb->get_var( $wpdb->prepare( 'SHOW TABLES LIKE %s', $table ) );
 			if ( $found !== $table ) {
 				$missing[] = $table;
+				continue;
+			}
+
+			foreach ( self::expected_indexes( $name ) as $index ) {
+				$found_index = $wpdb->get_var(
+					$wpdb->prepare(
+						'SHOW INDEX FROM ' . $table . ' WHERE Key_name = %s',
+						$index
+					)
+				); // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared
+				if ( ! $found_index ) {
+					$missing[] = $table . '.' . $index;
+				}
 			}
 		}
 
 		return $missing;
+	}
+
+	/**
+	 * Important indexes expected by production hot paths.
+	 *
+	 * @return array<int, string>
+	 */
+	private static function expected_indexes( string $name ): array {
+		$indexes = array(
+			'files'           => array( 'uuid', 'parent_status_id', 'normalized_status_id', 'updated_id', 'content_hash' ),
+			'folders'         => array( 'uuid', 'parent_status_id', 'normalized_status_id', 'updated_id' ),
+			'acl_grants'      => array( 'target_principal', 'principal_lookup', 'target_lookup' ),
+			'sync_events'     => array( 'event_uuid', 'target_lookup', 'actor_seq', 'parent_seq' ),
+			'devices'         => array( 'device_uuid', 'token_hash', 'user_status', 'last_seen' ),
+			'upload_sessions' => array( 'session_uuid', 'user_status', 'expires_at' ),
+			'tombstones'      => array( 'target_lookup', 'owner_expires', 'sync_seq' ),
+			'audit_log'       => array( 'actor_created', 'action_created', 'target_lookup' ),
+			'jobs'            => array( 'job_uuid', 'queue_lookup', 'job_type_status' ),
+		);
+
+		return $indexes[ $name ] ?? array();
 	}
 }

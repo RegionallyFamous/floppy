@@ -4,6 +4,7 @@ import SwiftUI
 
 struct ContentView: View {
     @ObservedObject var model: FloppyAppModel
+    @State private var showsAdvancedOnboarding = false
 
     var body: some View {
         NavigationSplitView {
@@ -61,11 +62,37 @@ struct ContentView: View {
 
             Group {
                 TextField("WordPress site", text: $model.siteURLText)
-                TextField("GitHub release ZIP", text: $model.githubPluginZipURLText)
-                TextField("Plugin file", text: $model.pluginMainFile)
-                TextField("Device name", text: $model.deviceName)
             }
             .textFieldStyle(.roundedBorder)
+
+            DisclosureGroup(isExpanded: $showsAdvancedOnboarding) {
+                VStack(alignment: .leading, spacing: 8) {
+                    LabeledContent("GitHub ZIP") {
+                        TextField("GitHub release ZIP", text: $model.githubPluginZipURLText)
+                            .textFieldStyle(.roundedBorder)
+                    }
+                    LabeledContent("Plugin file") {
+                        TextField("Plugin file", text: $model.pluginMainFile)
+                            .textFieldStyle(.roundedBorder)
+                    }
+                    LabeledContent("Device name") {
+                        TextField("Device name", text: $model.deviceName)
+                            .textFieldStyle(.roundedBorder)
+                    }
+                    HStack {
+                        Spacer()
+                        Button {
+                            model.resetAdvancedOnboardingFields()
+                        } label: {
+                            Label("Reset", systemImage: "arrow.counterclockwise")
+                        }
+                        .controlSize(.small)
+                    }
+                }
+                .padding(.top, 6)
+            } label: {
+                Label("Advanced", systemImage: "slider.horizontal.3")
+            }
 
             HStack {
                 Button {

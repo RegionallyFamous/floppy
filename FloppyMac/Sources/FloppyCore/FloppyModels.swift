@@ -50,13 +50,19 @@ public struct FloppyDeviceApproval: Codable, Equatable, Sendable {
     public let token: String
     public let scope: String
     public let state: String
+    public let exchangeCode: String?
 
-    public init(siteURL: URL, deviceUUID: String, token: String, scope: String, state: String) {
+    public init(siteURL: URL, deviceUUID: String, token: String, scope: String, state: String, exchangeCode: String? = nil) {
         self.siteURL = siteURL
         self.deviceUUID = deviceUUID
         self.token = token
         self.scope = scope
         self.state = state
+        self.exchangeCode = exchangeCode
+    }
+
+    public var requiresCodeExchange: Bool {
+        exchangeCode?.isEmpty == false
     }
 }
 
@@ -64,6 +70,12 @@ public struct FloppyDeviceAuthorization: Codable, Equatable, Sendable {
     public let deviceUUID: String
     public let token: String
     public let scope: String
+
+    public init(deviceUUID: String, token: String, scope: String) {
+        self.deviceUUID = deviceUUID
+        self.token = token
+        self.scope = scope
+    }
 
     enum CodingKeys: String, CodingKey {
         case deviceUUID = "device_uuid"
@@ -225,14 +237,52 @@ public struct FloppyItem: Codable, Equatable, Identifiable, Sendable {
     }
 }
 
+public enum FloppyFileProviderIdentifierCodec {
+    public static let itemPrefix = "floppy:item:"
+
+    public static func itemIdentifierRawValue(uuid: String) -> String {
+        itemPrefix + uuid
+    }
+
+    public static func legacyItemIdentifierRawValue(id: Int64) -> String {
+        itemPrefix + String(id)
+    }
+
+    public static func itemUUID(from rawValue: String) -> String? {
+        guard rawValue.hasPrefix(itemPrefix) else {
+            return nil
+        }
+
+        let suffix = String(rawValue.dropFirst(itemPrefix.count))
+        guard !suffix.isEmpty, Int64(suffix) == nil else {
+            return nil
+        }
+        return suffix
+    }
+
+    public static func legacyItemID(from rawValue: String) -> Int64? {
+        guard rawValue.hasPrefix(itemPrefix) else {
+            return nil
+        }
+
+        return Int64(rawValue.dropFirst(itemPrefix.count))
+    }
+}
+
 public struct FloppyListResponse: Codable, Equatable, Sendable {
     public let parentID: Int64
     public let limit: Int
+    public let cursor: String?
+    public let nextCursor: String?
+    public let hasMore: Bool?
     public let items: [FloppyItem]
 
     enum CodingKeys: String, CodingKey {
         case parentID = "parent_id"
         case limit
+        case cursor
+        case nextCursor = "next_cursor"
+        case hasMore = "has_more"
         case items
     }
 }
@@ -276,6 +326,41 @@ public struct FloppyChange: Codable, Equatable, Identifiable, Sendable {
         case contentVersion = "content_version"
         case createdAtGMT = "created_at_gmt"
         case payload
+    }
+}
+
+public extension FloppyChange {
+    var isDeletion: Bool {
+        eventType.contains("deleted") || eventType.contains("trashed")
+    }
+
+    var deletedItemUUID: String? {
+        if case .string(let uuid)? = payload["uuid"] {
+            return uuid
+        }
+        if case .string(let uuid)? = payload["item_uuid"] {
+            return uuid
+        }
+        if case .object(let object)? = payload["item"], case .string(let uuid)? = object["uuid"] {
+            return uuid
+        }
+        return nil
+    }
+
+    var floppyItemPayload: FloppyItem? {
+        guard !isDeletion else {
+            return nil
+        }
+
+        if case .object(let object)? = payload["item"],
+           let data = try? JSONEncoder.floppy.encode(object) {
+            return try? JSONDecoder.floppy.decode(FloppyItem.self, from: data)
+        }
+
+        guard let data = try? JSONEncoder.floppy.encode(payload) else {
+            return nil
+        }
+        return try? JSONDecoder.floppy.decode(FloppyItem.self, from: data)
     }
 }
 

@@ -25,6 +25,7 @@ enum FileProviderDomainController {
                 if let error {
                     continuation.resume(throwing: error)
                 } else {
+                    FloppyDiagnostics.fileProvider.info("Registered File Provider domain \(record.domainIdentifier, privacy: .public)")
                     continuation.resume()
                 }
             }
@@ -43,6 +44,7 @@ enum FileProviderDomainController {
                 if let error {
                     continuation.resume(throwing: error)
                 } else {
+                    FloppyDiagnostics.fileProvider.info("Removed File Provider domain \(record.domainIdentifier, privacy: .public)")
                     continuation.resume()
                 }
             }

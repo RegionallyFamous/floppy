@@ -6,7 +6,7 @@ This scaffold adds the macOS replicated File Provider extension surface for Flop
 
 - `FloppyMac/Sources/FloppyFileProvider/FloppyFileProviderExtension.swift`: extension principal adopting `NSFileProviderReplicatedExtension` and `NSFileProviderEnumerating`.
 - `FloppyMac/Sources/FloppyFileProvider/FloppyFileProviderEnumerator.swift`: folder and working-set enumerators backed by Floppy REST cursors and sync anchors.
-- `FloppyMac/Sources/FloppyFileProvider/FloppyItemAdapter.swift`: adapter from `FloppyItem` to `NSFileProviderItem`.
+- `FloppyMac/Sources/FloppyFileProvider/FloppyItemAdapter.swift`: adapter from `FloppyItem` to `NSFileProviderItem` using stable UUID-backed item identifiers.
 - `FloppyMac/Sources/FloppyFileProvider/FloppyFileProviderConfiguration.swift`: shared App Group, Keychain group, API client, and ledger construction.
 - `FloppyMac/Extension/Info.plist`: extension metadata and principal class declaration.
 - `FloppyMac/Extension/FloppyFileProvider.entitlements`: sandbox, App Group, and Keychain sharing.
@@ -31,7 +31,7 @@ This scaffold adds the macOS replicated File Provider extension surface for Flop
 The extension assumes `FloppyCore` will provide these production APIs or equivalent compatibility shims:
 
 - `TokenStore(accessGroup:)` for reading device tokens from the shared Keychain access group.
-- `LocalLedger(appGroupIdentifier:domainIdentifier:)` for App Group SQLite metadata, materialization state, active enumerators, sync anchors, and pending operations.
+- `LocalLedger(appGroupIdentifier:domainIdentifier:)` for App Group SQLite metadata, JSON ledger migration, materialization state, active enumerators, sync anchors, and pending operations.
 - `FloppyAPIClient(domainIdentifier:tokenStore:)` for authenticated Floppy REST calls.
 - `FloppyItem` with stable `uuid`, optional `parentUUID`, name, content type, size, dates, capability flags, `etag`, `contentVersion`, and `metadataVersion`.
 - `FloppyChange` with optional updated `FloppyItem`, deletion state, and deleted item UUID.
@@ -58,15 +58,15 @@ The containing app owns account sign-in and domain lifecycle. After a user autho
 2. Register or rotate the macOS device token through Floppy REST.
 3. Store the token in `TokenStore`.
 4. Create the account row in `LocalLedger`.
-5. Add an `NSFileProviderDomain` whose identifier uses the architecture format `floppy:{site_uuid}:{user_id}` or a privacy-preserving hash of that tuple.
+5. Add an `NSFileProviderDomain` whose identifier remains stable for the approved device UUID through `FloppyDomainRegistry`.
 
 The extension does not create or remove domains by itself.
 
 ## Production Notes
 
 - Add `com.apple.developer.fileprovider.testing-mode` only to a local debug entitlement override if the team needs development-only File Provider reset tooling.
-- Keep File Provider item identifiers stable and filename-free: `floppy:item:{uuid}`.
+- Keep File Provider item identifiers stable and filename-free: `floppy:item:{uuid}`. Legacy numeric identifiers are accepted only so existing local state can resolve during migration.
 - Treat `NSFileProviderPage` and `NSFileProviderSyncAnchor` values as opaque UTF-8 tokens produced by the server.
 - Map expired server anchors to `NSFileProviderError.Code.syncAnchorExpired` so macOS can reimport.
 - Do not log tokens, Authorization headers, full local paths, or file contents from this target.
-- The current implementation calls `fatalError` if the domain cannot build its client or ledger because an extension cannot serve Finder safely without those dependencies. Convert that to a recoverable account repair path when the containing app has a reauth UI.
+- The current implementation logs recoverable API and ledger failures through `FloppyDiagnostics`; the containing app should surface reauth or repair UI when a domain cannot load its account record or token.

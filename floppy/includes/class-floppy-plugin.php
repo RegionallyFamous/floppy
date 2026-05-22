@@ -52,6 +52,7 @@ final class Floppy_Plugin {
 	 */
 	public static function activate(): void {
 		Floppy_Schema::install();
+		Floppy_Permissions::install_capabilities();
 		Floppy_Storage::ensure_private_root();
 		Floppy_Background_Jobs::schedule();
 		update_option( 'floppy_compatibility', Floppy_Compatibility::run_checks(), false );
@@ -70,6 +71,9 @@ final class Floppy_Plugin {
 	public function init(): void {
 		if ( get_option( 'floppy_db_version' ) !== FLOPPY_DB_VERSION ) {
 			Floppy_Schema::install();
+		}
+		if ( get_option( 'floppy_capabilities_version' ) !== FLOPPY_VERSION ) {
+			Floppy_Permissions::install_capabilities();
 		}
 
 		Floppy_Storage::init();

@@ -35,19 +35,19 @@ final class FloppyFileProviderEnumerator: NSObject, NSFileProviderEnumerator {
             do {
                 switch scope {
                 case .folder(let containerItemIdentifier):
-                    let parentID = containerItemIdentifier == .rootContainer ? 0 : (containerItemIdentifier.floppyItemID ?? 0)
-                    let afterID = Int64(page.floppyToken ?? "0") ?? 0
-                    let response = try await apiClient.listFiles(parentID: parentID, afterID: afterID, limit: 100)
+                    let parentID = try await resolveParentID(containerItemIdentifier)
+                    let cursor = page.floppyToken ?? ""
+                    let response = try await apiClient.listFiles(parentID: parentID, cursor: cursor, limit: 100)
                     try await ledger.upsert(items: response.items)
-                    observer.didEnumerate(response.items.map(FloppyFileProviderItem.init(item:)))
-                    observer.finishEnumerating(upTo: response.items.count == response.limit ? response.items.last.map { NSFileProviderPage(floppyToken: String($0.id)) } : nil)
+                    observer.didEnumerate(await fileProviderItems(for: response.items))
+                    observer.finishEnumerating(upTo: response.hasMore == true ? response.nextCursor.map(NSFileProviderPage.init(floppyToken:)) : nil)
 
                 case .workingSet:
                     let cursor = UInt64(page.floppyToken ?? "0") ?? 0
                     let response = try await apiClient.syncChanges(cursor: cursor, limit: 250)
-                    let items = response.events.compactMap(\.floppyItem)
+                    let items = response.events.compactMap(\.floppyItemPayload)
                     try await ledger.upsert(items: items)
-                    observer.didEnumerate(items.map(FloppyFileProviderItem.init(item:)))
+                    observer.didEnumerate(await fileProviderItems(for: items))
                     observer.finishEnumerating(upTo: response.hasMore ? NSFileProviderPage(floppyToken: String(response.nextCursor)) : nil)
                 }
             } catch {
@@ -63,10 +63,15 @@ final class FloppyFileProviderEnumerator: NSObject, NSFileProviderEnumerator {
                 let response = try await apiClient.syncChanges(cursor: cursor, limit: 500)
                 try await ledger.apply(changes: response.events)
 
-                let updatedItems = response.events.compactMap(\.floppyItem).map(FloppyFileProviderItem.init(item:))
+                let updatedItems = await fileProviderItems(for: response.events.compactMap(\.floppyItemPayload))
                 let deletedIdentifiers = response.events
-                    .filter { $0.eventType.contains("deleted") || $0.eventType.contains("trashed") }
-                    .map { NSFileProviderItemIdentifier("floppy:item:\($0.targetID)") }
+                    .filter(\.isDeletion)
+                    .map { change -> NSFileProviderItemIdentifier in
+                        if let uuid = change.deletedItemUUID {
+                            return NSFileProviderItemIdentifier(FloppyFileProviderIdentifierCodec.itemIdentifierRawValue(uuid: uuid))
+                        }
+                        return NSFileProviderItemIdentifier(FloppyFileProviderIdentifierCodec.legacyItemIdentifierRawValue(id: change.targetID))
+                    }
 
                 observer.didUpdate(updatedItems)
                 observer.didDeleteItems(withIdentifiers: deletedIdentifiers)
@@ -91,16 +96,39 @@ final class FloppyFileProviderEnumerator: NSObject, NSFileProviderEnumerator {
             NSFileProviderItemIdentifier.workingSet.rawValue
         }
     }
-}
 
-private extension FloppyChange {
-    var floppyItem: FloppyItem? {
-        guard !eventType.contains("deleted"), !eventType.contains("trashed") else {
-            return nil
+    private func resolveParentID(_ identifier: NSFileProviderItemIdentifier) async throws -> Int64 {
+        if identifier == .rootContainer {
+            return 0
+        }
+        if let uuid = identifier.floppyItemUUID, let parent = await ledger.item(uuid: uuid) {
+            return parent.id
+        }
+        if let legacyID = identifier.floppyLegacyItemID {
+            return legacyID
+        }
+        throw NSFileProviderError(.noSuchItem)
+    }
+
+    private func fileProviderItems(for items: [FloppyItem]) async -> [FloppyFileProviderItem] {
+        var providerItems: [FloppyFileProviderItem] = []
+        providerItems.reserveCapacity(items.count)
+        for item in items {
+            providerItems.append(FloppyFileProviderItem(item: item, parentItemIdentifier: await parentIdentifier(for: item)))
+        }
+        return providerItems
+    }
+
+    private func parentIdentifier(for item: FloppyItem) async -> NSFileProviderItemIdentifier {
+        guard item.parentID != 0 else {
+            return .rootContainer
         }
 
-        let encoded = try? JSONEncoder.floppy.encode(payload)
-        return encoded.flatMap { try? JSONDecoder.floppy.decode(FloppyItem.self, from: $0) }
+        if let parent = await ledger.item(id: item.parentID) {
+            return parent.fileProviderIdentifier
+        }
+
+        return NSFileProviderItemIdentifier(FloppyFileProviderIdentifierCodec.legacyItemIdentifierRawValue(id: item.parentID))
     }
 }
 

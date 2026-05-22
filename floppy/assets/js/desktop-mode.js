@@ -5,20 +5,71 @@
 	var desktop = wp && wp.desktop ? wp.desktop : null;
 	var hooks = wp && wp.hooks ? wp.hooks : null;
 	var __ = wp && wp.i18n ? wp.i18n.__ : function ( text ) { return text; };
+	var WINDOW_ID = config.windowId || 'floppy-drive';
+	var OWNER = 'floppy-desktop-mode';
+	var badgeState = {
+		uploads: 0,
+		attention: 0,
+		activity: 0
+	};
+	var appSummary = {
+		files: 0,
+		devices: 0,
+		failingChecks: 0,
+		lastSyncCursor: 0,
+		lastStatus: __( 'Ready', 'floppy' )
+	};
+	var FALLBACK_HOOKS = {
+		WINDOW_FOCUSED: 'desktop-mode.window.focused',
+		WINDOW_CLOSING: 'desktop-mode.window.closing',
+		WINDOW_CLOSED: 'desktop-mode.window.closed',
+		NATIVE_WINDOW_AFTER_RENDER: 'desktop-mode.native-window.after-render',
+		FILE_DROP_FILES_DETECTED: 'desktop-mode.file-drop.files-detected',
+		FILE_DROP_BEFORE_UPLOAD: 'desktop-mode.file-drop.before-upload',
+		FILE_DROP_UPLOAD_STARTED: 'desktop-mode.file-drop.upload-started',
+		FILE_DROP_UPLOAD_PROGRESS: 'desktop-mode.file-drop.upload-progress',
+		FILE_DROP_AFTER_UPLOAD: 'desktop-mode.file-drop.after-upload',
+		FILE_DROP_UPLOAD_FAILED: 'desktop-mode.file-drop.upload-failed',
+		DOCK_TILE_CLASS: 'desktop-mode.dock.tile-class',
+		DOCK_TILE_ELEMENT: 'desktop-mode.dock.tile-element',
+		DOCK_TILE_RENDERED: 'desktop-mode.dock.tile-rendered',
+		DOCK_TILE_TOOLTIP: 'desktop-mode.dock.tile-tooltip',
+		DESKTOP_ICON_CLICKED: 'desktop-mode.desktop-icon.clicked'
+	};
+	var PANEL_LABELS = {
+		files: __( 'My Drive', 'floppy' ),
+		shared: __( 'Shared', 'floppy' ),
+		sync: __( 'Sync', 'floppy' ),
+		devices: __( 'Devices', 'floppy' ),
+		diagnostics: __( 'Diagnostics', 'floppy' ),
+		settings: __( 'Settings', 'floppy' )
+	};
+	var OS_VISIBILITY_LABELS = {
+		desktop: __( 'Desktop', 'floppy' ),
+		dock: __( 'Dock', 'floppy' ),
+		both: __( 'Both', 'floppy' ),
+		hidden: __( 'Hidden', 'floppy' )
+	};
+
+	function refreshHostApis() {
+		desktop = wp && wp.desktop ? wp.desktop : desktop;
+		hooks = wp && wp.hooks ? wp.hooks : hooks;
+	}
 
 	function apiRequest( path, options ) {
-		options = options || {};
-		var headers = options.headers || {};
-		headers['X-WP-Nonce'] = config.nonce || '';
-		options.headers = headers;
+		options = Object.assign( {}, options || {} );
+		options.headers = Object.assign( {}, options.headers || {}, {
+			'X-WP-Nonce': config.nonce || ''
+		} );
 
 		if ( desktop && typeof desktop.fetch === 'function' ) {
 			return desktop.fetch( config.restUrl + path.replace( /^\//, '' ), options ).then( parseResponse );
 		}
 
 		if ( wp && wp.apiFetch ) {
-			var apiOptions = Object.assign( {}, options, { path: '/floppy/v1/' + path.replace( /^\//, '' ) } );
-			return wp.apiFetch( apiOptions );
+			return wp.apiFetch( Object.assign( {}, options, {
+				path: '/floppy/v1/' + path.replace( /^\//, '' )
+			} ) );
 		}
 
 		return window.fetch( config.restUrl + path.replace( /^\//, '' ), options ).then( parseResponse );
@@ -28,7 +79,7 @@
 		if ( response && typeof response.json === 'function' ) {
 			return response.json().then( function ( data ) {
 				if ( ! response.ok ) {
-					var error = new Error( data && data.message ? data.message : 'Floppy request failed.' );
+					var error = new Error( data && data.message ? data.message : __( 'Floppy request failed.', 'floppy' ) );
 					error.data = data;
 					throw error;
 				}
@@ -40,12 +91,35 @@
 
 	function notify( message, type ) {
 		if ( desktop && typeof desktop.notify === 'function' ) {
-			desktop.notify( { title: message, meta: { type: type || 'info' } } );
+			desktop.notify( {
+				title: message,
+				meta: { type: type || 'info' }
+			} );
 			return;
 		}
 		if ( window.console ) {
-			window.console.log( '[Floppy] ' + message );
+			( type === 'error' && window.console.error ? window.console.error : window.console.log )( '[Floppy] ' + message );
 		}
+	}
+
+	function updateBadge() {
+		var value = badgeState.uploads + badgeState.attention + badgeState.activity;
+		setBadge( value > 0 ? String( value ) : '' );
+	}
+
+	function setUploadBadge( count ) {
+		badgeState.uploads = Math.max( 0, Number( count ) || 0 );
+		updateBadge();
+	}
+
+	function setAttentionBadge( count ) {
+		badgeState.attention = Math.max( 0, Number( count ) || 0 );
+		updateBadge();
+	}
+
+	function setActivityBadge( count ) {
+		badgeState.activity = Math.max( 0, Number( count ) || 0 );
+		updateBadge();
 	}
 
 	function setBadge( value ) {
@@ -54,40 +128,58 @@
 			count = 0;
 		}
 		if ( desktop && desktop.icons && typeof desktop.icons.setBadge === 'function' ) {
-			desktop.icons.setBadge( config.windowId, count );
+			desktop.icons.setBadge( WINDOW_ID, count );
 		}
 		if ( desktop && desktop.dock && typeof desktop.dock.setBadge === 'function' ) {
-			desktop.dock.setBadge( config.windowId, count );
+			desktop.dock.setBadge( WINDOW_ID, count );
 		}
 		if ( desktop && desktop.taskbar && typeof desktop.taskbar.setBadge === 'function' ) {
-			desktop.taskbar.setBadge( config.windowId, count );
+			desktop.taskbar.setBadge( WINDOW_ID, count );
 		}
 	}
 
 	function mount( container, ctx ) {
+		refreshHostApis();
+
 		var state = {
 			parentId: 0,
 			items: [],
 			selected: null,
+			shareTarget: null,
 			health: null,
+			healthError: null,
 			devices: [],
+			deviceError: null,
+			sync: null,
+			syncEvents: [],
+			sharedEvents: [],
+			syncCursor: 0,
 			uploading: 0,
-			view: 'grid'
+			view: 'grid',
+			panel: 'files',
+			osSettings: null
 		};
+		var cleanup = [];
+		var namespace = OWNER + '/window-' + String( Date.now() ) + '-' + String( Math.random() ).slice( 2 );
 
+		container.classList.add( 'floppy-app' );
 		container.innerHTML = [
 			'<div class="floppy-shell">',
 				'<aside class="floppy-sidebar">',
-					'<div class="floppy-brand"><span class="dashicons dashicons-portfolio"></span><strong>Floppy</strong></div>',
-					'<button class="floppy-nav is-active" data-panel="files"><span class="dashicons dashicons-media-default"></span><span>Files</span></button>',
-					'<button class="floppy-nav" data-panel="shared"><span class="dashicons dashicons-groups"></span><span>Shared</span></button>',
-					'<button class="floppy-nav" data-panel="sync"><span class="dashicons dashicons-update"></span><span>Sync</span></button>',
-					'<button class="floppy-nav" data-panel="devices"><span class="dashicons dashicons-desktop"></span><span>Devices</span></button>',
-					'<button class="floppy-nav" data-panel="diagnostics"><span class="dashicons dashicons-chart-area"></span><span>Diagnostics</span></button>',
+					'<div class="floppy-brand"><span class="dashicons dashicons-portfolio"></span><div><strong>Floppy</strong><span data-floppy-status>Ready</span></div></div>',
+					renderNavButton( 'files', 'media-default', true ),
+					renderNavButton( 'shared', 'groups' ),
+					renderNavButton( 'sync', 'update' ),
+					renderNavButton( 'devices', 'desktop' ),
+					renderNavButton( 'diagnostics', 'chart-area' ),
+					renderNavButton( 'settings', 'admin-generic' ),
 				'</aside>',
 				'<main class="floppy-main">',
 					'<header class="floppy-toolbar">',
-						'<div class="floppy-breadcrumb"><button class="floppy-icon-button" data-action="home" title="Home"><span class="dashicons dashicons-admin-home"></span></button><span>My Drive</span></div>',
+						'<div class="floppy-breadcrumb">',
+							'<button class="floppy-icon-button" data-action="home" title="Home"><span class="dashicons dashicons-admin-home"></span></button>',
+							'<div><strong data-toolbar-title>My Drive</strong><span data-toolbar-subtitle>Private WordPress Drive</span></div>',
+						'</div>',
 						'<div class="floppy-actions">',
 							'<button class="floppy-icon-button" data-action="new-folder" title="New folder"><span class="dashicons dashicons-category"></span></button>',
 							'<button class="floppy-icon-button" data-action="upload" title="Upload"><span class="dashicons dashicons-upload"></span></button>',
@@ -103,119 +195,491 @@
 
 		var panelRoot = container.querySelector( '[data-panel-root]' );
 		var fileInput = container.querySelector( '.floppy-hidden-file' );
+		var statusNode = container.querySelector( '[data-floppy-status]' );
+		var titleNode = container.querySelector( '[data-toolbar-title]' );
+		var subtitleNode = container.querySelector( '[data-toolbar-subtitle]' );
 
-		function renderFiles() {
-			panelRoot.innerHTML = '<div class="floppy-drop-zone"><div class="floppy-list floppy-list--' + state.view + '"></div></div>';
-			var list = panelRoot.querySelector( '.floppy-list' );
-			if ( ! state.items.length ) {
-				list.innerHTML = '<div class="floppy-empty">No files yet.</div>';
-				return;
-			}
-			list.innerHTML = state.items.map( function ( item ) {
-				var icon = item.kind === 'folder' ? 'category' : 'media-default';
-				var size = item.kind === 'file' ? '<span>' + formatBytes( item.size_bytes ) + '</span>' : '<span>Folder</span>';
-				return '<button class="floppy-item" data-kind="' + item.kind + '" data-id="' + item.id + '">' +
-					'<span class="dashicons dashicons-' + icon + '"></span>' +
-					'<strong>' + escapeHtml( item.name ) + '</strong>' +
-					size +
-				'</button>';
-			} ).join( '' );
+		function renderNavButton( panel, icon, active ) {
+			return '<button class="floppy-nav' + ( active ? ' is-active' : '' ) + '" data-panel="' + panel + '">' +
+				'<span class="dashicons dashicons-' + icon + '"></span><span>' + escapeHtml( PANEL_LABELS[ panel ] ) + '</span>' +
+			'</button>';
 		}
 
-		function renderDiagnostics() {
-			var health = state.health;
-			if ( ! health ) {
-				panelRoot.innerHTML = '<div class="floppy-empty">Diagnostics unavailable.</div>';
+		function setStatus( message, type ) {
+			appSummary.lastStatus = message || __( 'Ready', 'floppy' );
+			if ( statusNode ) {
+				statusNode.textContent = appSummary.lastStatus;
+				statusNode.className = type ? 'is-' + type : '';
+			}
+		}
+
+		function updateChrome() {
+			container.querySelectorAll( '.floppy-nav' ).forEach( function ( button ) {
+				button.classList.toggle( 'is-active', button.getAttribute( 'data-panel' ) === state.panel );
+			} );
+			if ( titleNode ) {
+				titleNode.textContent = PANEL_LABELS[ state.panel ] || PANEL_LABELS.files;
+			}
+			if ( subtitleNode ) {
+				subtitleNode.textContent = state.panel === 'files' && state.parentId ? __( 'Folder contents', 'floppy' ) : __( 'Private WordPress Drive', 'floppy' );
+			}
+		}
+
+		function renderLoading( label ) {
+			panelRoot.innerHTML = '<div class="floppy-loading-panel"><span class="dashicons dashicons-update"></span><strong>' + escapeHtml( label ) + '</strong></div>';
+		}
+
+		function renderFiles() {
+			updateChrome();
+			var uploadLine = state.uploading ? '<div class="floppy-callout is-info"><strong>' + escapeHtml( String( state.uploading ) ) + '</strong> ' + escapeHtml( __( 'uploading now', 'floppy' ) ) + '</div>' : '';
+			panelRoot.innerHTML = [
+				'<div class="floppy-drop-zone">',
+					uploadLine,
+					'<div class="floppy-surface-head">',
+						'<div><h2>' + escapeHtml( state.parentId ? __( 'Folder', 'floppy' ) : __( 'My Drive', 'floppy' ) ) + '</h2><p>' + escapeHtml( __( 'Files stay private and move through authenticated Floppy endpoints.', 'floppy' ) ) + '</p></div>',
+						'<span class="floppy-pill">' + escapeHtml( plural( state.items.length, 'item', 'items' ) ) + '</span>',
+					'</div>',
+					'<div class="floppy-list floppy-list--' + state.view + '"></div>',
+				'</div>'
+			].join( '' );
+			var list = panelRoot.querySelector( '.floppy-list' );
+			if ( ! state.items.length ) {
+				list.innerHTML = '<div class="floppy-empty"><strong>' + escapeHtml( __( 'No files yet.', 'floppy' ) ) + '</strong><span>' + escapeHtml( __( 'Drop files here or use the upload button to start a private drive.', 'floppy' ) ) + '</span></div>';
 				return;
 			}
-			var checks = Object.keys( health.checks || {} ).map( function ( key ) {
-				var check = health.checks[ key ];
-				return '<tr><td>' + escapeHtml( key.replace( /_/g, ' ' ) ) + '</td><td>' + ( check.ok ? 'Pass' : 'Fail' ) + '</td><td>' + escapeHtml( check.label || '' ) + '</td><td>' + escapeHtml( check.message || '' ) + '</td></tr>';
-			} ).join( '' );
-			panelRoot.innerHTML = '<div class="floppy-panel"><h2>Diagnostics</h2><table><tbody>' + checks + '</tbody></table></div>';
+			list.innerHTML = state.items.map( renderFileItem ).join( '' );
+		}
+
+		function renderFileItem( item ) {
+			var icon = item.kind === 'folder' ? 'category' : fileIcon( item.mime_type );
+			var size = item.kind === 'file' ? formatBytes( item.size_bytes ) : __( 'Folder', 'floppy' );
+			var updated = item.updated_at_gmt ? formatDate( item.updated_at_gmt ) : '';
+			return '<button class="floppy-item" data-kind="' + escapeHtml( item.kind ) + '" data-id="' + escapeHtml( String( item.id ) ) + '">' +
+				'<span class="dashicons dashicons-' + icon + '"></span>' +
+				'<strong>' + escapeHtml( item.name ) + '</strong>' +
+				'<span>' + escapeHtml( size ) + '</span>' +
+				( updated ? '<small>' + escapeHtml( updated ) + '</small>' : '' ) +
+			'</button>';
+		}
+
+		function currentShareTarget() {
+			if ( ! state.shareTarget && state.items.length ) {
+				state.shareTarget = targetKey( state.items[0] );
+			}
+			if ( ! state.shareTarget ) {
+				return null;
+			}
+			var parts = state.shareTarget.split( ':' );
+			return state.items.filter( function ( item ) {
+				return item.kind === parts[0] && Number( item.id ) === Number( parts[1] );
+			} )[0] || null;
+		}
+
+		function renderShared() {
+			updateChrome();
+			var target = currentShareTarget();
+			var itemList = state.items.length ? state.items.map( function ( item ) {
+				var active = target && target.kind === item.kind && Number( target.id ) === Number( item.id );
+				return '<button type="button" class="floppy-target' + ( active ? ' is-active' : '' ) + '" data-share-target="' + escapeHtml( targetKey( item ) ) + '">' +
+					'<span class="dashicons dashicons-' + ( item.kind === 'folder' ? 'category' : 'media-default' ) + '"></span>' +
+					'<span><strong>' + escapeHtml( item.name ) + '</strong><small>' + escapeHtml( item.kind === 'folder' ? __( 'Folder', 'floppy' ) : formatBytes( item.size_bytes ) ) + '</small></span>' +
+				'</button>';
+			} ).join( '' ) : '<div class="floppy-empty"><strong>' + escapeHtml( __( 'Nothing to share yet.', 'floppy' ) ) + '</strong><span>' + escapeHtml( __( 'Add files first, then grant access here.', 'floppy' ) ) + '</span></div>';
+			var events = state.sharedEvents.length ? state.sharedEvents.map( renderSyncEvent ).join( '' ) : '<div class="floppy-empty"><strong>' + escapeHtml( __( 'No recent share changes.', 'floppy' ) ) + '</strong></div>';
+
+			panelRoot.innerHTML = [
+				'<div class="floppy-panel-grid">',
+					'<section class="floppy-panel">',
+						'<div class="floppy-surface-head"><div><h2>' + escapeHtml( __( 'Share Access', 'floppy' ) ) + '</h2><p>' + escapeHtml( __( 'Grant or revoke exact user and role access for the selected file or folder.', 'floppy' ) ) + '</p></div></div>',
+						'<div class="floppy-target-list">' + itemList + '</div>',
+					'</section>',
+					'<section class="floppy-panel">',
+						'<h2>' + escapeHtml( target ? target.name : __( 'Selected Item', 'floppy' ) ) + '</h2>',
+						renderShareForm( target ),
+					'</section>',
+					'<section class="floppy-panel floppy-panel--wide">',
+						'<div class="floppy-surface-head"><div><h2>' + escapeHtml( __( 'Share Activity', 'floppy' ) ) + '</h2><p>' + escapeHtml( __( 'Recent access changes from the sync feed.', 'floppy' ) ) + '</p></div></div>',
+						'<div class="floppy-event-list">' + events + '</div>',
+					'</section>',
+				'</div>'
+			].join( '' );
+		}
+
+		function renderShareForm( target ) {
+			if ( ! target ) {
+				return '<div class="floppy-empty"><strong>' + escapeHtml( __( 'Choose an item', 'floppy' ) ) + '</strong><span>' + escapeHtml( __( 'Select a file or folder from the list to manage access.', 'floppy' ) ) + '</span></div>';
+			}
+			return [
+				'<form class="floppy-form floppy-share-form" data-share-form>',
+					'<label><span>' + escapeHtml( __( 'Principal', 'floppy' ) ) + '</span><select name="principal_type"><option value="user">' + escapeHtml( __( 'WordPress user ID', 'floppy' ) ) + '</option><option value="role">' + escapeHtml( __( 'Role slug', 'floppy' ) ) + '</option></select></label>',
+					'<label><span>' + escapeHtml( __( 'Value', 'floppy' ) ) + '</span><input type="text" name="principal_ref" autocomplete="off" placeholder="12 or editor" required /></label>',
+					'<label><span>' + escapeHtml( __( 'Access', 'floppy' ) ) + '</span><select name="capability"><option value="read">' + escapeHtml( __( 'Read', 'floppy' ) ) + '</option><option value="write">' + escapeHtml( __( 'Write', 'floppy' ) ) + '</option></select></label>',
+					'<div class="floppy-form-actions"><button type="submit" class="button button-primary">' + escapeHtml( __( 'Share', 'floppy' ) ) + '</button><button type="button" class="button" data-action="unshare">' + escapeHtml( __( 'Revoke Exact Grant', 'floppy' ) ) + '</button></div>',
+				'</form>'
+			].join( '' );
+		}
+
+		function renderSync() {
+			updateChrome();
+			var events = state.syncEvents.length ? state.syncEvents.map( renderSyncEvent ).join( '' ) : '<div class="floppy-empty"><strong>' + escapeHtml( __( 'No sync changes found.', 'floppy' ) ) + '</strong><span>' + escapeHtml( __( 'New uploads, shares, moves, and deletes will appear here.', 'floppy' ) ) + '</span></div>';
+			var conflictCount = state.syncEvents.filter( function ( event ) {
+				return String( event.event_type || '' ).indexOf( 'conflict' ) !== -1;
+			} ).length;
+			panelRoot.innerHTML = [
+				'<div class="floppy-panel-grid">',
+					'<section class="floppy-stat"><span class="dashicons dashicons-update"></span><strong>' + escapeHtml( String( state.syncCursor || 0 ) ) + '</strong><small>' + escapeHtml( __( 'Current cursor', 'floppy' ) ) + '</small></section>',
+					'<section class="floppy-stat"><span class="dashicons dashicons-clock"></span><strong>' + escapeHtml( String( state.syncEvents.length ) ) + '</strong><small>' + escapeHtml( __( 'Loaded events', 'floppy' ) ) + '</small></section>',
+					'<section class="floppy-stat"><span class="dashicons dashicons-warning"></span><strong>' + escapeHtml( String( conflictCount ) ) + '</strong><small>' + escapeHtml( __( 'Conflicts', 'floppy' ) ) + '</small></section>',
+					'<section class="floppy-panel floppy-panel--wide">',
+						'<div class="floppy-surface-head"><div><h2>' + escapeHtml( __( 'Sync Feed', 'floppy' ) ) + '</h2><p>' + escapeHtml( __( 'Append-only changes used by Finder and Desktop Mode clients.', 'floppy' ) ) + '</p></div><div class="floppy-button-row"><button type="button" class="button" data-action="sync-reset">' + escapeHtml( __( 'Latest', 'floppy' ) ) + '</button><button type="button" class="button button-primary" data-action="sync-more">' + escapeHtml( state.sync && state.sync.has_more ? __( 'Load More', 'floppy' ) : __( 'Refresh', 'floppy' ) ) + '</button></div></div>',
+						'<div class="floppy-event-list">' + events + '</div>',
+					'</section>',
+				'</div>'
+			].join( '' );
+		}
+
+		function renderSyncEvent( event ) {
+			var payload = event.payload || {};
+			var name = payload.name || payload.target_name || payload.principal_ref || '';
+			return '<article class="floppy-event">' +
+				'<span class="dashicons dashicons-' + eventIcon( event.event_type ) + '"></span>' +
+				'<div><strong>' + escapeHtml( event.event_type || __( 'event', 'floppy' ) ) + '</strong><small>' + escapeHtml( event.target_type || '' ) + ' #' + escapeHtml( String( event.target_id || 0 ) ) + ( name ? ' · ' + escapeHtml( name ) : '' ) + '</small></div>' +
+				'<time>' + escapeHtml( formatDate( event.created_at_gmt ) ) + '</time>' +
+			'</article>';
 		}
 
 		function renderDevices() {
-			var rows = state.devices.map( function ( device ) {
-				return '<tr><td>' + escapeHtml( device.device_name ) + '</td><td>' + escapeHtml( device.status ) + '</td><td>' + escapeHtml( device.last_seen_at_gmt || '-' ) + '</td><td>' + escapeHtml( String( device.last_cursor || 0 ) ) + '</td></tr>';
+			updateChrome();
+			var active = state.devices.filter( function ( device ) {
+				return device.status === 'active';
+			} ).length;
+			var errored = state.devices.filter( function ( device ) {
+				return !! device.last_error;
+			} ).length;
+			var rows = state.devices.length ? state.devices.map( function ( device ) {
+				return '<article class="floppy-device">' +
+					'<div><span class="dashicons dashicons-desktop"></span><strong>' + escapeHtml( device.device_name ) + '</strong><small>' + escapeHtml( device.scope || '' ) + '</small></div>' +
+					'<span class="floppy-pill is-' + escapeHtml( device.status || 'unknown' ) + '">' + escapeHtml( device.status || __( 'unknown', 'floppy' ) ) + '</span>' +
+					'<dl><div><dt>' + escapeHtml( __( 'Last Seen', 'floppy' ) ) + '</dt><dd>' + escapeHtml( formatDate( device.last_seen_at_gmt ) ) + '</dd></div><div><dt>' + escapeHtml( __( 'Last Sync', 'floppy' ) ) + '</dt><dd>' + escapeHtml( formatDate( device.last_sync_at_gmt ) ) + '</dd></div><div><dt>' + escapeHtml( __( 'Cursor', 'floppy' ) ) + '</dt><dd>' + escapeHtml( String( device.last_cursor || 0 ) ) + '</dd></div></dl>' +
+					( device.last_error ? '<p class="floppy-error-text">' + escapeHtml( device.last_error ) + '</p>' : '' ) +
+					( device.status === 'active' ? '<button type="button" class="button" data-action="device-revoke" data-device-uuid="' + escapeHtml( device.device_uuid ) + '">' + escapeHtml( __( 'Revoke', 'floppy' ) ) + '</button>' : '' ) +
+				'</article>';
+			} ).join( '' ) : '<div class="floppy-empty"><strong>' + escapeHtml( __( 'No approved devices yet.', 'floppy' ) ) + '</strong><span>' + escapeHtml( __( 'Connect Floppy for Mac to create a scoped sync device.', 'floppy' ) ) + '</span></div>';
+
+			panelRoot.innerHTML = [
+				'<div class="floppy-panel-grid">',
+					'<section class="floppy-stat"><span class="dashicons dashicons-yes-alt"></span><strong>' + escapeHtml( String( active ) ) + '</strong><small>' + escapeHtml( __( 'Active devices', 'floppy' ) ) + '</small></section>',
+					'<section class="floppy-stat"><span class="dashicons dashicons-warning"></span><strong>' + escapeHtml( String( errored ) ) + '</strong><small>' + escapeHtml( __( 'Need attention', 'floppy' ) ) + '</small></section>',
+					'<section class="floppy-panel floppy-panel--wide">',
+						'<div class="floppy-surface-head"><div><h2>' + escapeHtml( __( 'Approved Macs', 'floppy' ) ) + '</h2><p>' + escapeHtml( __( 'Each device uses a scoped token that can be revoked without changing the WordPress password.', 'floppy' ) ) + '</p></div><button type="button" class="button" data-action="devices-refresh">' + escapeHtml( __( 'Refresh', 'floppy' ) ) + '</button></div>',
+						'<div class="floppy-device-list">' + rows + '</div>',
+					'</section>',
+				'</div>'
+			].join( '' );
+		}
+
+		function renderDiagnostics() {
+			updateChrome();
+			if ( state.healthError ) {
+				panelRoot.innerHTML = '<div class="floppy-empty"><strong>' + escapeHtml( __( 'Diagnostics unavailable.', 'floppy' ) ) + '</strong><span>' + escapeHtml( state.healthError.message || __( 'Administrator diagnostics require a browser session.', 'floppy' ) ) + '</span></div>';
+				return;
+			}
+			if ( ! state.health ) {
+				panelRoot.innerHTML = '<div class="floppy-empty"><strong>' + escapeHtml( __( 'Diagnostics have not run yet.', 'floppy' ) ) + '</strong></div>';
+				return;
+			}
+			var checks = Object.keys( state.health.checks || {} );
+			var failing = checks.filter( function ( key ) {
+				return ! state.health.checks[ key ].ok;
+			} ).length;
+			var rows = checks.map( function ( key ) {
+				var check = state.health.checks[ key ];
+				return '<tr><td><strong>' + escapeHtml( key.replace( /_/g, ' ' ) ) + '</strong></td><td><span class="floppy-pill is-' + ( check.ok ? 'pass' : 'fail' ) + '">' + escapeHtml( check.ok ? __( 'Pass', 'floppy' ) : __( 'Fail', 'floppy' ) ) + '</span></td><td>' + escapeHtml( check.label || '' ) + '</td><td>' + escapeHtml( check.message || '' ) + '</td></tr>';
 			} ).join( '' );
-			panelRoot.innerHTML = '<div class="floppy-panel"><h2>Devices</h2><table><tbody>' + ( rows || '<tr><td>No devices approved.</td></tr>' ) + '</tbody></table></div>';
+			panelRoot.innerHTML = [
+				'<div class="floppy-panel-grid">',
+					'<section class="floppy-stat"><span class="dashicons dashicons-shield"></span><strong>' + escapeHtml( state.health.ok ? __( 'Ready', 'floppy' ) : __( 'Review', 'floppy' ) ) + '</strong><small>' + escapeHtml( __( 'Production health', 'floppy' ) ) + '</small></section>',
+					'<section class="floppy-stat"><span class="dashicons dashicons-warning"></span><strong>' + escapeHtml( String( failing ) ) + '</strong><small>' + escapeHtml( __( 'Failed checks', 'floppy' ) ) + '</small></section>',
+					'<section class="floppy-panel floppy-panel--wide">',
+						'<div class="floppy-surface-head"><div><h2>' + escapeHtml( __( 'Diagnostics', 'floppy' ) ) + '</h2><p>' + escapeHtml( __( 'Private storage, HTTPS, schema, and Desktop Mode readiness.', 'floppy' ) ) + '</p></div><button type="button" class="button" data-action="health-refresh">' + escapeHtml( __( 'Refresh', 'floppy' ) ) + '</button></div>',
+						'<div class="floppy-table-wrap"><table><tbody>' + rows + '</tbody></table></div>',
+					'</section>',
+				'</div>'
+			].join( '' );
+		}
+
+		function renderSettings() {
+			updateChrome();
+			panelRoot.innerHTML = [
+				'<div class="floppy-panel-grid">',
+					'<section class="floppy-panel">',
+						'<div class="floppy-surface-head"><div><h2>' + escapeHtml( __( 'Desktop Placement', 'floppy' ) ) + '</h2><p>' + escapeHtml( __( 'Uses Desktop Mode OS Settings for the Floppy launcher.', 'floppy' ) ) + '</p></div></div>',
+						renderOsSettingsControls( state.osSettings ),
+						'<div class="floppy-button-row"><button type="button" class="button" data-action="desktop-settings">' + escapeHtml( __( 'Open OS Settings', 'floppy' ) ) + '</button><button type="button" class="button" data-action="settings-refresh">' + escapeHtml( __( 'Refresh', 'floppy' ) ) + '</button></div>',
+					'</section>',
+					'<section class="floppy-panel">',
+						'<h2>' + escapeHtml( __( 'Limits', 'floppy' ) ) + '</h2>',
+						'<dl class="floppy-definition-list"><div><dt>' + escapeHtml( __( 'Maximum upload', 'floppy' ) ) + '</dt><dd>' + escapeHtml( formatBytes( config.maxFileSize || 0 ) ) + '</dd></div><div><dt>' + escapeHtml( __( 'Desktop Mode', 'floppy' ) ) + '</dt><dd>' + escapeHtml( config.desktopMode ? __( 'Available', 'floppy' ) : __( 'Not detected', 'floppy' ) ) + '</dd></div><div><dt>' + escapeHtml( __( 'Uploads', 'floppy' ) ) + '</dt><dd>' + escapeHtml( config.capabilities && config.capabilities.upload ? __( 'Allowed', 'floppy' ) : __( 'Unavailable', 'floppy' ) ) + '</dd></div></dl>',
+					'</section>',
+					'<section class="floppy-panel floppy-panel--wide">',
+						renderOnboardingMarkup(),
+					'</section>',
+				'</div>'
+			].join( '' );
+		}
+
+		function fetchFiles() {
+			return apiRequest( 'files?parent_id=' + encodeURIComponent( state.parentId ) + '&limit=100' ).then( function ( data ) {
+				state.items = data.items || [];
+				appSummary.files = state.items.length;
+				return data;
+			} );
 		}
 
 		function loadFiles() {
 			markLoading( ctx );
-			return apiRequest( 'files?parent_id=' + state.parentId + '&limit=100' ).then( function ( data ) {
-				state.items = data.items || [];
+			renderLoading( __( 'Loading files', 'floppy' ) );
+			return fetchFiles().then( function () {
 				renderFiles();
 				markReady( ctx );
 			} ).catch( showError );
 		}
 
+		function loadShared() {
+			markLoading( ctx );
+			renderLoading( __( 'Loading sharing', 'floppy' ) );
+			return Promise.all( [
+				fetchFiles(),
+				fetchSharedEvents()
+			] ).then( function () {
+				if ( ! currentShareTarget() && state.items.length ) {
+					state.shareTarget = targetKey( state.items[0] );
+				}
+				renderShared();
+				markReady( ctx );
+			} ).catch( showError );
+		}
+
+		function fetchSharedEvents() {
+			return apiRequest( 'sync/changes?cursor=0&limit=50' ).then( function ( data ) {
+				state.sharedEvents = ( data.events || [] ).filter( function ( event ) {
+					return String( event.event_type || '' ).indexOf( 'share.' ) === 0;
+				} ).slice( -10 ).reverse();
+			} ).catch( function () {
+				state.sharedEvents = [];
+			} );
+		}
+
 		function loadHealth() {
 			return apiRequest( 'health' ).then( function ( data ) {
 				state.health = data;
-			} ).catch( function () {} );
+				state.healthError = null;
+				appSummary.failingChecks = failingCheckCount( data );
+				setAttentionBadge( appSummary.failingChecks );
+			} ).catch( function ( error ) {
+				state.health = null;
+				state.healthError = error;
+			} );
+		}
+
+		function loadDiagnostics() {
+			markLoading( ctx );
+			renderLoading( __( 'Loading diagnostics', 'floppy' ) );
+			return loadHealth().then( function () {
+				renderDiagnostics();
+				markReady( ctx );
+			} ).catch( showError );
 		}
 
 		function loadDevices() {
 			return apiRequest( 'devices' ).then( function ( data ) {
 				state.devices = data.devices || [];
-			} ).catch( function () {} );
+				state.deviceError = null;
+				appSummary.devices = state.devices.filter( function ( device ) {
+					return device.status === 'active';
+				} ).length;
+			} ).catch( function ( error ) {
+				state.deviceError = error;
+				state.devices = [];
+			} );
+		}
+
+		function loadDevicePanel() {
+			markLoading( ctx );
+			renderLoading( __( 'Loading devices', 'floppy' ) );
+			return loadDevices().then( function () {
+				renderDevices();
+				markReady( ctx );
+			} ).catch( showError );
+		}
+
+		function loadSync( reset ) {
+			var cursor = reset ? 0 : state.syncCursor;
+			markLoading( ctx );
+			renderLoading( __( 'Loading sync feed', 'floppy' ) );
+			return apiRequest( 'sync/changes?cursor=' + encodeURIComponent( cursor || 0 ) + '&limit=50' ).then( function ( data ) {
+				state.sync = data;
+				state.syncCursor = data.next_cursor || cursor || 0;
+				appSummary.lastSyncCursor = state.syncCursor;
+				state.syncEvents = reset ? ( data.events || [] ) : mergeEvents( state.syncEvents, data.events || [] );
+				renderSync();
+				markReady( ctx );
+			} ).catch( showError );
+		}
+
+		function refreshOsSettings( shouldRender ) {
+			return readOsSettings().then( function ( settings ) {
+				state.osSettings = settings;
+				if ( shouldRender && state.panel === 'settings' ) {
+					renderSettings();
+				}
+			} );
 		}
 
 		function uploadFiles( files ) {
-			if ( ! files || ! files.length ) {
+			files = Array.prototype.slice.call( files || [] );
+			if ( ! files.length ) {
 				return;
 			}
-			state.uploading += files.length;
-			setBadge( String( state.uploading ) );
-			Array.prototype.forEach.call( files, function ( file ) {
+			if ( config.capabilities && ! config.capabilities.upload ) {
+				notify( __( 'Uploads are not available for this account.', 'floppy' ), 'error' );
+				return;
+			}
+			var accepted = files.filter( function ( file ) {
+				if ( config.maxFileSize && file.size > config.maxFileSize ) {
+					notify( file.name + ' ' + __( 'is larger than the Floppy upload limit.', 'floppy' ), 'error' );
+					return false;
+				}
+				return true;
+			} );
+			if ( ! accepted.length ) {
+				return;
+			}
+			state.uploading += accepted.length;
+			setUploadBadge( state.uploading );
+			setStatus( __( 'Uploading', 'floppy' ), 'busy' );
+			accepted.forEach( function ( file ) {
 				var body = new window.FormData();
 				body.append( 'file', file );
 				body.append( 'parent_id', state.parentId );
-				apiRequest( 'upload', { method: 'POST', body: body } ).then( function () {
-					notify( 'Uploaded ' + file.name, 'success' );
+				apiRequest( 'upload', {
+					method: 'POST',
+					body: body
+				} ).then( function () {
+					notify( __( 'Uploaded ', 'floppy' ) + file.name, 'success' );
+					setActivityBadge( badgeState.activity + 1 );
 					if ( desktop && typeof desktop.broadcast === 'function' ) {
 						desktop.broadcast( 'floppy.files.changed', { parentId: state.parentId } );
 					}
 				} ).catch( showError ).finally( function () {
 					state.uploading -= 1;
-					setBadge( state.uploading ? String( state.uploading ) : '' );
-					loadFiles();
+					setUploadBadge( state.uploading );
+					if ( state.uploading === 0 ) {
+						setStatus( __( 'Ready', 'floppy' ) );
+						reloadCurrentPanel();
+					}
 				} );
 			} );
 		}
 
 		function createFolder() {
+			if ( panelRoot.querySelector( '[data-folder-form]' ) ) {
+				return;
+			}
 			panelRoot.insertAdjacentHTML(
 				'afterbegin',
-				'<form class="floppy-inline-form" data-folder-form><input type="text" name="folder_name" placeholder="Folder name" autocomplete="off" /><button type="submit">Create</button><button type="button" data-cancel-folder>Cancel</button></form>'
+				'<form class="floppy-inline-form" data-folder-form><input type="text" name="folder_name" placeholder="' + escapeHtml( __( 'Folder name', 'floppy' ) ) + '" autocomplete="off" /><button type="submit" class="button button-primary">' + escapeHtml( __( 'Create', 'floppy' ) ) + '</button><button type="button" class="button" data-cancel-folder>' + escapeHtml( __( 'Cancel', 'floppy' ) ) + '</button></form>'
 			);
-			var form = panelRoot.querySelector( '[data-folder-form]' );
+			var input = panelRoot.querySelector( '[data-folder-form] input' );
+			if ( input ) {
+				input.focus();
+			}
+		}
+
+		function submitFolderForm( form ) {
 			var input = form.querySelector( 'input' );
-			input.focus();
-			form.addEventListener( 'submit', function ( event ) {
-				event.preventDefault();
-				if ( ! input.value.trim() ) {
-					return;
-				}
-				apiRequest( 'folders', {
-					method: 'POST',
-					headers: { 'Content-Type': 'application/json' },
-					body: JSON.stringify( { name: input.value.trim(), parent_id: state.parentId } )
-				} ).then( loadFiles ).catch( showError );
-			} );
+			if ( ! input || ! input.value.trim() ) {
+				return;
+			}
+			apiRequest( 'folders', {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify( {
+					name: input.value.trim(),
+					parent_id: state.parentId
+				} )
+			} ).then( loadFiles ).catch( showError );
+		}
+
+		function shareTarget() {
+			var target = currentShareTarget();
+			var form = panelRoot.querySelector( '[data-share-form]' );
+			if ( ! target || ! form ) {
+				return;
+			}
+			var principalRef = form.principal_ref.value.trim();
+			if ( ! principalRef ) {
+				return;
+			}
+			apiRequest( 'share', {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify( {
+					target_type: target.kind,
+					target_id: target.id,
+					principal_type: form.principal_type.value,
+					principal_ref: principalRef,
+					capability: form.capability.value
+				} )
+			} ).then( function () {
+				notify( __( 'Share updated.', 'floppy' ), 'success' );
+				return loadShared();
+			} ).catch( showError );
+		}
+
+		function unshareTarget() {
+			var target = currentShareTarget();
+			var form = panelRoot.querySelector( '[data-share-form]' );
+			if ( ! target || ! form || ! form.principal_ref.value.trim() ) {
+				return;
+			}
+			apiRequest( 'share', {
+				method: 'DELETE',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify( {
+					target_type: target.kind,
+					target_id: target.id,
+					principal_type: form.principal_type.value,
+					principal_ref: form.principal_ref.value.trim()
+				} )
+			} ).then( function () {
+				notify( __( 'Share revoked.', 'floppy' ), 'success' );
+				return loadShared();
+			} ).catch( showError );
+		}
+
+		function revokeDevice( uuid ) {
+			if ( ! uuid || ! window.confirm( __( 'Revoke this Floppy device token?', 'floppy' ) ) ) {
+				return;
+			}
+			apiRequest( 'devices/' + encodeURIComponent( uuid ) + '/revoke', {
+				method: 'POST'
+			} ).then( function () {
+				notify( __( 'Device revoked.', 'floppy' ), 'success' );
+				return loadDevicePanel();
+			} ).catch( showError );
 		}
 
 		function openItem( id, kind ) {
 			var item = state.items.filter( function ( candidate ) {
-				return candidate.id === id && candidate.kind === kind;
+				return Number( candidate.id ) === Number( id ) && candidate.kind === kind;
 			} )[0];
 			if ( ! item ) {
 				return;
 			}
 			if ( item.kind === 'folder' ) {
 				state.parentId = item.id;
+				state.panel = 'files';
 				loadFiles();
 				return;
 			}
@@ -223,23 +687,94 @@
 		}
 
 		function switchPanel( panel ) {
-			container.querySelectorAll( '.floppy-nav' ).forEach( function ( button ) {
-				button.classList.toggle( 'is-active', button.getAttribute( 'data-panel' ) === panel );
-			} );
-			if ( panel === 'files' || panel === 'shared' ) {
+			state.panel = panel || 'files';
+			updateChrome();
+			if ( state.panel === 'files' ) {
 				loadFiles();
-			} else if ( panel === 'devices' ) {
-				loadDevices().then( renderDevices );
-			} else if ( panel === 'diagnostics' ) {
-				loadHealth().then( renderDiagnostics );
+			} else if ( state.panel === 'shared' ) {
+				loadShared();
+			} else if ( state.panel === 'sync' ) {
+				loadSync( true );
+			} else if ( state.panel === 'devices' ) {
+				loadDevicePanel();
+			} else if ( state.panel === 'diagnostics' ) {
+				loadDiagnostics();
 			} else {
-				panelRoot.innerHTML = '<div class="floppy-panel"><h2>Sync Activity</h2><p>Cursor-based sync is available at <code>/floppy/v1/sync/changes</code>.</p></div>';
+				refreshOsSettings( false ).then( renderSettings );
+			}
+		}
+
+		function reloadCurrentPanel() {
+			if ( state.panel === 'shared' ) {
+				loadShared();
+			} else if ( state.panel === 'sync' ) {
+				loadSync( true );
+			} else if ( state.panel === 'devices' ) {
+				loadDevicePanel();
+			} else if ( state.panel === 'diagnostics' ) {
+				loadDiagnostics();
+			} else if ( state.panel === 'settings' ) {
+				refreshOsSettings( true );
+			} else {
+				loadFiles();
 			}
 		}
 
 		function showError( error ) {
 			markReady( ctx );
-			notify( error && error.message ? error.message : 'Floppy request failed.', 'error' );
+			setStatus( __( 'Needs attention', 'floppy' ), 'error' );
+			notify( error && error.message ? error.message : __( 'Floppy request failed.', 'floppy' ), 'error' );
+		}
+
+		function handleNativeDropPayload( payload ) {
+			var files = filesFromPayload( payload );
+			if ( files.length ) {
+				uploadFiles( files );
+			}
+		}
+
+		function handlePanelAction( action ) {
+			var name = action.getAttribute( 'data-action' );
+			if ( name === 'upload' ) {
+				fileInput.click();
+			} else if ( name === 'new-folder' ) {
+				state.panel = 'files';
+				updateChrome();
+				if ( panelRoot.querySelector( '.floppy-list' ) ) {
+					createFolder();
+				} else {
+					loadFiles().then( createFolder );
+				}
+			} else if ( name === 'refresh' ) {
+				reloadCurrentPanel();
+			} else if ( name === 'home' ) {
+				state.parentId = 0;
+				state.panel = 'files';
+				loadFiles();
+			} else if ( name === 'toggle-view' ) {
+				state.view = state.view === 'grid' ? 'list' : 'grid';
+				if ( state.panel === 'files' ) {
+					renderFiles();
+				}
+			} else if ( name === 'unshare' ) {
+				unshareTarget();
+			} else if ( name === 'sync-reset' ) {
+				state.syncCursor = 0;
+				state.syncEvents = [];
+				loadSync( true );
+			} else if ( name === 'sync-more' ) {
+				loadSync( false );
+			} else if ( name === 'health-refresh' ) {
+				loadDiagnostics();
+			} else if ( name === 'devices-refresh' ) {
+				loadDevicePanel();
+			} else if ( name === 'device-revoke' ) {
+				revokeDevice( action.getAttribute( 'data-device-uuid' ) );
+			} else if ( name === 'settings-refresh' ) {
+				refreshOsSettings( true );
+			} else if ( name === 'desktop-settings' ) {
+				openDesktopSettings();
+			}
 		}
 
 		container.addEventListener( 'click', function ( event ) {
@@ -249,22 +784,24 @@
 				return;
 			}
 
+			var targetButton = event.target.closest( '[data-share-target]' );
+			if ( targetButton ) {
+				state.shareTarget = targetButton.getAttribute( 'data-share-target' );
+				renderShared();
+				return;
+			}
+
+			var visibilityButton = event.target.closest( '[data-os-visibility]' );
+			if ( visibilityButton ) {
+				updateOsVisibility( visibilityButton.getAttribute( 'data-os-visibility' ) ).then( function () {
+					return refreshOsSettings( true );
+				} ).catch( showError );
+				return;
+			}
+
 			var action = event.target.closest( '[data-action]' );
 			if ( action ) {
-				var name = action.getAttribute( 'data-action' );
-				if ( name === 'upload' ) {
-					fileInput.click();
-				} else if ( name === 'new-folder' ) {
-					createFolder();
-				} else if ( name === 'refresh' ) {
-					loadFiles();
-				} else if ( name === 'home' ) {
-					state.parentId = 0;
-					loadFiles();
-				} else if ( name === 'toggle-view' ) {
-					state.view = state.view === 'grid' ? 'list' : 'grid';
-					renderFiles();
-				}
+				handlePanelAction( action );
 				return;
 			}
 
@@ -279,6 +816,18 @@
 				if ( form ) {
 					form.remove();
 				}
+			}
+		} );
+
+		container.addEventListener( 'submit', function ( event ) {
+			var folderForm = event.target.closest( '[data-folder-form]' );
+			var shareForm = event.target.closest( '[data-share-form]' );
+			if ( folderForm ) {
+				event.preventDefault();
+				submitFolderForm( folderForm );
+			} else if ( shareForm ) {
+				event.preventDefault();
+				shareTarget();
 			}
 		} );
 
@@ -299,11 +848,99 @@
 			fileInput.value = '';
 		} );
 
+		addHookAction( 'FILE_DROP_FILES_DETECTED', namespace + '/drop-detected', function ( payload ) {
+			if ( payloadMatchesWindow( payload ) ) {
+				container.classList.add( 'is-dragging' );
+			}
+		}, cleanup );
+		addHookAction( 'FILE_DROP_BEFORE_UPLOAD', namespace + '/drop-before-upload', function ( payload ) {
+			if ( payloadMatchesWindow( payload ) ) {
+				handleNativeDropPayload( payload );
+			}
+		}, cleanup );
+		addHookAction( 'FILE_DROP_UPLOAD_STARTED', namespace + '/drop-upload-started', function ( payload ) {
+			if ( payloadMatchesWindow( payload ) ) {
+				setStatus( __( 'Uploading dropped files', 'floppy' ), 'busy' );
+			}
+		}, cleanup );
+		addHookAction( 'FILE_DROP_UPLOAD_PROGRESS', namespace + '/drop-upload-progress', function ( payload ) {
+			if ( payloadMatchesWindow( payload ) && payload && payload.progress ) {
+				setStatus( __( 'Uploading ', 'floppy' ) + String( Math.round( payload.progress ) ) + '%', 'busy' );
+			}
+		}, cleanup );
+		addHookAction( 'FILE_DROP_AFTER_UPLOAD', namespace + '/drop-after-upload', function ( payload ) {
+			if ( payloadMatchesWindow( payload ) ) {
+				container.classList.remove( 'is-dragging' );
+				setStatus( __( 'Ready', 'floppy' ) );
+				reloadCurrentPanel();
+			}
+		}, cleanup );
+		addHookAction( 'FILE_DROP_UPLOAD_FAILED', namespace + '/drop-upload-failed', function ( payload ) {
+			if ( payloadMatchesWindow( payload ) ) {
+				container.classList.remove( 'is-dragging' );
+				setStatus( __( 'Upload failed', 'floppy' ), 'error' );
+			}
+		}, cleanup );
+		addHookAction( 'WINDOW_FOCUSED', namespace + '/focus', function ( payload ) {
+			if ( payloadMatchesWindow( payload ) ) {
+				setActivityBadge( 0 );
+			}
+		}, cleanup );
+		addHookAction( 'NATIVE_WINDOW_AFTER_RENDER', namespace + '/after-render', function ( payload ) {
+			if ( payloadMatchesWindow( payload ) ) {
+				markReady( ctx );
+			}
+		}, cleanup );
+
+		if ( desktop && typeof desktop.subscribe === 'function' ) {
+			var unsubscribeFiles = desktop.subscribe( 'floppy.files.changed', function () {
+				setActivityBadge( badgeState.activity + 1 );
+				if ( state.panel === 'files' || state.panel === 'shared' ) {
+					reloadCurrentPanel();
+				}
+			} );
+			if ( typeof unsubscribeFiles === 'function' ) {
+				cleanup.push( unsubscribeFiles );
+			}
+			var unsubscribePanel = desktop.subscribe( 'floppy.panel.open', function ( payload ) {
+				if ( payload && payload.panel ) {
+					switchPanel( payload.panel );
+				}
+			} );
+			if ( typeof unsubscribePanel === 'function' ) {
+				cleanup.push( unsubscribePanel );
+			}
+			var unsubscribeUpload = desktop.subscribe( 'floppy.upload.requested', function () {
+				fileInput.click();
+			} );
+			if ( typeof unsubscribeUpload === 'function' ) {
+				cleanup.push( unsubscribeUpload );
+			}
+		}
+
+		if ( desktop && typeof desktop.subscribeOsSettings === 'function' ) {
+			var unsubscribeOsSettings = desktop.subscribeOsSettings( function ( settings ) {
+				state.osSettings = settings || {};
+				if ( state.panel === 'settings' ) {
+					renderSettings();
+				}
+			} );
+			if ( typeof unsubscribeOsSettings === 'function' ) {
+				cleanup.push( unsubscribeOsSettings );
+			}
+		}
+
 		loadHealth();
 		loadDevices();
+		refreshOsSettings( false );
 		loadFiles();
 
 		return function () {
+			cleanup.forEach( function ( dispose ) {
+				if ( typeof dispose === 'function' ) {
+					dispose();
+				}
+			} );
 			container.innerHTML = '';
 		};
 	}
@@ -320,6 +957,162 @@
 		}
 	}
 
+	function readOsSettings() {
+		if ( ! desktop || typeof desktop.getOsSettings !== 'function' ) {
+			return Promise.resolve( null );
+		}
+		try {
+			return Promise.resolve( desktop.getOsSettings() ).catch( function () {
+				return null;
+			} );
+		} catch ( error ) {
+			return Promise.resolve( null );
+		}
+	}
+
+	function updateOsVisibility( visibility ) {
+		if ( ! OS_VISIBILITY_LABELS[ visibility ] ) {
+			return Promise.reject( new Error( __( 'Unknown Desktop Mode placement.', 'floppy' ) ) );
+		}
+		if ( ! desktop || typeof desktop.updateOsSettings !== 'function' ) {
+			return Promise.reject( new Error( __( 'Desktop Mode OS Settings are not available.', 'floppy' ) ) );
+		}
+		var patch = { itemVisibility: {} };
+		patch.itemVisibility[ WINDOW_ID ] = visibility;
+		return Promise.resolve( desktop.updateOsSettings( patch ) ).then( function () {
+			if ( desktop && typeof desktop.refreshMenu === 'function' ) {
+				desktop.refreshMenu();
+			}
+			notify( __( 'Floppy placement updated.', 'floppy' ), 'success' );
+		} );
+	}
+
+	function openDesktopSettings() {
+		if ( desktop && typeof desktop.openSettings === 'function' ) {
+			desktop.openSettings( { tab: 'floppy', source: OWNER } );
+			return;
+		}
+		openWindow( 'settings', 'settings' );
+	}
+
+	function renderSettingsTab( container ) {
+		var tabSettings = null;
+		var cleanup = [];
+
+		function draw() {
+			container.innerHTML = [
+				'<div class="floppy-settings">',
+					'<section class="floppy-panel">',
+						'<h2>' + escapeHtml( __( 'Floppy', 'floppy' ) ) + '</h2>',
+						'<p>' + escapeHtml( __( 'Private WordPress Drive, Desktop Mode launcher placement, Finder sync devices, and readiness checks.', 'floppy' ) ) + '</p>',
+						renderOsSettingsControls( tabSettings ),
+						'<div class="floppy-button-row"><button type="button" class="button button-primary" data-action="open-floppy">' + escapeHtml( __( 'Open Floppy', 'floppy' ) ) + '</button><button type="button" class="button" data-action="refresh-settings">' + escapeHtml( __( 'Refresh', 'floppy' ) ) + '</button></div>',
+					'</section>',
+					'<section class="floppy-panel">',
+						renderOnboardingMarkup(),
+					'</section>',
+				'</div>'
+			].join( '' );
+		}
+
+		function refresh() {
+			return readOsSettings().then( function ( settings ) {
+				tabSettings = settings;
+				draw();
+			} );
+		}
+
+		function handleSettingsTabClick( event ) {
+			var visibilityButton = event.target.closest( '[data-os-visibility]' );
+			var action = event.target.closest( '[data-action]' );
+			if ( visibilityButton ) {
+				updateOsVisibility( visibilityButton.getAttribute( 'data-os-visibility' ) ).then( refresh );
+				return;
+			}
+			if ( action && action.getAttribute( 'data-action' ) === 'open-floppy' ) {
+				openWindow( 'files', 'settings' );
+			} else if ( action && action.getAttribute( 'data-action' ) === 'refresh-settings' ) {
+				refresh();
+			}
+		}
+
+		container.addEventListener( 'click', handleSettingsTabClick );
+		cleanup.push( function () {
+			container.removeEventListener( 'click', handleSettingsTabClick );
+		} );
+
+		if ( desktop && typeof desktop.subscribeOsSettings === 'function' ) {
+			var unsubscribe = desktop.subscribeOsSettings( function ( settings ) {
+				tabSettings = settings || {};
+				draw();
+			} );
+			if ( typeof unsubscribe === 'function' ) {
+				cleanup.push( unsubscribe );
+			}
+		}
+
+		refresh();
+
+		return function () {
+			cleanup.forEach( function ( dispose ) {
+				if ( typeof dispose === 'function' ) {
+					dispose();
+				}
+			} );
+		};
+	}
+
+	function renderOsSettingsControls( settings ) {
+		if ( ! desktop || typeof desktop.getOsSettings !== 'function' || typeof desktop.updateOsSettings !== 'function' ) {
+			return '<div class="floppy-callout"><strong>' + escapeHtml( __( 'Desktop Mode OS Settings unavailable', 'floppy' ) ) + '</strong><span>' + escapeHtml( __( 'Install or update Desktop Mode to place Floppy on the desktop or dock.', 'floppy' ) ) + '</span></div>';
+		}
+		var visibility = getOsVisibility( settings );
+		return '<div class="floppy-segmented" role="group" aria-label="' + escapeHtml( __( 'Floppy launcher placement', 'floppy' ) ) + '">' + Object.keys( OS_VISIBILITY_LABELS ).map( function ( key ) {
+			return '<button type="button" class="' + ( visibility === key ? 'is-active' : '' ) + '" data-os-visibility="' + escapeHtml( key ) + '">' + escapeHtml( OS_VISIBILITY_LABELS[ key ] ) + '</button>';
+		} ).join( '' ) + '</div>';
+	}
+
+	function renderOnboardingMarkup() {
+		return [
+			'<div class="floppy-onboarding">',
+				'<div class="floppy-surface-head"><div><h2>' + escapeHtml( __( 'Mac Onboarding', 'floppy' ) ) + '</h2><p>' + escapeHtml( __( 'Floppy for Mac starts with WordPress approval, then stores only a scoped Floppy device token.', 'floppy' ) ) + '</p></div></div>',
+				'<ol class="floppy-steps">',
+					'<li><strong>' + escapeHtml( __( 'Approve WordPress access', 'floppy' ) ) + '</strong><span>' + escapeHtml( __( 'Use the native Application Password screen to confirm the site and account.', 'floppy' ) ) + '</span></li>',
+					'<li><strong>' + escapeHtml( __( 'Install the plugin ZIP', 'floppy' ) ) + '</strong><span>' + escapeHtml( __( 'The Mac app opens the WordPress upload screen for the GitHub release ZIP.', 'floppy' ) ) + '</span></li>',
+					'<li><strong>' + escapeHtml( __( 'Create a device token', 'floppy' ) ) + '</strong><span>' + escapeHtml( __( 'Floppy exchanges the temporary credential for a revocable files and sync token.', 'floppy' ) ) + '</span></li>',
+					'<li><strong>' + escapeHtml( __( 'Use Finder sync', 'floppy' ) ) + '</strong><span>' + escapeHtml( __( 'The Desktop Mode app remains the control surface for files, shares, diagnostics, and devices.', 'floppy' ) ) + '</span></li>',
+				'</ol>',
+			'</div>'
+		].join( '' );
+	}
+
+	function getOsVisibility( settings ) {
+		var visibility = settings && settings.itemVisibility ? settings.itemVisibility[ WINDOW_ID ] : '';
+		return OS_VISIBILITY_LABELS[ visibility ] ? visibility : 'both';
+	}
+
+	function targetKey( item ) {
+		return item ? item.kind + ':' + String( item.id ) : '';
+	}
+
+	function mergeEvents( existing, incoming ) {
+		var seen = {};
+		return existing.concat( incoming ).filter( function ( event ) {
+			var key = String( event.seq || event.event_uuid || Math.random() );
+			if ( seen[ key ] ) {
+				return false;
+			}
+			seen[ key ] = true;
+			return true;
+		} );
+	}
+
+	function failingCheckCount( health ) {
+		return Object.keys( health && health.checks ? health.checks : {} ).filter( function ( key ) {
+			return ! health.checks[ key ].ok;
+		} ).length;
+	}
+
 	function formatBytes( bytes ) {
 		bytes = Number( bytes || 0 );
 		if ( bytes < 1024 ) {
@@ -328,109 +1121,277 @@
 		if ( bytes < 1024 * 1024 ) {
 			return Math.round( bytes / 1024 ) + ' KB';
 		}
-		return ( bytes / 1024 / 1024 ).toFixed( 1 ) + ' MB';
+		if ( bytes < 1024 * 1024 * 1024 ) {
+			return ( bytes / 1024 / 1024 ).toFixed( 1 ) + ' MB';
+		}
+		return ( bytes / 1024 / 1024 / 1024 ).toFixed( 1 ) + ' GB';
+	}
+
+	function formatDate( value ) {
+		if ( ! value ) {
+			return '-';
+		}
+		var normalized = String( value ).replace( ' ', 'T' );
+		if ( normalized.indexOf( 'Z' ) === -1 ) {
+			normalized += 'Z';
+		}
+		var date = new Date( normalized );
+		if ( Number.isNaN( date.getTime() ) ) {
+			return value;
+		}
+		return date.toLocaleString();
+	}
+
+	function plural( count, singular, many ) {
+		return String( count ) + ' ' + ( Number( count ) === 1 ? singular : many );
+	}
+
+	function fileIcon( mimeType ) {
+		if ( /^image\//.test( mimeType || '' ) ) {
+			return 'format-image';
+		}
+		if ( /^audio\//.test( mimeType || '' ) ) {
+			return 'format-audio';
+		}
+		if ( /^video\//.test( mimeType || '' ) ) {
+			return 'format-video';
+		}
+		if ( /pdf/.test( mimeType || '' ) ) {
+			return 'pdf';
+		}
+		return 'media-default';
+	}
+
+	function eventIcon( eventType ) {
+		eventType = String( eventType || '' );
+		if ( eventType.indexOf( 'share.' ) === 0 ) {
+			return 'groups';
+		}
+		if ( eventType.indexOf( 'delete' ) !== -1 || eventType.indexOf( 'trash' ) !== -1 ) {
+			return 'trash';
+		}
+		if ( eventType.indexOf( 'folder.' ) === 0 ) {
+			return 'category';
+		}
+		if ( eventType.indexOf( 'conflict' ) !== -1 ) {
+			return 'warning';
+		}
+		return 'update';
 	}
 
 	function escapeHtml( value ) {
-		return String( value ).replace( /[&<>"']/g, function ( char ) {
+		return String( value == null ? '' : value ).replace( /[&<>"']/g, function ( char ) {
 			return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#039;' }[ char ];
 		} );
 	}
 
+	function hookName( key ) {
+		return desktop && desktop.HOOKS && desktop.HOOKS[ key ] ? desktop.HOOKS[ key ] : FALLBACK_HOOKS[ key ];
+	}
+
+	function addHookAction( key, namespace, callback, cleanup ) {
+		var name = hookName( key );
+		if ( hooks && typeof hooks.addAction === 'function' && name ) {
+			hooks.addAction( name, namespace, callback );
+			if ( cleanup ) {
+				cleanup.push( function () {
+					if ( hooks && typeof hooks.removeAction === 'function' ) {
+						hooks.removeAction( name, namespace );
+					}
+				} );
+			}
+		}
+	}
+
+	function addHookFilter( key, namespace, callback ) {
+		var name = hookName( key );
+		if ( hooks && typeof hooks.addFilter === 'function' && name ) {
+			hooks.addFilter( name, namespace, callback );
+		}
+	}
+
+	function payloadMatchesWindow( payload ) {
+		if ( payload === WINDOW_ID ) {
+			return true;
+		}
+		if ( ! payload || typeof payload !== 'object' ) {
+			return false;
+		}
+		var candidates = [
+			payload.id,
+			payload.windowId,
+			payload.appId,
+			payload.itemId,
+			payload.iconId,
+			payload.tileId,
+			payload.targetId,
+			payload.window && payload.window.id,
+			payload.window && payload.window.config && payload.window.config.id,
+			payload.window && payload.window.config && payload.window.config.baseId,
+			payload.config && payload.config.id,
+			payload.config && payload.config.baseId
+		];
+		return candidates.some( function ( candidate ) {
+			return candidate === WINDOW_ID;
+		} );
+	}
+
+	function filesFromPayload( payload ) {
+		if ( ! payload || typeof payload !== 'object' ) {
+			return [];
+		}
+		if ( payload.files && typeof payload.files.length === 'number' ) {
+			return Array.prototype.slice.call( payload.files );
+		}
+		if ( payload.dataTransfer && payload.dataTransfer.files ) {
+			return Array.prototype.slice.call( payload.dataTransfer.files );
+		}
+		if ( payload.event && payload.event.dataTransfer && payload.event.dataTransfer.files ) {
+			return Array.prototype.slice.call( payload.event.dataTransfer.files );
+		}
+		return [];
+	}
+
 	function registerDesktopModeExtensions() {
+		refreshHostApis();
+
 		window.desktopModeNativeWindows = window.desktopModeNativeWindows || {};
-		window.desktopModeNativeWindows[ config.windowId || 'floppy-drive' ] = function ( container, ctx ) {
+		window.desktopModeNativeWindows[ WINDOW_ID ] = function ( container, ctx ) {
 			return mount( container, ctx );
 		};
 
+		if ( window.__floppyDesktopRegistered ) {
+			return;
+		}
+		window.__floppyDesktopRegistered = true;
+
 		if ( desktop && typeof desktop.registerCommand === 'function' ) {
 			[
-				{ slug: 'floppy/open', label: 'Open Floppy', owner: 'floppy-desktop-mode', run: openWindow },
-				{ slug: 'floppy/search', label: 'Search Floppy', owner: 'floppy-desktop-mode', run: openWindow },
-				{ slug: 'floppy/upload', label: 'Upload to Floppy', owner: 'floppy-desktop-mode', run: openWindow },
-				{ slug: 'floppy/devices', label: 'Show Floppy Devices', owner: 'floppy-desktop-mode', run: openWindow },
-				{ slug: 'floppy/diagnostics', label: 'Run Floppy Diagnostics', owner: 'floppy-desktop-mode', run: openWindow }
+				{ slug: 'floppy/open', label: __( 'Open Floppy', 'floppy' ), panel: 'files' },
+				{ slug: 'floppy/shared', label: __( 'Floppy Shared Files', 'floppy' ), panel: 'shared' },
+				{ slug: 'floppy/sync', label: __( 'Floppy Sync Feed', 'floppy' ), panel: 'sync' },
+				{ slug: 'floppy/upload', label: __( 'Upload to Floppy', 'floppy' ), panel: 'files', upload: true },
+				{ slug: 'floppy/devices', label: __( 'Show Floppy Devices', 'floppy' ), panel: 'devices' },
+				{ slug: 'floppy/diagnostics', label: __( 'Run Floppy Diagnostics', 'floppy' ), panel: 'diagnostics' },
+				{ slug: 'floppy/settings', label: __( 'Floppy Settings', 'floppy' ), panel: 'settings' }
 			].forEach( function ( command ) {
-				desktop.registerCommand( command );
+				desktop.registerCommand( {
+					slug: command.slug,
+					label: command.label,
+					owner: OWNER,
+					run: function () {
+						if ( command.upload && desktop && typeof desktop.broadcast === 'function' ) {
+							desktop.broadcast( 'floppy.upload.requested', {} );
+						}
+						openWindow( command.panel, 'command' );
+					}
+				} );
 			} );
 		}
 
 		if ( desktop && typeof desktop.registerSettingsTab === 'function' ) {
 			desktop.registerSettingsTab( {
 				id: 'floppy',
-				label: 'Floppy',
-				owner: 'floppy-desktop-mode',
-				render: function ( container ) {
-					container.innerHTML = '<div class="floppy-settings"><h2>Floppy</h2><p>Private storage, device sync, quotas, and diagnostics are managed from the Floppy app.</p></div>';
-				}
+				label: __( 'Floppy', 'floppy' ),
+				owner: OWNER,
+				render: renderSettingsTab
 			} );
 		}
 
 		if ( desktop && typeof desktop.registerTitleBarButton === 'function' ) {
-			desktop.registerTitleBarButton( {
-				id: 'floppy-upload',
-				owner: 'floppy-desktop-mode',
-				match: matchesFloppyWindow,
-				icon: 'dashicons-upload',
-				label: 'Upload',
-				onClick: openWindow
-			} );
-			desktop.registerTitleBarButton( {
-				id: 'floppy-sync-status',
-				owner: 'floppy-desktop-mode',
-				match: matchesFloppyWindow,
-				icon: 'dashicons-update',
-				label: 'Sync status',
-				onClick: openWindow
+			[
+				{ id: 'floppy-upload', icon: 'dashicons-upload', label: __( 'Upload', 'floppy' ), panel: 'files', upload: true },
+				{ id: 'floppy-shared', icon: 'dashicons-groups', label: __( 'Shared', 'floppy' ), panel: 'shared' },
+				{ id: 'floppy-sync-status', icon: 'dashicons-update', label: __( 'Sync status', 'floppy' ), panel: 'sync' }
+			].forEach( function ( button ) {
+				desktop.registerTitleBarButton( {
+					id: button.id,
+					owner: OWNER,
+					match: matchesFloppyWindow,
+					icon: button.icon,
+					label: button.label,
+					onClick: function () {
+						if ( button.upload && desktop && typeof desktop.broadcast === 'function' ) {
+							desktop.broadcast( 'floppy.upload.requested', {} );
+						}
+						openWindow( button.panel, 'titlebar' );
+					}
+				} );
 			} );
 		}
 
 		if ( desktop && desktop.files && typeof desktop.files.registerOpener === 'function' ) {
 			desktop.files.registerOpener( {
 				id: 'floppy-private-preview',
-				label: 'Open in Floppy',
-				owner: 'floppy-desktop-mode',
+				label: __( 'Open in Floppy', 'floppy' ),
+				owner: OWNER,
 				types: [ 'attachment' ],
 				sort: 20,
-				handler: { kind: 'window', windowId: config.windowId || 'floppy-drive' }
+				handler: { kind: 'window', windowId: WINDOW_ID }
 			} );
 		}
 
 		if ( desktop && typeof desktop.subscribe === 'function' ) {
 			desktop.subscribe( 'floppy.files.changed', function () {
-				setBadge( 1 );
+				setActivityBadge( badgeState.activity + 1 );
 			} );
 		}
 
-		if ( hooks && desktop && desktop.HOOKS ) {
-			var map = desktop.HOOKS;
-			addAction( map.WINDOW_FOCUSED || 'desktop-mode.window.focused', 'floppy/focus', function ( payload ) {
-				if ( payload && ( payload.id === config.windowId || payload.windowId === config.windowId ) ) {
-					setBadge( '' );
-				}
-			} );
-		}
+		addHookAction( 'WINDOW_FOCUSED', 'floppy/focus', function ( payload ) {
+			if ( payloadMatchesWindow( payload ) ) {
+				setActivityBadge( 0 );
+			}
+		} );
+		addHookAction( 'WINDOW_CLOSED', 'floppy/closed', function ( payload ) {
+			if ( payloadMatchesWindow( payload ) ) {
+				setActivityBadge( 0 );
+			}
+		} );
+		addHookAction( 'DESKTOP_ICON_CLICKED', 'floppy/icon-clicked', function ( payload ) {
+			if ( payloadMatchesWindow( payload ) ) {
+				setActivityBadge( 0 );
+			}
+		} );
+		addHookFilter( 'DOCK_TILE_CLASS', 'floppy/dock-class', function ( classes, payload ) {
+			return payloadMatchesWindow( payload ) ? String( classes || '' ) + ' floppy-dock-tile' : classes;
+		} );
+		addHookFilter( 'DOCK_TILE_TOOLTIP', 'floppy/dock-tooltip', function ( tooltip, payload ) {
+			if ( ! payloadMatchesWindow( payload ) ) {
+				return tooltip;
+			}
+			return __( 'Floppy', 'floppy' ) + ' · ' + appSummary.lastStatus;
+		} );
+		addHookAction( 'DOCK_TILE_RENDERED', 'floppy/dock-rendered', function ( payload ) {
+			if ( payloadMatchesWindow( payload ) && payload && payload.element && typeof payload.element.setAttribute === 'function' ) {
+				payload.element.setAttribute( 'data-floppy-status', appSummary.lastStatus );
+			}
+		} );
 
 		document.addEventListener( 'desktop-mode-layout-changed', function () {
-			setBadge( '' );
+			if ( badgeState.activity ) {
+				setActivityBadge( 0 );
+			}
+		} );
+		document.addEventListener( 'desktop-mode-window-focused', function ( event ) {
+			if ( payloadMatchesWindow( event.detail || {} ) ) {
+				setActivityBadge( 0 );
+			}
 		} );
 	}
 
-	function addAction( hookName, namespace, callback ) {
-		if ( hooks && typeof hooks.addAction === 'function' && hookName ) {
-			hooks.addAction( hookName, namespace, callback );
-		}
-	}
-
-	function openWindow() {
+	function openWindow( panel, source ) {
 		if ( desktop && typeof desktop.openWindow === 'function' ) {
-			desktop.openWindow( config.windowId || 'floppy-drive', { source: 'command' } );
+			desktop.openWindow( WINDOW_ID, { source: source || OWNER, panel: panel || 'files' } );
+			if ( panel && desktop && typeof desktop.broadcast === 'function' ) {
+				window.setTimeout( function () {
+					desktop.broadcast( 'floppy.panel.open', { panel: panel } );
+				}, 0 );
+			}
 		}
 	}
 
 	function matchesFloppyWindow( win ) {
-		var id = config.windowId || 'floppy-drive';
-		return !! ( win && win.config && ( win.config.id === id || win.config.baseId === id ) );
+		return !! ( win && win.config && ( win.config.id === WINDOW_ID || win.config.baseId === WINDOW_ID ) );
 	}
 
 	if ( desktop && typeof desktop.ready === 'function' ) {

@@ -59,6 +59,7 @@ final class Floppy_Auth {
 		}
 
 		$GLOBALS['floppy_device_id'] = (int) $row['id'];
+		$GLOBALS['floppy_device_uuid'] = (string) $row['device_uuid'];
 		$GLOBALS['floppy_device_scope'] = (string) $row['scope'];
 		$GLOBALS['floppy_device_user_id'] = (int) $row['user_id'];
 
@@ -116,6 +117,53 @@ final class Floppy_Auth {
 			'token'       => $token,
 			'scope'       => $scope,
 		);
+	}
+
+	/**
+	 * Create a one-time browser approval code instead of putting a token in a custom URL.
+	 */
+	public static function create_device_exchange_code( int $user_id, string $device_name, string $state ): string {
+		$code = 'flc_' . wp_generate_password( 48, false, false );
+		set_transient(
+			self::exchange_transient_key( $code ),
+			array(
+				'user_id'     => $user_id,
+				'device_name' => sanitize_text_field( $device_name ),
+				'state'       => sanitize_text_field( $state ),
+				'created_at'  => time(),
+			),
+			10 * MINUTE_IN_SECONDS
+		);
+
+		Floppy_Audit::log( 'device.exchange_code.created', 'device', 0, __( 'Created a one-time device exchange code.', 'floppy' ), array(), $user_id );
+		return $code;
+	}
+
+	/**
+	 * Exchange a short-lived code for a newly created device token.
+	 */
+	public static function exchange_device_code( string $code, string $state ) {
+		$key = self::exchange_transient_key( $code );
+		$payload = get_transient( $key );
+		delete_transient( $key );
+
+		if ( ! is_array( $payload ) || empty( $payload['user_id'] ) ) {
+			Floppy_Audit::log( 'device.exchange_code.failed', 'device', 0, __( 'Invalid or expired device exchange code.', 'floppy' ) );
+			return new WP_Error( 'floppy_device_exchange_invalid', __( 'The Floppy device approval code expired or was already used.', 'floppy' ), array( 'status' => 410 ) );
+		}
+
+		if ( ! hash_equals( (string) ( $payload['state'] ?? '' ), $state ) ) {
+			Floppy_Audit::log( 'device.exchange_code.state_failed', 'device', 0, __( 'Device exchange state did not match.', 'floppy' ), array(), (int) $payload['user_id'] );
+			return new WP_Error( 'floppy_device_exchange_state', __( 'The Floppy device approval state did not match.', 'floppy' ), array( 'status' => 403 ) );
+		}
+
+		$device = self::create_device( (int) $payload['user_id'], (string) ( $payload['device_name'] ?? __( 'Mac', 'floppy' ) ) );
+		if ( is_wp_error( $device ) ) {
+			return $device;
+		}
+
+		Floppy_Audit::log( 'device.exchange_code.used', 'device', 0, __( 'Exchanged a one-time device approval code.', 'floppy' ), array( 'device_uuid' => $device['device_uuid'] ), (int) $payload['user_id'] );
+		return $device;
 	}
 
 	/**
@@ -214,6 +262,13 @@ final class Floppy_Auth {
 	 */
 	public static function hash_token( string $token ): string {
 		return hash_hmac( 'sha256', $token, wp_salt( 'auth' ) );
+	}
+
+	/**
+	 * Transient key for a one-time exchange code.
+	 */
+	private static function exchange_transient_key( string $code ): string {
+		return 'floppy_exchange_' . hash_hmac( 'sha256', $code, wp_salt( 'auth' ) );
 	}
 
 	/**

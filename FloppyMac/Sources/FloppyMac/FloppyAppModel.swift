@@ -31,8 +31,10 @@ final class FloppyAppModel: ObservableObject {
     func load() async {
         let ledger = LocalLedger()
         self.ledger = ledger
+        restorePendingOnboarding()
         accounts = await ledger.accounts()
         selectedAccountID = accounts.first?.id
+        FloppyDiagnostics.app.info("Loaded \(self.accounts.count, privacy: .public) account(s) from local ledger")
         await refreshSelectedAccount()
     }
 
@@ -49,9 +51,23 @@ final class FloppyAppModel: ObservableObject {
             return
         }
 
+        guard let zipURL = URL.floppySiteURL(from: githubPluginZipURLText) else {
+            status = FloppyOnboardingError.githubZipRequired.localizedDescription
+            return
+        }
+
+        do {
+            try validateOnboardingAdvancedFields(zipURL: zipURL)
+        } catch {
+            status = error.localizedDescription
+            onboardingStep = .failed
+            return
+        }
+
         let state = UUID().uuidString
         let normalizedSiteURL = siteURL.normalizedForDisplay
         pendingOnboarding = PendingOnboarding(siteURL: normalizedSiteURL, state: state)
+        persistPendingOnboarding()
         onboardingStep = .waitingForWordPressAuthorization
         lastDownloadedPluginZipURL = nil
         pendingPluginUploadURL = nil
@@ -67,6 +83,7 @@ final class FloppyAppModel: ObservableObject {
                 }
 
                 NSWorkspace.shared.open(FloppyAPIClient.applicationPasswordAuthorizationURL(siteURL: normalizedSiteURL, authorizationURL: authorizationURL, state: state, deviceName: deviceName))
+                FloppyDiagnostics.onboarding.info("Opened WordPress authorization for \(FloppyDiagnostics.redactedURL(normalizedSiteURL), privacy: .public)")
                 status = "Opened WordPress. Approve Floppy so it can finish the GitHub install."
             } catch is CancellationError {
                 status = "Setup cancelled."
@@ -82,6 +99,7 @@ final class FloppyAppModel: ObservableObject {
         onboardingTask?.cancel()
         onboardingTask = nil
         pendingOnboarding = nil
+        clearPendingOnboarding()
         onboardingStep = .idle
         status = "Setup cancelled."
     }
@@ -112,6 +130,7 @@ final class FloppyAppModel: ObservableObject {
                         return
                     }
                     self.pendingOnboarding = nil
+                    clearPendingOnboarding()
                     onboardingStep = .failed
                     status = "WordPress connection was cancelled."
                     return
@@ -164,9 +183,10 @@ final class FloppyAppModel: ObservableObject {
     }
 
     private func beginGitHubZipInstall(client: FloppyAPIClient, credential: WordPressApplicationCredential) async throws {
-        guard let zipURL = URL.floppySiteURL(from: githubPluginZipURLText), zipURL.path.lowercased().hasSuffix(".zip") else {
+        guard let zipURL = URL.floppySiteURL(from: githubPluginZipURLText) else {
             throw FloppyOnboardingError.githubZipRequired
         }
+        try validateOnboardingAdvancedFields(zipURL: zipURL)
 
         onboardingStep = .waitingForManualGitHubInstall
         status = "Downloading the GitHub plugin ZIP."
@@ -174,8 +194,6 @@ final class FloppyAppModel: ObservableObject {
         let localZip = try await downloadPluginZip(from: zipURL)
         lastDownloadedPluginZipURL = localZip
         pendingPluginUploadURL = credential.siteURL.pluginUploadURL
-        NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(localZip.path, forType: .string)
         NSWorkspace.shared.activateFileViewerSelecting([localZip])
         NSWorkspace.shared.open(credential.siteURL.pluginUploadURL)
         status = "Install the revealed ZIP in WordPress. Floppy will continue after it appears."
@@ -214,6 +232,7 @@ final class FloppyAppModel: ObservableObject {
         )
         try await saveConnectedAccount(account: account, token: device.token)
         pendingOnboarding = nil
+        clearPendingOnboarding()
         pendingPluginUploadURL = nil
         onboardingTask = nil
         onboardingStep = .connected
@@ -221,18 +240,32 @@ final class FloppyAppModel: ObservableObject {
     }
 
     private func downloadPluginZip(from url: URL) async throws -> URL {
-        let (temporaryURL, response) = try await URLSession.shared.download(from: url)
+        try FloppyGitHubZipValidator.validateReleaseAssetURL(url)
+
+        let request = URLRequest(url: url)
+        let (temporaryURL, response) = try await URLSession.shared.download(for: request, delegate: FloppyGitHubZipRedirectDelegate())
         guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
             throw FloppyOnboardingError.githubZipDownloadFailed
         }
-
-        let downloads = FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first ?? FileManager.default.temporaryDirectory
-        let filename = url.lastPathComponent.isEmpty ? "floppy.zip" : url.lastPathComponent
-        let destination = downloads.appendingPathComponent(filename)
-        if FileManager.default.fileExists(atPath: destination.path) {
-            try FileManager.default.removeItem(at: destination)
+        if let finalURL = response.url {
+            try FloppyGitHubZipValidator.validateDownloadURL(finalURL)
         }
+        try validateGitHubZipResponse(http)
+
+        let downloads = (FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first ?? FileManager.default.temporaryDirectory)
+            .appendingPathComponent("FloppyMac", isDirectory: true)
+            .appendingPathComponent("PluginZips", isDirectory: true)
+        try FileManager.default.createDirectory(at: downloads, withIntermediateDirectories: true)
+        let filename = url.lastPathComponent.isEmpty ? "floppy.zip" : url.lastPathComponent
+        let destination = downloads.appendingPathComponent("\(UUID().uuidString)-\(filename)")
         try FileManager.default.moveItem(at: temporaryURL, to: destination)
+        do {
+            let result = try FloppyGitHubZipValidator.validateDownloadedPluginZip(at: destination, mainPluginFile: pluginMainFile)
+            FloppyDiagnostics.onboarding.info("Validated GitHub ZIP root \(result.rootDirectory, privacy: .public) with \(result.entryCount, privacy: .public) entries")
+        } catch {
+            try? FileManager.default.removeItem(at: destination)
+            throw error
+        }
         return destination
     }
 
@@ -240,15 +273,22 @@ final class FloppyAppModel: ObservableObject {
         do {
             let discoveryClient = FloppyAPIClient(siteURL: approval.siteURL)
             let discovery = try await discoveryClient.discover()
+            let device: FloppyDeviceAuthorization
+            if let exchangeCode = approval.exchangeCode {
+                device = try await FloppyAPIClient(siteURL: approval.siteURL, restURL: discovery.restURL).exchangeDeviceCode(code: exchangeCode, state: approval.state)
+            } else {
+                device = FloppyDeviceAuthorization(deviceUUID: approval.deviceUUID, token: approval.token, scope: approval.scope)
+            }
             let account = FloppyAccount(
                 siteURL: approval.siteURL,
                 restURL: discovery.restURL,
                 userHint: "wordpress-user",
-                deviceUUID: approval.deviceUUID,
-                scope: approval.scope
+                deviceUUID: device.deviceUUID,
+                scope: device.scope
             )
-            try await saveConnectedAccount(account: account, token: approval.token)
+            try await saveConnectedAccount(account: account, token: device.token)
             pendingOnboarding = nil
+            clearPendingOnboarding()
             onboardingStep = .connected
             status = "Connected to \(approval.siteURL.host ?? approval.siteURL.absoluteString)."
         } catch {
@@ -265,6 +305,7 @@ final class FloppyAppModel: ObservableObject {
         accounts = await ledger?.accounts() ?? []
         selectedAccountID = account.id
         await refreshSelectedAccount()
+        FloppyDiagnostics.app.info("Saved connected account for \(FloppyDiagnostics.redactedURL(account.siteURL), privacy: .public)")
     }
 
     private func pluginInstallState(client: FloppyAPIClient) async throws -> PluginInstallState {
@@ -321,8 +362,10 @@ final class FloppyAppModel: ObservableObject {
         do {
             let client = try client(for: account)
             let changes = try await client.syncChanges(cursor: account.lastCursor)
+            try await ledger?.apply(changes: changes.events, accountID: account.id)
             try await ledger?.record(changeFeed: changes, accountID: account.id)
             accounts = await ledger?.accounts() ?? accounts
+            items = await ledger?.items(accountID: account.id) ?? items
             status = "Synced \(changes.events.count) changes. Cursor \(changes.nextCursor)."
         } catch {
             status = error.localizedDescription
@@ -347,19 +390,36 @@ final class FloppyAppModel: ObservableObject {
             return
         }
 
-        do {
-            try tokenStore.delete(accountID: account.id)
-            Task {
+        Task {
+            isWorking = true
+            defer { isWorking = false }
+
+            var revokeError: Error?
+            do {
+                let client = try client(for: account)
+                try await client.revokeDevice(deviceUUID: account.deviceUUID)
+                FloppyDiagnostics.app.info("Revoked device token for \(FloppyDiagnostics.redactedURL(account.siteURL), privacy: .public)")
+            } catch {
+                revokeError = error
+                FloppyDiagnostics.app.error("Server device revoke failed: \(error.localizedDescription, privacy: .public)")
+            }
+
+            do {
+                try tokenStore.delete(accountID: account.id)
                 try? await FileProviderDomainController.remove(account: account)
                 try? tokenStore.delete(accountID: FloppyDomainRegistry.domainIdentifier(for: account))
                 try await ledger?.removeAccount(id: account.id)
                 accounts = await ledger?.accounts() ?? []
                 selectedAccountID = accounts.first?.id
                 await refreshSelectedAccount()
+                if let revokeError {
+                    status = "Disconnected locally. Server revoke failed: \(revokeError.localizedDescription)"
+                } else {
+                    status = "Revoked and disconnected \(account.siteURL.host ?? account.siteURL.absoluteString)."
+                }
+            } catch {
+                status = error.localizedDescription
             }
-            status = "Disconnected \(account.siteURL.host ?? account.siteURL.absoluteString)."
-        } catch {
-            status = error.localizedDescription
         }
     }
 
@@ -372,6 +432,63 @@ final class FloppyAppModel: ObservableObject {
             throw FloppyAPIError.missingToken
         }
         return FloppyAPIClient(siteURL: account.siteURL, restURL: account.restURL, token: token)
+    }
+
+    func resetAdvancedOnboardingFields() {
+        githubPluginZipURLText = "https://github.com/RegionallyFamous/floppy/releases/latest/download/floppy.zip"
+        pluginMainFile = "floppy/floppy.php"
+        deviceName = Host.current().localizedName ?? "Mac"
+        status = "Advanced setup fields reset."
+    }
+
+    private func validateOnboardingAdvancedFields(zipURL: URL) throws {
+        try FloppyGitHubZipValidator.validateReleaseAssetURL(zipURL)
+
+        let normalizedMainFile = FloppyGitHubZipValidator.normalizePluginPath(pluginMainFile)
+        guard !normalizedMainFile.isEmpty, normalizedMainFile.hasSuffix(".php"), normalizedMainFile.contains("/") else {
+            throw FloppyOnboardingError.pluginMainFileRequired
+        }
+        pluginMainFile = normalizedMainFile
+
+        deviceName = deviceName.trimmingCharacters(in: .whitespacesAndNewlines)
+        if deviceName.isEmpty {
+            deviceName = Host.current().localizedName ?? "Mac"
+        }
+    }
+
+    private func validateGitHubZipResponse(_ response: HTTPURLResponse) throws {
+        let contentType = response.value(forHTTPHeaderField: "Content-Type")?.lowercased() ?? ""
+        if contentType.contains("text/html") || contentType.contains("application/json") {
+            throw FloppyOnboardingError.githubZipDownloadFailed
+        }
+    }
+
+    private func persistPendingOnboarding() {
+        guard let pendingOnboarding,
+              let data = try? JSONEncoder.floppy.encode(pendingOnboarding) else {
+            return
+        }
+        UserDefaults.standard.set(data, forKey: PendingOnboarding.defaultsKey)
+    }
+
+    private func restorePendingOnboarding() {
+        guard
+            let data = UserDefaults.standard.data(forKey: PendingOnboarding.defaultsKey),
+            let pending = try? JSONDecoder.floppy.decode(PendingOnboarding.self, from: data),
+            !pending.isExpired
+        else {
+            clearPendingOnboarding()
+            return
+        }
+
+        pendingOnboarding = pending
+        siteURLText = pending.siteURL.absoluteString
+        onboardingStep = .waitingForWordPressAuthorization
+        status = "Restored an in-progress WordPress approval."
+    }
+
+    private func clearPendingOnboarding() {
+        UserDefaults.standard.removeObject(forKey: PendingOnboarding.defaultsKey)
     }
 }
 
@@ -470,6 +587,7 @@ enum FloppyOnboardingError: LocalizedError {
     case githubZipRequired
     case githubZipDownloadFailed
     case githubInstallTimedOut
+    case pluginMainFileRequired
 
     var errorDescription: String? {
         switch self {
@@ -479,14 +597,24 @@ enum FloppyOnboardingError: LocalizedError {
             "Could not download the GitHub plugin ZIP."
         case .githubInstallTimedOut:
             "Timed out waiting for the GitHub plugin ZIP to be installed in WordPress."
+        case .pluginMainFileRequired:
+            "Enter the plugin main file inside the ZIP, for example floppy/floppy.php."
         }
     }
 }
 
-private struct PendingOnboarding {
+private struct PendingOnboarding: Codable {
+    static let defaultsKey = "FloppyPendingOnboarding"
+
     let siteURL: URL
     let state: String
-    let expiresAt = Date().addingTimeInterval(10 * 60)
+    let expiresAt: Date
+
+    init(siteURL: URL, state: String, expiresAt: Date = Date().addingTimeInterval(10 * 60)) {
+        self.siteURL = siteURL
+        self.state = state
+        self.expiresAt = expiresAt
+    }
 
     var isExpired: Bool {
         Date() > expiresAt

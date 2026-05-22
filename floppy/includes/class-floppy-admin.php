@@ -43,7 +43,7 @@ final class Floppy_Admin {
 		add_menu_page(
 			__( 'Floppy', 'floppy' ),
 			__( 'Floppy', 'floppy' ),
-			'upload_files',
+			Floppy_Permissions::CAP_READ,
 			'floppy',
 			array( __CLASS__, 'render_page' ),
 			FLOPPY_URL . 'assets/images/floppy-icon-admin.png',
@@ -84,23 +84,82 @@ final class Floppy_Admin {
 	 * Render admin page.
 	 */
 	public static function render_page(): void {
-		if ( ! current_user_can( 'upload_files' ) ) {
+		if ( ! current_user_can( Floppy_Permissions::CAP_READ ) && ! current_user_can( Floppy_Permissions::CAP_MANAGE ) ) {
 			wp_die( esc_html__( 'You do not have permission to access Floppy.', 'floppy' ) );
 		}
 
 		$summary = Floppy_Compatibility::summary();
 		$devices = Floppy_Auth::list_devices( get_current_user_id() );
 		$approval = self::get_pending_device_approval();
+		$settings = Floppy_Settings::get();
+		$active_devices = 0;
+		$revoked_devices = 0;
+		foreach ( $devices as $device ) {
+			if ( 'active' === ( $device['status'] ?? '' ) ) {
+				++$active_devices;
+			} elseif ( 'revoked' === ( $device['status'] ?? '' ) ) {
+				++$revoked_devices;
+			}
+		}
+		$failed_checks = 0;
+		foreach ( $summary['checks'] as $check ) {
+			if ( empty( $check['ok'] ) ) {
+				++$failed_checks;
+			}
+		}
 		?>
 		<div class="wrap floppy-admin">
 			<h1><?php esc_html_e( 'Floppy', 'floppy' ); ?></h1>
-			<p><?php esc_html_e( 'Private WordPress-owned file storage for Desktop Mode and Finder-native sync.', 'floppy' ); ?></p>
+			<p class="floppy-admin-kicker"><?php esc_html_e( 'Private WordPress-owned file storage for Desktop Mode, scoped Mac device tokens, and Finder-native sync.', 'floppy' ); ?></p>
 
 			<div class="floppy-admin-grid">
+				<section class="floppy-admin-panel floppy-admin-hero">
+					<div>
+						<h2><?php esc_html_e( 'Set Up Your Private WordPress Drive', 'floppy' ); ?></h2>
+						<p class="floppy-admin-note"><?php esc_html_e( 'Use this screen to confirm readiness, connect Floppy for Mac, and keep Desktop Mode as the browser-native control surface for files, shares, sync, devices, and diagnostics.', 'floppy' ); ?></p>
+					</div>
+					<div class="floppy-admin-overview">
+						<div class="floppy-admin-metric">
+							<span><?php esc_html_e( 'Readiness', 'floppy' ); ?></span>
+							<strong><?php echo ! empty( $summary['ok'] ) ? esc_html__( 'Ready', 'floppy' ) : esc_html__( 'Review', 'floppy' ); ?></strong>
+							<small><?php echo esc_html( sprintf( _n( '%d failed check', '%d failed checks', $failed_checks, 'floppy' ), $failed_checks ) ); ?></small>
+						</div>
+						<div class="floppy-admin-metric">
+							<span><?php esc_html_e( 'Desktop Mode', 'floppy' ); ?></span>
+							<strong><?php echo function_exists( 'desktop_mode_register_window' ) ? esc_html__( 'Detected', 'floppy' ) : esc_html__( 'Optional', 'floppy' ); ?></strong>
+							<small><?php echo ! empty( $settings['enable_desktop_mode'] ) ? esc_html__( 'Launcher enabled', 'floppy' ) : esc_html__( 'Launcher disabled', 'floppy' ); ?></small>
+						</div>
+						<div class="floppy-admin-metric">
+							<span><?php esc_html_e( 'Approved Macs', 'floppy' ); ?></span>
+							<strong><?php echo esc_html( (string) $active_devices ); ?></strong>
+							<small><?php echo esc_html( sprintf( _n( '%d revoked token', '%d revoked tokens', $revoked_devices, 'floppy' ), $revoked_devices ) ); ?></small>
+						</div>
+						<div class="floppy-admin-metric">
+							<span><?php esc_html_e( 'Upload Limit', 'floppy' ); ?></span>
+							<strong><?php echo esc_html( size_format( (int) ( $settings['max_file_size'] ?? wp_max_upload_size() ) ) ); ?></strong>
+							<small><?php esc_html_e( 'Private storage path', 'floppy' ); ?></small>
+						</div>
+					</div>
+					<ol class="floppy-admin-steps">
+						<li>
+							<strong><?php esc_html_e( 'Install and open Desktop Mode', 'floppy' ); ?></strong>
+							<span><?php esc_html_e( 'Floppy registers a native window, launcher, commands, settings, title-bar actions, and file opener through public Desktop Mode APIs.', 'floppy' ); ?></span>
+						</li>
+						<li>
+							<strong><?php esc_html_e( 'Connect Floppy for Mac', 'floppy' ); ?></strong>
+							<span><?php esc_html_e( 'The Mac app uses WordPress approval for onboarding, then exchanges that temporary credential for a scoped Floppy token.', 'floppy' ); ?></span>
+						</li>
+						<li>
+							<strong><?php esc_html_e( 'Keep tokens revocable', 'floppy' ); ?></strong>
+							<span><?php esc_html_e( 'Each Mac appears below as a device that can be audited or revoked without changing the user password.', 'floppy' ); ?></span>
+						</li>
+					</ol>
+				</section>
+
 				<?php if ( $approval ) : ?>
 					<section class="floppy-admin-panel floppy-approval-panel">
-						<h2><?php esc_html_e( 'Approve This Mac', 'floppy' ); ?></h2>
-						<p><?php esc_html_e( 'A Floppy for Mac app is asking to sync this WordPress account. Only approve devices you control.', 'floppy' ); ?></p>
+						<h2><?php esc_html_e( 'Approve This Mac For Finder Sync', 'floppy' ); ?></h2>
+						<p><?php esc_html_e( 'Floppy for Mac is asking to create a scoped device token for this WordPress account. Approve only Macs you control.', 'floppy' ); ?></p>
 						<table class="widefat striped">
 							<tbody>
 								<tr>
@@ -119,7 +178,7 @@ final class Floppy_Admin {
 							<input type="hidden" name="device_name" value="<?php echo esc_attr( $approval['device_name'] ); ?>" />
 							<input type="hidden" name="state" value="<?php echo esc_attr( $approval['state'] ); ?>" />
 							<input type="hidden" name="callback" value="<?php echo esc_attr( $approval['callback'] ); ?>" />
-							<?php submit_button( __( 'Approve This Mac', 'floppy' ), 'primary', 'submit', false ); ?>
+							<?php submit_button( __( 'Approve Mac And Create Token', 'floppy' ), 'primary', 'submit', false ); ?>
 						</form>
 					</section>
 				<?php endif; ?>
@@ -127,15 +186,16 @@ final class Floppy_Admin {
 				<?php if ( ! empty( $_GET['floppy-approved'] ) && ! empty( $_GET['open'] ) ) : // phpcs:ignore WordPress.Security.NonceVerification.Recommended ?>
 					<section class="floppy-admin-panel floppy-approval-panel">
 						<h2><?php esc_html_e( 'Mac Approved', 'floppy' ); ?></h2>
-						<p><?php esc_html_e( 'Return to Floppy for Mac to finish setup. If it does not open automatically, use the button below.', 'floppy' ); ?></p>
+						<p><?php esc_html_e( 'Floppy for Mac can now finish setup and store the scoped device token. If the app does not open automatically, use the button below.', 'floppy' ); ?></p>
 						<p><a class="button button-primary" href="<?php echo esc_attr( rawurldecode( (string) wp_unslash( $_GET['open'] ) ) ); ?>"><?php esc_html_e( 'Open Floppy for Mac', 'floppy' ); ?></a></p>
 					</section>
 				<?php endif; ?>
 
 				<section class="floppy-admin-panel">
-					<h2><?php esc_html_e( 'Production Health', 'floppy' ); ?></h2>
+					<h2><?php esc_html_e( 'Readiness And Diagnostics', 'floppy' ); ?></h2>
 					<p>
 						<strong><?php echo ! empty( $summary['ok'] ) ? esc_html__( 'Ready', 'floppy' ) : esc_html__( 'Needs attention', 'floppy' ); ?></strong>
+						<span class="floppy-admin-note"><?php esc_html_e( 'Private storage, HTTPS, schema, Desktop Mode, and server protections are checked here.', 'floppy' ); ?></span>
 					</p>
 					<table class="widefat striped">
 						<tbody>
@@ -162,7 +222,7 @@ final class Floppy_Admin {
 				</section>
 
 				<section class="floppy-admin-panel">
-					<h2><?php esc_html_e( 'API And Sync', 'floppy' ); ?></h2>
+					<h2><?php esc_html_e( 'API, Sync And Onboarding', 'floppy' ); ?></h2>
 					<table class="widefat striped">
 						<tbody>
 							<tr>
@@ -180,6 +240,22 @@ final class Floppy_Admin {
 							<tr>
 								<td><?php esc_html_e( 'Private Mode', 'floppy' ); ?></td>
 								<td><?php esc_html_e( 'Enabled by default', 'floppy' ); ?></td>
+							</tr>
+							<tr>
+								<td><?php esc_html_e( 'Plugin Main File', 'floppy' ); ?></td>
+								<td><code>floppy/floppy.php</code></td>
+							</tr>
+							<tr>
+								<td><?php esc_html_e( 'Device Token Scope', 'floppy' ); ?></td>
+								<td><code>files:read,files:write,sync</code></td>
+							</tr>
+							<tr>
+								<td><?php esc_html_e( 'Sync Retention', 'floppy' ); ?></td>
+								<td><?php echo esc_html( sprintf( _n( '%d day', '%d days', (int) ( $settings['sync_retention_days'] ?? 45 ), 'floppy' ), (int) ( $settings['sync_retention_days'] ?? 45 ) ) ); ?></td>
+							</tr>
+							<tr>
+								<td><?php esc_html_e( 'Tombstone Retention', 'floppy' ); ?></td>
+								<td><?php echo esc_html( sprintf( _n( '%d day', '%d days', (int) ( $settings['tombstone_retention_days'] ?? 90 ), 'floppy' ), (int) ( $settings['tombstone_retention_days'] ?? 90 ) ) ); ?></td>
 							</tr>
 						</tbody>
 					</table>
@@ -199,7 +275,7 @@ final class Floppy_Admin {
 						</thead>
 						<tbody>
 						<?php if ( empty( $devices ) ) : ?>
-							<tr><td colspan="5"><?php esc_html_e( 'No approved devices yet.', 'floppy' ); ?></td></tr>
+							<tr><td colspan="5"><?php esc_html_e( 'No approved devices yet. Connect Floppy for Mac to create the first scoped sync token.', 'floppy' ); ?></td></tr>
 						<?php endif; ?>
 						<?php foreach ( $devices as $device ) : ?>
 							<tr>
@@ -251,7 +327,7 @@ final class Floppy_Admin {
 	 */
 	public static function approve_device(): void {
 		check_admin_referer( 'floppy_approve_device' );
-		if ( ! current_user_can( 'read' ) ) {
+		if ( ! current_user_can( Floppy_Permissions::CAP_READ ) && ! current_user_can( Floppy_Permissions::CAP_MANAGE ) ) {
 			wp_die( esc_html__( 'Authentication required.', 'floppy' ) );
 		}
 
@@ -263,18 +339,13 @@ final class Floppy_Admin {
 			wp_die( esc_html__( 'Invalid Floppy callback URL.', 'floppy' ) );
 		}
 
-		$device = Floppy_Auth::create_device( get_current_user_id(), $device_name );
-		if ( is_wp_error( $device ) ) {
-			wp_die( esc_html( $device->get_error_message() ) );
-		}
+		$code = Floppy_Auth::create_device_exchange_code( get_current_user_id(), $device_name, $state );
 
 		$open_url = add_query_arg(
 			array(
-				'site'        => home_url(),
-				'device_uuid' => $device['device_uuid'],
-				'token'       => $device['token'],
-				'scope'       => $device['scope'],
-				'state'       => $state,
+				'site'  => home_url(),
+				'code'  => $code,
+				'state' => $state,
 			),
 			$callback
 		);
@@ -333,7 +404,7 @@ final class Floppy_Admin {
 		<body class="wp-core-ui">
 			<div class="wrap">
 				<h1><?php esc_html_e( 'Mac Approved', 'floppy' ); ?></h1>
-				<p><?php esc_html_e( 'Return to Floppy for Mac to finish setup. If it does not open automatically, use the button below.', 'floppy' ); ?></p>
+				<p><?php esc_html_e( 'Floppy for Mac can now finish setup and store the scoped device token. If the app does not open automatically, use the button below.', 'floppy' ); ?></p>
 				<p><a class="button button-primary button-hero" href="<?php echo esc_attr( $open_url ); ?>"><?php esc_html_e( 'Open Floppy for Mac', 'floppy' ); ?></a></p>
 			</div>
 		</body>

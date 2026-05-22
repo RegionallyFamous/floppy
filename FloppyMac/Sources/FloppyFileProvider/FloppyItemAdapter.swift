@@ -5,9 +5,11 @@ import UniformTypeIdentifiers
 
 final class FloppyFileProviderItem: NSObject, NSFileProviderItem {
     let item: FloppyItem
+    private let resolvedParentItemIdentifier: NSFileProviderItemIdentifier?
 
-    init(item: FloppyItem) {
+    init(item: FloppyItem, parentItemIdentifier: NSFileProviderItemIdentifier? = nil) {
         self.item = item
+        self.resolvedParentItemIdentifier = parentItemIdentifier
         super.init()
     }
 
@@ -16,7 +18,7 @@ final class FloppyFileProviderItem: NSObject, NSFileProviderItem {
     }
 
     var parentItemIdentifier: NSFileProviderItemIdentifier {
-        item.parentFileProviderIdentifier ?? .rootContainer
+        resolvedParentItemIdentifier ?? item.parentFileProviderIdentifier ?? .rootContainer
     }
 
     var filename: String {
@@ -85,11 +87,11 @@ extension FloppyItem {
     }
 
     var fileProviderIdentifier: NSFileProviderItemIdentifier {
-        id == 0 ? .rootContainer : NSFileProviderItemIdentifier("floppy:item:\(id)")
+        id == 0 ? .rootContainer : NSFileProviderItemIdentifier(FloppyFileProviderIdentifierCodec.itemIdentifierRawValue(uuid: uuid))
     }
 
     var parentFileProviderIdentifier: NSFileProviderItemIdentifier? {
-        parentID == 0 ? nil : NSFileProviderItemIdentifier("floppy:item:\(parentID)")
+        parentID == 0 ? nil : NSFileProviderItemIdentifier(FloppyFileProviderIdentifierCodec.legacyItemIdentifierRawValue(id: parentID))
     }
 
     var createdAt: Date? {
@@ -111,11 +113,11 @@ extension FloppyItem {
 }
 
 extension NSFileProviderItemIdentifier {
-    var floppyItemID: Int64? {
-        let prefix = "floppy:item:"
-        guard rawValue.hasPrefix(prefix) else {
-            return nil
-        }
-        return Int64(rawValue.dropFirst(prefix.count))
+    var floppyItemUUID: String? {
+        FloppyFileProviderIdentifierCodec.itemUUID(from: rawValue)
+    }
+
+    var floppyLegacyItemID: Int64? {
+        FloppyFileProviderIdentifierCodec.legacyItemID(from: rawValue)
     }
 }

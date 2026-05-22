@@ -203,8 +203,47 @@ final class Floppy_Sync {
 			'metadata_version' => $row['metadata_version'],
 			'content_version'  => $row['content_version'],
 			'created_at_gmt'   => $row['created_at_gmt'],
-			'payload'          => $payload,
+			'payload'          => self::sanitize_payload_for_client( $payload, $row ),
 		);
+	}
+
+	/**
+	 * Keep sync payloads useful to clients without exposing storage internals.
+	 */
+	private static function sanitize_payload_for_client( array $payload, array $event ): array {
+		foreach ( array( 'storage_key', 'path', 'deleted_at_gmt', 'last_sync_seq', 'audience_user_ids', 'audience_roles' ) as $private_key ) {
+			unset( $payload[ $private_key ] );
+		}
+
+		if ( in_array( $event['target_type'], array( 'file', 'folder' ), true ) && isset( $payload['uuid'], $payload['name'] ) ) {
+			$item = array(
+				'kind'             => $event['target_type'],
+				'id'               => (int) ( $payload['id'] ?? $event['target_id'] ),
+				'uuid'             => (string) $payload['uuid'],
+				'owner_id'         => (int) ( $payload['owner_id'] ?? 0 ),
+				'parent_id'        => (int) ( $payload['parent_id'] ?? 0 ),
+				'name'             => (string) $payload['name'],
+				'metadata_version' => (string) ( $payload['metadata_version'] ?? '' ),
+				'status'           => (string) ( $payload['status'] ?? 'active' ),
+				'created_at_gmt'   => (string) ( $payload['created_at_gmt'] ?? '' ),
+				'updated_at_gmt'   => (string) ( $payload['updated_at_gmt'] ?? '' ),
+			);
+
+			if ( 'file' === $event['target_type'] ) {
+				$item['attachment_id'] = (int) ( $payload['attachment_id'] ?? 0 );
+				$item['mime_type'] = (string) ( $payload['mime_type'] ?? '' );
+				$item['size_bytes'] = (int) ( $payload['size_bytes'] ?? 0 );
+				$item['content_hash'] = (string) ( $payload['content_hash'] ?? '' );
+				$item['content_version'] = (string) ( $payload['content_version'] ?? '' );
+				$item['visibility'] = (string) ( $payload['visibility'] ?? 'private' );
+				$item['download_url'] = rest_url( Floppy_Rest::NAMESPACE . '/files/' . (int) $item['id'] . '/download' );
+			}
+
+			return $item;
+		}
+
+		$allowed = array( 'target_type', 'target_id', 'principal_type', 'principal_ref', 'capability', 'uuid', 'reason' );
+		return array_intersect_key( $payload, array_fill_keys( $allowed, true ) );
 	}
 
 	/**
