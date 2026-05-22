@@ -408,40 +408,46 @@ final class FloppyAppModel: ObservableObject {
             keychainAvailable = false
         }
 
+        let formatter = ISO8601DateFormatter()
+        let appInfo: [String: Any] = [
+            "version": Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "dev",
+            "bundle_id": Bundle.main.bundleIdentifier ?? "unknown"
+        ]
+        let selectedAccountInfo: [String: Any] = [
+            "id": accountID ?? "",
+            "site_url": FloppyDiagnostics.redactedURL(account?.siteURL),
+            "rest_url": FloppyDiagnostics.redactedURL(account?.restURL),
+            "device_uuid": account?.deviceUUID ?? "",
+            "scope": account?.scope ?? "",
+            "last_cursor": account.map { String($0.lastCursor) } ?? "0",
+            "last_sync_at": account?.lastSyncAt.map { formatter.string(from: $0) } ?? ""
+        ]
+        let ledgerInfo: [String: Any] = [
+            "path": ledger?.fileURL.path ?? "",
+            "accounts": accounts.count,
+            "items": items.count,
+            "pending_operations": await ledger?.pendingOperationCount(accountID: accountID) ?? 0,
+            "conflicts": await ledger?.conflictCount(accountID: accountID) ?? 0,
+            "active_enumerators": await ledger?.activeEnumeratorIdentifiers() ?? []
+        ]
+        let keychainInfo: [String: Any] = [
+            "available_for_selected_account": keychainAvailable,
+            "access_group_configured": KeychainTokenStore.defaultAccessGroup() != nil
+        ]
+        let onboardingInfo: [String: Any] = [
+            "step": String(describing: onboardingStep),
+            "has_pending_state": pendingOnboarding != nil,
+            "plugin_main_file": pluginMainFile
+        ]
         let bundle: [String: Any] = [
             "format": "floppy-mac-diagnostics-v1",
-            "created_at": ISO8601DateFormatter().string(from: Date()),
-            "app": [
-                "version": Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "dev",
-                "bundle_id": Bundle.main.bundleIdentifier ?? "unknown"
-            ],
-            "selected_account": [
-                "id": accountID ?? "",
-                "site_url": FloppyDiagnostics.redactedURL(account?.siteURL),
-                "rest_url": FloppyDiagnostics.redactedURL(account?.restURL),
-                "device_uuid": account?.deviceUUID ?? "",
-                "scope": account?.scope ?? "",
-                "last_cursor": account.map { String($0.lastCursor) } ?? "0",
-                "last_sync_at": account?.lastSyncAt.map { ISO8601DateFormatter().string(from: $0) } ?? ""
-            ],
-            "ledger": [
-                "path": ledger?.fileURL.path ?? "",
-                "accounts": accounts.count,
-                "items": items.count,
-                "pending_operations": await ledger?.pendingOperationCount(accountID: accountID) ?? 0,
-                "conflicts": await ledger?.conflictCount(accountID: accountID) ?? 0,
-                "active_enumerators": await ledger?.activeEnumeratorIdentifiers() ?? []
-            ],
+            "created_at": formatter.string(from: Date()),
+            "app": appInfo,
+            "selected_account": selectedAccountInfo,
+            "ledger": ledgerInfo,
             "domains": (try? FloppyDomainRegistry.summaries()) ?? [],
-            "keychain": [
-                "available_for_selected_account": keychainAvailable,
-                "access_group_configured": KeychainTokenStore.defaultAccessGroup() != nil
-            ],
-            "onboarding": [
-                "step": String(describing: onboardingStep),
-                "has_pending_state": pendingOnboarding != nil,
-                "plugin_main_file": pluginMainFile
-            ],
+            "keychain": keychainInfo,
+            "onboarding": onboardingInfo,
             "last_status": status
         ]
 
