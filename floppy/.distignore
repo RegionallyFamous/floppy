@@ -1,0 +1,16 @@
+.DS_Store
+.git
+.github
+node_modules
+vendor
+composer.json
+composer.lock
+phpunit.xml
+phpunit.xml.dist
+tests
+tests/load/*.jsonl
+tests/load/*.sql
+tests/tmp
+coverage
+.phpunit.result.cache
+.distignore

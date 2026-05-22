@@ -1,0 +1,114 @@
+<?php
+/**
+ * Schema repair integration tests.
+ *
+ * @package Floppy
+ */
+
+/**
+ * @covers Floppy_Schema
+ */
+final class Floppy_Schema_Repair_Test extends WP_UnitTestCase {
+	/**
+	 * Current test user id.
+	 *
+	 * @var int
+	 */
+	private $user_id = 0;
+
+	public function set_up(): void {
+		parent::set_up();
+
+		Floppy_Schema::install();
+		update_option( 'floppy_private_probe', array( 'ok' => true, 'message' => 'test' ), false );
+		$this->truncate_floppy_tables();
+		$this->user_id = self::factory()->user->create( array( 'role' => 'administrator' ) );
+	}
+
+	public function test_repair_dry_run_reports_missing_and_orphaned_name_reservations(): void {
+		global $wpdb;
+
+		$file = $this->insert_private_file( 'repair me' );
+		$wpdb->insert(
+			Floppy_Schema::table( 'item_names' ),
+			array(
+				'parent_id'       => 0,
+				'normalized_name' => 'ghost.txt',
+				'target_type'     => 'file',
+				'target_id'       => 999999,
+				'status'          => 'reserved',
+				'created_at_gmt'  => current_time( 'mysql', true ),
+				'updated_at_gmt'  => current_time( 'mysql', true ),
+			),
+			array( '%d', '%s', '%s', '%d', '%s', '%s', '%s' )
+		);
+
+		$report = Floppy_Schema::repair( false );
+
+		$this->assertFalse( $report['apply'] );
+		$this->assertGreaterThanOrEqual( 1, $report['item_names']['missing'] );
+		$this->assertGreaterThanOrEqual( 1, $report['orphaned_name_reservations']['orphaned'] );
+		$this->assertStringNotContainsString( $file['storage_key'], wp_json_encode( $report ) );
+	}
+
+	public function test_repair_apply_backfills_item_name_reservations(): void {
+		global $wpdb;
+
+		$file = $this->insert_private_file( 'repair me' );
+		$report = Floppy_Schema::repair( true );
+		$reservation = $wpdb->get_var(
+			$wpdb->prepare(
+				'SELECT id FROM ' . Floppy_Schema::table( 'item_names' ) . ' WHERE target_type = %s AND target_id = %d',
+				'file',
+				$file['id']
+			)
+		);
+
+		$this->assertTrue( $report['apply'] );
+		$this->assertNotEmpty( $reservation );
+	}
+
+	private function truncate_floppy_tables(): void {
+		global $wpdb;
+
+		foreach ( array( 'jobs', 'audit_log', 'tombstones', 'upload_sessions', 'devices', 'sync_events', 'acl_grants', 'item_names', 'folders', 'files' ) as $table ) {
+			$wpdb->query( 'DELETE FROM ' . Floppy_Schema::table( $table ) ); // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared
+		}
+	}
+
+	private function insert_private_file( string $contents ): array {
+		global $wpdb;
+
+		$uuid = wp_generate_uuid4();
+		$key = Floppy_Storage::storage_key( $uuid, 'txt' );
+		$path = Floppy_Storage::path_for_key( $key );
+		wp_mkdir_p( dirname( $path ) );
+		file_put_contents( $path, $contents ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_read_file_put_contents
+		$now = current_time( 'mysql', true );
+		$row = array(
+			'uuid'             => $uuid,
+			'attachment_id'    => 0,
+			'owner_id'         => $this->user_id,
+			'parent_id'        => 0,
+			'name'             => 'repair.txt',
+			'normalized_name'  => 'repair.txt',
+			'mime_type'        => 'text/plain',
+			'size_bytes'       => strlen( $contents ),
+			'content_hash'     => hash( 'sha256', $contents ),
+			'storage_key'      => $key,
+			'content_version'  => wp_generate_uuid4(),
+			'metadata_version' => wp_generate_uuid4(),
+			'status'           => 'active',
+			'visibility'       => 'private',
+			'created_at_gmt'   => $now,
+			'updated_at_gmt'   => $now,
+		);
+		$wpdb->insert(
+			Floppy_Schema::table( 'files' ),
+			$row,
+			array( '%s', '%d', '%d', '%d', '%s', '%s', '%s', '%d', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s' )
+		);
+		$row['id'] = (int) $wpdb->insert_id;
+		return $row;
+	}
+}

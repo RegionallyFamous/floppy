@@ -23,6 +23,8 @@ The first public beta is GitHub-first. Users install the WordPress plugin from a
 - Plugin activates on HTTPS WordPress sites with REST API enabled.
 - Direct private-file access probes fail.
 - Upload sessions enforce chunk caps, file size limits, MIME validation, dangerous extension checks, and quota errors.
+- Replacement sessions handle large Finder edits without whole-file in-memory uploads.
+- Stale Finder edits create local conflict copies instead of silently overwriting.
 - Sync expired cursors return HTTP `410` and tell clients to re-enumerate.
 - Finder item IDs use Floppy UUIDs, with legacy numeric lookup only as a compatibility fallback.
 - Export jobs run asynchronously and expose status/download URLs without leaking private storage keys.

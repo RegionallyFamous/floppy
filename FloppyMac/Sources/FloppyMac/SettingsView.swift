@@ -11,6 +11,14 @@ struct SettingsView: View {
                     .foregroundStyle(.secondary)
             }
 
+            Section("Diagnostics") {
+                Button("Export Diagnostics Bundle") {
+                    model.exportDiagnostics()
+                }
+                Text("Exports redacted account, domain, ledger, cursor, queue, conflict, and onboarding status as JSON.")
+                    .foregroundStyle(.secondary)
+            }
+
             Section("Developer Setup") {
                 LabeledContent("Xcode") {
                     Text("/Applications/Xcode.app")

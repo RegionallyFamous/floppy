@@ -90,6 +90,12 @@ final class FloppyFileProviderExtension: NSObject, NSFileProviderReplicatedExten
                     throw NSFileProviderError(.noSuchItem)
                 }
 
+                if item.isLocalConflict, let localURL = await ledger.materializedURL(for: item), FileManager.default.fileExists(atPath: localURL.path) {
+                    progress.completedUnitCount = 100
+                    completionHandler(localURL, await fileProviderItem(for: item), nil)
+                    return
+                }
+
                 let directory = FileManager.default.temporaryDirectory.appendingPathComponent("FloppyFileProvider", isDirectory: true)
                 try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
                 let destination = directory.appendingPathComponent(UUID().uuidString + "-" + item.name)
@@ -141,6 +147,7 @@ final class FloppyFileProviderExtension: NSObject, NSFileProviderReplicatedExten
                 }
 
                 try await ledger.upsert(item: item)
+                await signalEnumerators()
                 progress.completedUnitCount = 100
                 completionHandler(await fileProviderItem(for: item), [], false, nil)
             } catch {
@@ -192,17 +199,28 @@ final class FloppyFileProviderExtension: NSObject, NSFileProviderReplicatedExten
                 }
 
                 if let newContents, current.kind == .file {
-                    let data = try Data(contentsOf: newContents)
-                    current = try await apiClient.replaceFile(
-                        id: current.id,
-                        data: data,
-                        filename: current.name,
-                        contentVersion: version.floppyContentVersion,
-                        mimeType: item.contentType?.preferredMIMEType ?? current.mimeType ?? "application/octet-stream"
-                    )
+                    do {
+                        current = try await apiClient.replaceFile(
+                            id: current.id,
+                            at: newContents,
+                            filename: current.name,
+                            contentVersion: version.floppyContentVersion,
+                            mimeType: item.contentType?.preferredMIMEType ?? current.mimeType ?? "application/octet-stream"
+                        ) { sent, total in
+                            progress.completedUnitCount = total > 0 ? min(Int64(99), Int64(Double(sent) / Double(total) * 99.0)) : 0
+                        }
+                    } catch FloppyAPIError.httpStatus(let status, _) where status == 409 || status == 428 {
+                        let conflictItem = try await createLocalConflict(for: current, editedURL: newContents, contentType: item.contentType)
+                        try? await refreshParent(parentID: current.parentID, apiClient: apiClient)
+                        await signalEnumerators()
+                        progress.completedUnitCount = 100
+                        completionHandler(await fileProviderItem(for: conflictItem), [], false, nil)
+                        return
+                    }
                 }
 
                 try await ledger.upsert(item: current)
+                await signalEnumerators()
                 progress.completedUnitCount = 100
                 completionHandler(await fileProviderItem(for: current), [], false, nil)
             } catch {
@@ -230,11 +248,23 @@ final class FloppyFileProviderExtension: NSObject, NSFileProviderReplicatedExten
 
         let task = Task {
             do {
-                guard let apiClient else {
-                    throw NSFileProviderError(.notAuthenticated)
-                }
                 guard let item = await resolveItem(identifier) else {
                     throw NSFileProviderError(.cannotSynchronize)
+                }
+
+                if item.isLocalConflict {
+                    if let localURL = await ledger.materializedURL(for: item) {
+                        try? FileManager.default.removeItem(at: localURL)
+                    }
+                    try await ledger.removeItem(uuid: item.uuid)
+                    await signalEnumerators()
+                    progress.completedUnitCount = 1
+                    completionHandler(nil)
+                    return
+                }
+
+                guard let apiClient else {
+                    throw NSFileProviderError(.notAuthenticated)
                 }
 
                 if item.kind == .folder {
@@ -249,6 +279,7 @@ final class FloppyFileProviderExtension: NSObject, NSFileProviderReplicatedExten
                     try await apiClient.trashFile(id: item.id, metadataVersion: version.floppyMetadataVersion)
                 }
                 try await ledger.removeItem(uuid: item.uuid)
+                await signalEnumerators()
                 progress.completedUnitCount = 1
                 completionHandler(nil)
             } catch {
@@ -287,6 +318,79 @@ final class FloppyFileProviderExtension: NSObject, NSFileProviderReplicatedExten
         FloppyFileProviderItem(item: item, parentItemIdentifier: await parentIdentifier(for: item))
     }
 
+    private func createLocalConflict(for original: FloppyItem, editedURL: URL, contentType: UTType?) async throws -> FloppyItem {
+        let uuid = "local-conflict-\(UUID().uuidString)"
+        let filename = Self.conflictFilename(for: original.name)
+        let localURL = try await ledger.conflictFileURL(uuid: uuid, filename: filename)
+        if FileManager.default.fileExists(atPath: localURL.path) {
+            try FileManager.default.removeItem(at: localURL)
+        }
+        try FileManager.default.copyItem(at: editedURL, to: localURL)
+
+        let size = (try? FileManager.default.attributesOfItem(atPath: localURL.path)[.size] as? NSNumber)?.int64Value
+        let conflictItem = FloppyItem(
+            kind: .file,
+            id: -Int64(Date().timeIntervalSince1970),
+            uuid: uuid,
+            attachmentID: nil,
+            ownerID: original.ownerID,
+            parentID: original.parentID,
+            parentUUID: original.parentUUID,
+            name: filename,
+            mimeType: contentType?.preferredMIMEType ?? original.mimeType ?? "application/octet-stream",
+            sizeBytes: size,
+            contentHash: nil,
+            contentVersion: "local-conflict",
+            metadataVersion: "local-conflict",
+            status: "active",
+            visibility: "private",
+            downloadURL: nil,
+            createdAtGMT: Self.mysqlDateFormatter.string(from: Date()),
+            updatedAtGMT: Self.mysqlDateFormatter.string(from: Date())
+        )
+        let conflict = FloppyConflict(
+            accountID: "",
+            itemUUID: conflictItem.uuid,
+            message: "Local edit preserved after the server copy changed.",
+            displayName: filename,
+            parentID: original.parentID,
+            parentUUID: original.parentUUID,
+            materializedPath: localURL.path,
+            originalContentVersion: original.contentVersion,
+            state: "open"
+        )
+        try await ledger.recordConflict(conflict: conflict, item: conflictItem, localURL: localURL)
+        return conflictItem
+    }
+
+    private func refreshParent(parentID: Int64, apiClient: FloppyAPIClient) async throws {
+        let response = try await apiClient.listFiles(parentID: parentID, limit: 100)
+        try await ledger.upsert(items: response.items)
+    }
+
+    private func signalEnumerators() async {
+        guard let manager = NSFileProviderManager(for: domain) else {
+            return
+        }
+        var identifiers = [NSFileProviderItemIdentifier.workingSet]
+        identifiers.append(contentsOf: await ledger.activeEnumeratorIdentifiers().map { NSFileProviderItemIdentifier($0) })
+        for identifier in identifiers {
+            do {
+                try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+                    manager.signalEnumerator(for: identifier) { error in
+                        if let error {
+                            continuation.resume(throwing: error)
+                        } else {
+                            continuation.resume()
+                        }
+                    }
+                }
+            } catch {
+                FloppyDiagnostics.fileProvider.error("File Provider signal failed: \(error.localizedDescription, privacy: .public)")
+            }
+        }
+    }
+
     private func parentIdentifier(for item: FloppyItem) async -> NSFileProviderItemIdentifier {
         guard item.parentID != 0 else {
             return .rootContainer
@@ -302,6 +406,32 @@ final class FloppyFileProviderExtension: NSObject, NSFileProviderReplicatedExten
 
         return NSFileProviderItemIdentifier(FloppyFileProviderIdentifierCodec.legacyItemIdentifierRawValue(id: item.parentID))
     }
+
+    private static func conflictFilename(for name: String) -> String {
+        let url = URL(fileURLWithPath: name)
+        let base = url.deletingPathExtension().lastPathComponent
+        let ext = url.pathExtension
+        let stamp = conflictDateFormatter.string(from: Date())
+        let conflictBase = "\(base) (Floppy conflict \(stamp))"
+        return ext.isEmpty ? conflictBase : "\(conflictBase).\(ext)"
+    }
+
+    private static let conflictDateFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.calendar = Calendar(identifier: .gregorian)
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.dateFormat = "yyyy-MM-dd HH.mm.ss"
+        return formatter
+    }()
+
+    private static let mysqlDateFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.calendar = Calendar(identifier: .gregorian)
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = TimeZone(secondsFromGMT: 0)
+        formatter.dateFormat = "yyyy-MM-dd HH:mm:ss"
+        return formatter
+    }()
 }
 
 private extension NSFileProviderItemVersion {

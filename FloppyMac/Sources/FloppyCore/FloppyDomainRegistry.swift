@@ -49,6 +49,18 @@ public enum FloppyDomainRegistry {
         try write(records)
     }
 
+    public static func summaries() throws -> [[String: String]] {
+        try loadAll().values.map { record in
+            [
+                "domainIdentifier": record.domainIdentifier,
+                "accountID": record.accountID,
+                "siteURL": FloppyDiagnostics.redactedURL(record.siteURL),
+                "restURL": FloppyDiagnostics.redactedURL(record.restURL),
+                "displayName": record.displayName
+            ]
+        }.sorted { ($0["domainIdentifier"] ?? "") < ($1["domainIdentifier"] ?? "") }
+    }
+
     private static func loadAll() throws -> [String: FloppyDomainRecord] {
         let url = registryURL()
         guard FileManager.default.fileExists(atPath: url.path) else {

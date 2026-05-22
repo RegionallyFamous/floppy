@@ -168,6 +168,9 @@ final class Floppy_Schema {
 			content_hash char(64) NOT NULL DEFAULT '',
 			mime_type varchar(127) NOT NULL DEFAULT '',
 			storage_key varchar(255) NOT NULL DEFAULT '',
+			operation varchar(20) NOT NULL DEFAULT 'create',
+			target_file_id bigint(20) unsigned DEFAULT 0 NOT NULL,
+			base_content_version char(36) NOT NULL DEFAULT '',
 			status varchar(20) NOT NULL DEFAULT 'open',
 			expires_at_gmt datetime NOT NULL,
 			created_at_gmt datetime NOT NULL,
@@ -175,6 +178,7 @@ final class Floppy_Schema {
 			PRIMARY KEY  (id),
 			UNIQUE KEY session_uuid (session_uuid),
 			KEY user_status (user_id,status),
+			KEY target_operation (target_file_id,operation,status),
 			KEY expires_at (expires_at_gmt)
 		) $charset;";
 
@@ -234,6 +238,8 @@ final class Floppy_Schema {
 			dbDelta( $statement );
 		}
 
+		self::repair( true );
+
 		update_option( 'floppy_db_version', FLOPPY_DB_VERSION, false );
 	}
 
@@ -283,12 +289,220 @@ final class Floppy_Schema {
 			'acl_grants'      => array( 'target_principal', 'principal_lookup', 'target_lookup' ),
 			'sync_events'     => array( 'event_uuid', 'target_lookup', 'actor_seq', 'parent_seq' ),
 			'devices'         => array( 'device_uuid', 'token_hash', 'user_status', 'last_seen' ),
-			'upload_sessions' => array( 'session_uuid', 'user_status', 'expires_at' ),
+			'upload_sessions' => array( 'session_uuid', 'user_status', 'target_operation', 'expires_at' ),
 			'tombstones'      => array( 'target_lookup', 'owner_expires', 'sync_seq' ),
 			'audit_log'       => array( 'actor_created', 'action_created', 'target_lookup' ),
 			'jobs'            => array( 'job_uuid', 'queue_lookup', 'job_type_status' ),
 		);
 
 		return $indexes[ $name ] ?? array();
+	}
+
+	/**
+	 * Run additive data repairs and return a redacted report.
+	 */
+	public static function repair( bool $apply = false ): array {
+		return array(
+			'apply'                     => $apply,
+			'item_names'                => self::repair_item_name_reservations( $apply ),
+			'orphaned_name_reservations' => self::repair_orphaned_name_reservations( $apply ),
+			'stale_upload_sessions'     => self::repair_stale_upload_sessions( $apply ),
+			'attachment_links'          => self::repair_attachment_links( $apply ),
+			'orphaned_blobs'            => self::inspect_orphaned_blobs(),
+		);
+	}
+
+	/**
+	 * Backfill missing sibling-name reservations.
+	 */
+	private static function repair_item_name_reservations( bool $apply ): array {
+		global $wpdb;
+
+		$table = self::table( 'item_names' );
+		$now = current_time( 'mysql', true );
+		$created = 0;
+		$conflicts = 0;
+
+		foreach ( array( 'folders' => 'folder', 'files' => 'file' ) as $source => $target_type ) {
+			$rows = $wpdb->get_results(
+				'SELECT id, parent_id, normalized_name FROM ' . self::table( $source ) . " WHERE status != 'deleted'",
+				ARRAY_A
+			); // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared
+			foreach ( $rows as $row ) {
+				$exists = $wpdb->get_var(
+					$wpdb->prepare(
+						"SELECT id FROM $table WHERE target_type = %s AND target_id = %d LIMIT 1", // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared
+						$target_type,
+						(int) $row['id']
+					)
+				);
+				if ( $exists ) {
+					continue;
+				}
+
+				if ( $apply ) {
+					$inserted = $wpdb->insert(
+						$table,
+						array(
+							'parent_id'       => (int) $row['parent_id'],
+							'normalized_name' => (string) $row['normalized_name'],
+							'target_type'     => $target_type,
+							'target_id'       => (int) $row['id'],
+							'status'          => 'reserved',
+							'created_at_gmt'  => $now,
+							'updated_at_gmt'  => $now,
+						),
+						array( '%d', '%s', '%s', '%d', '%s', '%s', '%s' )
+					);
+					if ( $inserted ) {
+						++$created;
+					} else {
+						++$conflicts;
+					}
+				} else {
+					++$created;
+				}
+			}
+		}
+
+		return array(
+			'missing'   => $created,
+			'conflicts' => $conflicts,
+		);
+	}
+
+	/**
+	 * Remove reservations whose target row no longer exists or is deleted.
+	 */
+	private static function repair_orphaned_name_reservations( bool $apply ): array {
+		global $wpdb;
+
+		$table = self::table( 'item_names' );
+		$rows = $wpdb->get_results( "SELECT id, target_type, target_id FROM $table", ARRAY_A ); // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared
+		$orphans = 0;
+		foreach ( $rows as $row ) {
+			$source = 'folder' === $row['target_type'] ? self::table( 'folders' ) : self::table( 'files' );
+			$target = $wpdb->get_var(
+				$wpdb->prepare(
+					"SELECT id FROM $source WHERE id = %d AND status != 'deleted' LIMIT 1", // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared
+					(int) $row['target_id']
+				)
+			);
+			if ( $target ) {
+				continue;
+			}
+
+			++$orphans;
+			if ( $apply ) {
+				$wpdb->delete( $table, array( 'id' => (int) $row['id'] ), array( '%d' ) );
+			}
+		}
+
+		return array( 'orphaned' => $orphans );
+	}
+
+	/**
+	 * Clean expired upload-session rows and temporary blobs.
+	 */
+	private static function repair_stale_upload_sessions( bool $apply ): array {
+		global $wpdb;
+
+		$rows = $wpdb->get_results(
+			$wpdb->prepare(
+				'SELECT id, storage_key FROM ' . self::table( 'upload_sessions' ) . " WHERE status IN ('open','failed') AND expires_at_gmt < %s LIMIT 500",
+				current_time( 'mysql', true )
+			),
+			ARRAY_A
+		);
+		if ( $apply ) {
+			foreach ( $rows as $row ) {
+				if ( ! empty( $row['storage_key'] ) ) {
+					@unlink( Floppy_Storage::path_for_key( (string) $row['storage_key'] ) ); // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged
+				}
+				$wpdb->delete( self::table( 'upload_sessions' ), array( 'id' => (int) $row['id'] ), array( '%d' ) );
+			}
+		}
+
+		return array( 'expired' => count( $rows ) );
+	}
+
+	/**
+	 * Repair attachment file/meta pointers for private file rows.
+	 */
+	private static function repair_attachment_links( bool $apply ): array {
+		global $wpdb;
+
+		$rows = $wpdb->get_results(
+			'SELECT id, attachment_id, storage_key FROM ' . self::table( 'files' ) . " WHERE attachment_id > 0 AND status != 'deleted' LIMIT 1000",
+			ARRAY_A
+		); // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared
+		$drift = 0;
+		foreach ( $rows as $row ) {
+			$attachment_id = (int) $row['attachment_id'];
+			$storage_key = (string) $row['storage_key'];
+			$meta_key = (string) get_post_meta( $attachment_id, '_floppy_storage_key', true );
+			$attached = (string) get_attached_file( $attachment_id );
+			$expected = Floppy_Storage::path_for_key( $storage_key );
+			if ( $meta_key === $storage_key && $attached === $expected ) {
+				continue;
+			}
+
+			++$drift;
+			if ( $apply ) {
+				update_post_meta( $attachment_id, '_floppy_storage_key', $storage_key );
+				update_attached_file( $attachment_id, $expected );
+			}
+		}
+
+		return array( 'drifted' => $drift );
+	}
+
+	/**
+	 * Count unreferenced private blobs without returning private paths.
+	 */
+	private static function inspect_orphaned_blobs(): array {
+		global $wpdb;
+
+		$root = Floppy_Storage::root();
+		if ( empty( $root['path'] ) || ! is_dir( $root['path'] ) ) {
+			return array( 'candidates' => 0, 'scanned' => 0, 'scan_limited' => false );
+		}
+
+		$known = array_fill_keys(
+			array_filter(
+				array_merge(
+					$wpdb->get_col( 'SELECT storage_key FROM ' . self::table( 'files' ) . " WHERE storage_key != ''" ), // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared
+					$wpdb->get_col( 'SELECT storage_key FROM ' . self::table( 'upload_sessions' ) . " WHERE storage_key != ''" ) // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared
+				)
+			),
+			true
+		);
+		$candidates = 0;
+		$scanned = 0;
+		$limit = 1000;
+		$root_path = trailingslashit( $root['path'] );
+		$iterator = new RecursiveIteratorIterator( new RecursiveDirectoryIterator( $root_path, FilesystemIterator::SKIP_DOTS ) );
+		foreach ( $iterator as $file ) {
+			if ( ! $file->isFile() ) {
+				continue;
+			}
+			++$scanned;
+			$key = ltrim( str_replace( $root_path, '', $file->getPathname() ), '/' );
+			if ( in_array( $key, array( '.htaccess', 'web.config', 'index.php' ), true ) ) {
+				continue;
+			}
+			if ( empty( $known[ $key ] ) && 0 !== strpos( $key, 'exports/' ) ) {
+				++$candidates;
+			}
+			if ( $scanned >= $limit ) {
+				break;
+			}
+		}
+
+		return array(
+			'candidates'   => $candidates,
+			'scanned'      => $scanned,
+			'scan_limited' => $scanned >= $limit,
+		);
 	}
 }

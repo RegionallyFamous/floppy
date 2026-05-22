@@ -34,13 +34,37 @@ public struct FloppyConflict: Codable, Equatable, Identifiable, Sendable {
     public let accountID: String
     public let itemUUID: String
     public let message: String
+    public let displayName: String?
+    public let parentID: Int64?
+    public let parentUUID: String?
+    public let materializedPath: String?
+    public let originalContentVersion: String?
+    public let state: String?
     public let createdAt: Date
 
-    public init(id: UUID = UUID(), accountID: String, itemUUID: String, message: String, createdAt: Date = Date()) {
+    public init(
+        id: UUID = UUID(),
+        accountID: String,
+        itemUUID: String,
+        message: String,
+        displayName: String? = nil,
+        parentID: Int64? = nil,
+        parentUUID: String? = nil,
+        materializedPath: String? = nil,
+        originalContentVersion: String? = nil,
+        state: String? = "open",
+        createdAt: Date = Date()
+    ) {
         self.id = id
         self.accountID = accountID
         self.itemUUID = itemUUID
         self.message = message
+        self.displayName = displayName
+        self.parentID = parentID
+        self.parentUUID = parentUUID
+        self.materializedPath = materializedPath
+        self.originalContentVersion = originalContentVersion
+        self.state = state
         self.createdAt = createdAt
     }
 }
@@ -57,7 +81,7 @@ public enum LocalLedgerError: Error, LocalizedError {
 }
 
 public actor LocalLedger {
-    public let fileURL: URL
+    public nonisolated let fileURL: URL
     private let store: SQLiteLedgerStore
 
     public init(fileURL: URL = LocalLedger.defaultLedgerURL()) {
@@ -158,6 +182,61 @@ public actor LocalLedger {
         try store.markMaterialized(item: item, accountID: try defaultAccountID(nil), localURL: localURL)
     }
 
+    public func materializedURL(for item: FloppyItem, accountID: String? = nil) -> URL? {
+        do {
+            return try store.materializedURL(uuid: item.uuid, accountID: try defaultAccountID(accountID))
+        } catch {
+            FloppyDiagnostics.ledger.error("Failed loading materialized URL: \(error.localizedDescription, privacy: .public)")
+            return nil
+        }
+    }
+
+    public func conflictFileURL(uuid: String, filename: String) throws -> URL {
+        let directory = fileURL.deletingLastPathComponent().appendingPathComponent("Conflicts", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        return directory.appendingPathComponent(uuid + "-" + filename.safePathComponent)
+    }
+
+    public func recordConflict(conflict: FloppyConflict, item: FloppyItem, localURL: URL, accountID: String? = nil) throws {
+        let resolvedAccountID = try defaultAccountID(accountID)
+        let resolvedConflict = FloppyConflict(
+            id: conflict.id,
+            accountID: resolvedAccountID,
+            itemUUID: conflict.itemUUID,
+            message: conflict.message,
+            displayName: conflict.displayName,
+            parentID: conflict.parentID,
+            parentUUID: conflict.parentUUID,
+            materializedPath: conflict.materializedPath,
+            originalContentVersion: conflict.originalContentVersion,
+            state: conflict.state,
+            createdAt: conflict.createdAt
+        )
+        try store.transaction {
+            try store.upsert(item: item, accountID: resolvedAccountID)
+            try store.markMaterialized(item: item, accountID: resolvedAccountID, localURL: localURL)
+            try store.insert(conflict: resolvedConflict)
+        }
+    }
+
+    public func conflictCount(accountID: String? = nil) -> Int {
+        do {
+            return try store.conflictCount(accountID: try defaultAccountID(accountID))
+        } catch {
+            FloppyDiagnostics.ledger.error("Failed loading conflict count: \(error.localizedDescription, privacy: .public)")
+            return 0
+        }
+    }
+
+    public func pendingOperationCount(accountID: String? = nil) -> Int {
+        do {
+            return try store.pendingOperationCount(accountID: try defaultAccountID(accountID))
+        } catch {
+            FloppyDiagnostics.ledger.error("Failed loading pending operation count: \(error.localizedDescription, privacy: .public)")
+            return 0
+        }
+    }
+
     public func recordActiveEnumerator(_ identifier: String) {
         do {
             try store.recordActiveEnumerator(identifier)
@@ -171,6 +250,15 @@ public actor LocalLedger {
             try store.removeActiveEnumerator(identifier)
         } catch {
             FloppyDiagnostics.ledger.error("Failed removing active enumerator: \(error.localizedDescription, privacy: .public)")
+        }
+    }
+
+    public func activeEnumeratorIdentifiers() -> [String] {
+        do {
+            return try store.activeEnumeratorIdentifiers()
+        } catch {
+            FloppyDiagnostics.ledger.error("Failed loading active enumerators: \(error.localizedDescription, privacy: .public)")
+            return []
         }
     }
 
@@ -446,6 +534,18 @@ private final class SQLiteLedgerStore {
         try finish(statement)
     }
 
+    func materializedURL(uuid: String, accountID: String) throws -> URL? {
+        let statement = try prepare("SELECT materialized_url FROM items WHERE account_id = ? AND uuid = ? LIMIT 1")
+        defer { sqlite3_finalize(statement) }
+
+        bind(accountID, to: statement, at: 1)
+        bind(uuid, to: statement, at: 2)
+        guard try step(statement) == SQLITE_ROW, sqlite3_column_type(statement, 0) != SQLITE_NULL else {
+            return nil
+        }
+        return URL(fileURLWithPath: columnText(statement, 0))
+    }
+
     func recordActiveEnumerator(_ identifier: String) throws {
         let statement = try prepare("""
             INSERT INTO active_enumerators (identifier, recorded_at)
@@ -461,6 +561,39 @@ private final class SQLiteLedgerStore {
 
     func removeActiveEnumerator(_ identifier: String) throws {
         try execute("DELETE FROM active_enumerators WHERE identifier = ?", .text(identifier))
+    }
+
+    func activeEnumeratorIdentifiers() throws -> [String] {
+        let statement = try prepare("SELECT identifier FROM active_enumerators ORDER BY recorded_at DESC")
+        defer { sqlite3_finalize(statement) }
+
+        var identifiers: [String] = []
+        while try step(statement) == SQLITE_ROW {
+            identifiers.append(columnText(statement, 0))
+        }
+        return identifiers
+    }
+
+    func conflictCount(accountID: String) throws -> Int {
+        let statement = try prepare("SELECT COUNT(*) FROM conflicts WHERE account_id = ? AND state != 'resolved'")
+        defer { sqlite3_finalize(statement) }
+
+        bind(accountID, to: statement, at: 1)
+        guard try step(statement) == SQLITE_ROW else {
+            return 0
+        }
+        return Int(sqlite3_column_int64(statement, 0))
+    }
+
+    func pendingOperationCount(accountID: String) throws -> Int {
+        let statement = try prepare("SELECT COUNT(*) FROM pending_operations WHERE account_id = ?")
+        defer { sqlite3_finalize(statement) }
+
+        bind(accountID, to: statement, at: 1)
+        guard try step(statement) == SQLITE_ROW else {
+            return 0
+        }
+        return Int(sqlite3_column_int64(statement, 0))
     }
 
     func updateAccountSync(accountID: String, lastCursor: UInt64, lastSyncAt: Date) throws {
@@ -538,9 +671,21 @@ private final class SQLiteLedgerStore {
                 account_id TEXT NOT NULL,
                 item_uuid TEXT NOT NULL,
                 message TEXT NOT NULL,
+                display_name TEXT NOT NULL DEFAULT '',
+                parent_id INTEGER NOT NULL DEFAULT 0,
+                parent_uuid TEXT NOT NULL DEFAULT '',
+                materialized_path TEXT NOT NULL DEFAULT '',
+                original_content_version TEXT NOT NULL DEFAULT '',
+                state TEXT NOT NULL DEFAULT 'open',
                 created_at REAL NOT NULL
             )
             """)
+        try? execute("ALTER TABLE conflicts ADD COLUMN display_name TEXT NOT NULL DEFAULT ''")
+        try? execute("ALTER TABLE conflicts ADD COLUMN parent_id INTEGER NOT NULL DEFAULT 0")
+        try? execute("ALTER TABLE conflicts ADD COLUMN parent_uuid TEXT NOT NULL DEFAULT ''")
+        try? execute("ALTER TABLE conflicts ADD COLUMN materialized_path TEXT NOT NULL DEFAULT ''")
+        try? execute("ALTER TABLE conflicts ADD COLUMN original_content_version TEXT NOT NULL DEFAULT ''")
+        try? execute("ALTER TABLE conflicts ADD COLUMN state TEXT NOT NULL DEFAULT 'open'")
         try execute("""
             CREATE TABLE IF NOT EXISTS active_enumerators (
                 identifier TEXT PRIMARY KEY,
@@ -614,10 +759,10 @@ private final class SQLiteLedgerStore {
         try finish(statement)
     }
 
-    private func insert(conflict: FloppyConflict) throws {
+    func insert(conflict: FloppyConflict) throws {
         let statement = try prepare("""
-            INSERT OR REPLACE INTO conflicts (id, account_id, item_uuid, message, created_at)
-            VALUES (?, ?, ?, ?, ?)
+            INSERT OR REPLACE INTO conflicts (id, account_id, item_uuid, message, display_name, parent_id, parent_uuid, materialized_path, original_content_version, state, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """)
         defer { sqlite3_finalize(statement) }
 
@@ -625,7 +770,13 @@ private final class SQLiteLedgerStore {
         bind(conflict.accountID, to: statement, at: 2)
         bind(conflict.itemUUID, to: statement, at: 3)
         bind(conflict.message, to: statement, at: 4)
-        sqlite3_bind_double(statement, 5, conflict.createdAt.timeIntervalSinceReferenceDate)
+        bind(conflict.displayName ?? "", to: statement, at: 5)
+        sqlite3_bind_int64(statement, 6, conflict.parentID ?? 0)
+        bind(conflict.parentUUID ?? "", to: statement, at: 7)
+        bind(conflict.materializedPath ?? "", to: statement, at: 8)
+        bind(conflict.originalContentVersion ?? "", to: statement, at: 9)
+        bind(conflict.state ?? "open", to: statement, at: 10)
+        sqlite3_bind_double(statement, 11, conflict.createdAt.timeIntervalSinceReferenceDate)
         try finish(statement)
     }
 

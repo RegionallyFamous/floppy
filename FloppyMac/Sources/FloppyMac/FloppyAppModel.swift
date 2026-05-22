@@ -386,6 +386,73 @@ final class FloppyAppModel: ObservableObject {
         }
     }
 
+    func exportDiagnostics() {
+        Task {
+            do {
+                let url = try await makeDiagnosticsBundle()
+                NSWorkspace.shared.activateFileViewerSelecting([url])
+                status = "Diagnostics exported."
+            } catch {
+                status = error.localizedDescription
+            }
+        }
+    }
+
+    private func makeDiagnosticsBundle() async throws -> URL {
+        let account = selectedAccount
+        let accountID = account?.id
+        let keychainAvailable: Bool
+        if let accountID {
+            keychainAvailable = ( try? tokenStore.load(accountID: accountID) ) != nil
+        } else {
+            keychainAvailable = false
+        }
+
+        let bundle: [String: Any] = [
+            "format": "floppy-mac-diagnostics-v1",
+            "created_at": ISO8601DateFormatter().string(from: Date()),
+            "app": [
+                "version": Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "dev",
+                "bundle_id": Bundle.main.bundleIdentifier ?? "unknown"
+            ],
+            "selected_account": [
+                "id": accountID ?? "",
+                "site_url": FloppyDiagnostics.redactedURL(account?.siteURL),
+                "rest_url": FloppyDiagnostics.redactedURL(account?.restURL),
+                "device_uuid": account?.deviceUUID ?? "",
+                "scope": account?.scope ?? "",
+                "last_cursor": account.map { String($0.lastCursor) } ?? "0",
+                "last_sync_at": account?.lastSyncAt.map { ISO8601DateFormatter().string(from: $0) } ?? ""
+            ],
+            "ledger": [
+                "path": ledger?.fileURL.path ?? "",
+                "accounts": accounts.count,
+                "items": items.count,
+                "pending_operations": await ledger?.pendingOperationCount(accountID: accountID) ?? 0,
+                "conflicts": await ledger?.conflictCount(accountID: accountID) ?? 0,
+                "active_enumerators": await ledger?.activeEnumeratorIdentifiers() ?? []
+            ],
+            "domains": (try? FloppyDomainRegistry.summaries()) ?? [],
+            "keychain": [
+                "available_for_selected_account": keychainAvailable,
+                "access_group_configured": KeychainTokenStore.defaultAccessGroup() != nil
+            ],
+            "onboarding": [
+                "step": String(describing: onboardingStep),
+                "has_pending_state": pendingOnboarding != nil,
+                "plugin_main_file": pluginMainFile
+            ],
+            "last_status": status
+        ]
+
+        let data = try JSONSerialization.data(withJSONObject: bundle, options: [.prettyPrinted, .sortedKeys])
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("FloppyDiagnostics", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let url = directory.appendingPathComponent("floppy-mac-diagnostics-\(Int(Date().timeIntervalSince1970)).json")
+        try data.write(to: url, options: [.atomic])
+        return url
+    }
+
     func disconnectSelectedAccount() {
         guard let account = selectedAccount else {
             return

@@ -21,13 +21,10 @@ mkdir -p "$DIST_DIR"
 mkdir -p "$TMP_DIR/floppy"
 
 rsync -a \
-    --exclude '.DS_Store' \
-    --exclude 'tests/load/*.jsonl' \
-    --exclude 'tests/load/*.sql' \
+    --exclude-from "$PLUGIN_DIR/.distignore" \
     "$PLUGIN_DIR/" "$TMP_DIR/floppy/"
 
 rm -f "$ZIP_PATH"
 (cd "$TMP_DIR" && zip -qr "$ZIP_PATH" floppy)
 
 echo "$ZIP_PATH"
-

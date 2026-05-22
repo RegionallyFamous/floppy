@@ -11,18 +11,44 @@ jobs:
   wordpress-plugin:
     name: WordPress Plugin
     runs-on: ubuntu-latest
+    services:
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_ALLOW_EMPTY_PASSWORD: yes
+          MYSQL_DATABASE: wordpress_test
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping --host=127.0.0.1 --user=root"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=5
+    env:
+      WP_CORE_DIR: /tmp/wordpress
+      WP_TESTS_DIR: /tmp/wordpress-tests-lib
     steps:
       - uses: actions/checkout@v4
       - uses: shivammathur/setup-php@v2
         with:
           php-version: "8.1"
+          extensions: mysqli, zip
+      - name: Install Composer dependencies
+        run: composer install --no-interaction --prefer-dist
       - name: PHP lint
-        run: find floppy -name '*.php' -not -path '*/vendor/*' -print0 | xargs -0 -n1 php -l
+        run: composer lint
+      - name: Install WordPress test suite
+        run: |
+          curl -fsSL https://raw.githubusercontent.com/wp-cli/scaffold-command/main/templates/install-wp-tests.sh \
+            | bash -s wordpress_test root '' 127.0.0.1:3306 latest true
+      - name: WordPress PHPUnit
+        run: composer test
       - name: Build plugin ZIP
         run: FloppyMac/Scripts/package-wordpress-plugin.sh
       - name: Validate plugin ZIP shape
         run: |
           unzip -l dist/floppy.zip | grep 'floppy/floppy.php'
+          ! unzip -l dist/floppy.zip | grep -E 'floppy/(vendor|tests/phpunit|composer\.json|composer\.lock|phpunit\.xml|\.github/)'
 
   mac:
     name: macOS App

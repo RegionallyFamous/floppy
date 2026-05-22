@@ -46,13 +46,21 @@ enum FileProviderDomainController {
             return
         }
 
+        let domainLedger = LocalLedger(appGroupIdentifier: FloppyDomainRegistry.appGroupIdentifier, domainIdentifier: record.domainIdentifier)
+		let activeIdentifiers = await domainLedger.activeEnumeratorIdentifiers()
+		await domainLedger.close()
+		var identifiers = [NSFileProviderItemIdentifier.workingSet]
+		identifiers.append(contentsOf: activeIdentifiers.map { NSFileProviderItemIdentifier($0) })
+
         do {
-            try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
-                manager.signalEnumerator(for: .workingSet) { error in
-                    if let error {
-                        continuation.resume(throwing: error)
-                    } else {
-                        continuation.resume()
+            for identifier in identifiers {
+                try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+                    manager.signalEnumerator(for: identifier) { error in
+                        if let error {
+                            continuation.resume(throwing: error)
+                        } else {
+                            continuation.resume()
+                        }
                     }
                 }
             }

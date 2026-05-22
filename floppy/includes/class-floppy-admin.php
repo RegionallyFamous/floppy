@@ -20,6 +20,8 @@ final class Floppy_Admin {
 		add_action( 'admin_notices', array( __CLASS__, 'admin_notices' ) );
 		add_action( 'admin_post_floppy_refresh_health', array( __CLASS__, 'refresh_health' ) );
 		add_action( 'admin_post_floppy_run_storage_probe', array( __CLASS__, 'run_storage_probe' ) );
+		add_action( 'admin_post_floppy_run_repair', array( __CLASS__, 'run_repair' ) );
+		add_action( 'admin_post_floppy_download_debug_bundle', array( __CLASS__, 'download_debug_bundle' ) );
 		add_action( 'admin_post_floppy_approve_device', array( __CLASS__, 'approve_device' ) );
 		add_filter( 'plugin_action_links_' . plugin_basename( FLOPPY_FILE ), array( __CLASS__, 'plugin_links' ) );
 	}
@@ -219,6 +221,23 @@ final class Floppy_Admin {
 						<input type="hidden" name="action" value="floppy_run_storage_probe" />
 						<?php submit_button( __( 'Run Private Storage Probe', 'floppy' ), 'secondary', 'submit', false ); ?>
 					</form>
+					<form method="post" action="<?php echo esc_url( admin_url( 'admin-post.php' ) ); ?>" class="floppy-admin-actions">
+						<?php wp_nonce_field( 'floppy_run_repair' ); ?>
+						<input type="hidden" name="action" value="floppy_run_repair" />
+						<input type="hidden" name="dry_run" value="1" />
+						<?php submit_button( __( 'Download Repair Dry Run', 'floppy' ), 'secondary', 'submit', false ); ?>
+					</form>
+					<form method="post" action="<?php echo esc_url( admin_url( 'admin-post.php' ) ); ?>" class="floppy-admin-actions">
+						<?php wp_nonce_field( 'floppy_run_repair' ); ?>
+						<input type="hidden" name="action" value="floppy_run_repair" />
+						<input type="hidden" name="apply" value="1" />
+						<?php submit_button( __( 'Run Safe Repairs', 'floppy' ), 'secondary', 'submit', false ); ?>
+					</form>
+					<form method="post" action="<?php echo esc_url( admin_url( 'admin-post.php' ) ); ?>" class="floppy-admin-actions">
+						<?php wp_nonce_field( 'floppy_download_debug_bundle' ); ?>
+						<input type="hidden" name="action" value="floppy_download_debug_bundle" />
+						<?php submit_button( __( 'Download Debug Bundle', 'floppy' ), 'secondary', 'submit', false ); ?>
+					</form>
 				</section>
 
 				<section class="floppy-admin-panel">
@@ -319,6 +338,112 @@ final class Floppy_Admin {
 
 		Floppy_Storage::direct_access_probe();
 		wp_safe_redirect( admin_url( 'admin.php?page=floppy&floppy-probed=1' ) );
+		exit;
+	}
+
+	/**
+	 * Run or dry-run repair tools and download the redacted report.
+	 */
+	public static function run_repair(): void {
+		check_admin_referer( 'floppy_run_repair' );
+		if ( ! current_user_can( 'manage_options' ) && ! current_user_can( Floppy_Permissions::CAP_MANAGE ) ) {
+			wp_die( esc_html__( 'Administrator access required.', 'floppy' ) );
+		}
+
+		$apply = ! empty( $_POST['apply'] ); // phpcs:ignore WordPress.Security.ValidatedSanitizedInput.InputNotSanitized
+		self::download_json(
+			'floppy-repair-' . ( $apply ? 'applied' : 'dry-run' ) . '-' . gmdate( 'Ymd-His' ) . '.json',
+			array(
+				'format'         => 'floppy-repair-report-v1',
+				'created_at_gmt' => current_time( 'mysql', true ),
+				'report'         => Floppy_Schema::repair( $apply ),
+			)
+		);
+	}
+
+	/**
+	 * Download a redacted support/debug bundle.
+	 */
+	public static function download_debug_bundle(): void {
+		check_admin_referer( 'floppy_download_debug_bundle' );
+		if ( ! current_user_can( 'manage_options' ) && ! current_user_can( Floppy_Permissions::CAP_MANAGE ) ) {
+			wp_die( esc_html__( 'Administrator access required.', 'floppy' ) );
+		}
+
+		self::download_json( 'floppy-debug-' . gmdate( 'Ymd-His' ) . '.json', self::debug_bundle() );
+	}
+
+	/**
+	 * Build a redacted debug bundle.
+	 */
+	private static function debug_bundle(): array {
+		global $wpdb;
+
+		$device_counts = $wpdb->get_results( 'SELECT status, COUNT(*) AS total FROM ' . Floppy_Schema::table( 'devices' ) . ' GROUP BY status', ARRAY_A ); // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared
+		$job_counts = $wpdb->get_results( 'SELECT status, COUNT(*) AS total FROM ' . Floppy_Schema::table( 'jobs' ) . ' GROUP BY status', ARRAY_A ); // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared
+		$audit_counts = $wpdb->get_results( 'SELECT action, COUNT(*) AS total FROM ' . Floppy_Schema::table( 'audit_log' ) . ' GROUP BY action ORDER BY total DESC LIMIT 25', ARRAY_A ); // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared
+		$settings = Floppy_Settings::get();
+
+		return array(
+			'format'         => 'floppy-debug-bundle-v1',
+			'created_at_gmt' => current_time( 'mysql', true ),
+			'plugin'         => array(
+				'version'    => FLOPPY_VERSION,
+				'db_version' => FLOPPY_DB_VERSION,
+				'namespace'  => Floppy_Rest::NAMESPACE,
+			),
+			'site'           => array(
+				'home_url'     => esc_url_raw( home_url( '/' ) ),
+				'rest_url'     => esc_url_raw( rest_url( Floppy_Rest::NAMESPACE ) ),
+				'is_ssl'       => is_ssl(),
+				'multisite'    => is_multisite(),
+				'php_version'  => PHP_VERSION,
+				'wp_version'   => get_bloginfo( 'version' ),
+			),
+			'compatibility'  => Floppy_Compatibility::summary(),
+			'schema'         => array(
+				'missing' => Floppy_Schema::validate(),
+				'repair'  => Floppy_Schema::repair( false ),
+			),
+			'desktop_mode'   => array(
+				'detected' => function_exists( 'desktop_mode_register_window' ),
+				'enabled'  => ! empty( $settings['enable_desktop_mode'] ),
+			),
+			'quotas'         => array(
+				'max_file_size'            => (int) ( $settings['max_file_size'] ?? wp_max_upload_size() ),
+				'max_batch_files'          => (int) ( $settings['max_batch_files'] ?? 50 ),
+				'user_quota_bytes'         => (int) ( $settings['user_quota_bytes'] ?? 0 ),
+				'site_quota_bytes'         => (int) ( $settings['site_quota_bytes'] ?? 0 ),
+				'sync_retention_days'      => (int) ( $settings['sync_retention_days'] ?? 45 ),
+				'tombstone_retention_days' => (int) ( $settings['tombstone_retention_days'] ?? 90 ),
+			),
+			'devices'        => self::keyed_counts( $device_counts, 'status' ),
+			'jobs'           => self::keyed_counts( $job_counts, 'status' ),
+			'audit_actions'  => self::keyed_counts( $audit_counts, 'action' ),
+		);
+	}
+
+	/**
+	 * Convert grouped count rows into a plain object.
+	 */
+	private static function keyed_counts( array $rows, string $key ): array {
+		$out = array();
+		foreach ( $rows as $row ) {
+			$out[ (string) $row[ $key ] ] = (int) $row['total'];
+		}
+		return $out;
+	}
+
+	/**
+	 * Send a JSON attachment with private-cache headers.
+	 */
+	private static function download_json( string $filename, array $data ): void {
+		nocache_headers();
+		header( 'Cache-Control: private, no-store, max-age=0' );
+		header( 'X-Content-Type-Options: nosniff' );
+		header( 'Content-Type: application/json; charset=utf-8' );
+		header( 'Content-Disposition: attachment; filename="' . str_replace( '"', '', $filename ) . '"' );
+		echo wp_json_encode( $data, JSON_PRETTY_PRINT ); // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped
 		exit;
 	}
 

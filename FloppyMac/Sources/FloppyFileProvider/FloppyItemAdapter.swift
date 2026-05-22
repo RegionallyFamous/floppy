@@ -37,6 +37,10 @@ final class FloppyFileProviderItem: NSObject, NSFileProviderItem {
 
     var capabilities: NSFileProviderItemCapabilities {
         var capabilities: NSFileProviderItemCapabilities = [.allowsReading]
+        if item.isLocalConflict {
+            capabilities.insert(.allowsDeleting)
+            return capabilities
+        }
         if item.status == "active" {
             capabilities.insert(.allowsWriting)
             capabilities.insert(.allowsRenaming)
@@ -88,6 +92,10 @@ extension FloppyItem {
 
     var fileProviderIdentifier: NSFileProviderItemIdentifier {
         id == 0 ? .rootContainer : NSFileProviderItemIdentifier(FloppyFileProviderIdentifierCodec.itemIdentifierRawValue(uuid: uuid))
+    }
+
+    var isLocalConflict: Bool {
+        uuid.hasPrefix("local-conflict-")
     }
 
     var parentFileProviderIdentifier: NSFileProviderItemIdentifier? {

@@ -6,6 +6,7 @@ FloppyMac/.build/
 FloppyMac/.swiftpm/
 DerivedData/
 dist/
+vendor/
 
 # Local editor and OS noise
 *.swp

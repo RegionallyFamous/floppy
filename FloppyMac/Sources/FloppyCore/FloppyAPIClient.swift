@@ -341,6 +341,34 @@ public struct FloppyAPIClient: Sendable {
         )
     }
 
+    public func createReplaceSession(
+        fileID: Int64,
+        contentVersion: String,
+        totalSize: Int64,
+        contentHash: String,
+        mimeType: String = "application/octet-stream"
+    ) async throws -> FloppyUploadSession {
+        struct Body: Encodable {
+            let contentVersion: String
+            let totalSize: Int64
+            let contentHash: String
+            let mimeType: String
+
+            enum CodingKeys: String, CodingKey {
+                case contentVersion = "content_version"
+                case totalSize = "total_size"
+                case contentHash = "content_hash"
+                case mimeType = "mime_type"
+            }
+        }
+
+        return try await request(
+            path: "files/\(fileID)/replace-sessions",
+            method: "POST",
+            body: Body(contentVersion: contentVersion, totalSize: totalSize, contentHash: contentHash, mimeType: mimeType)
+        )
+    }
+
     public func uploadFile(
         at fileURL: URL,
         filename: String,
@@ -348,18 +376,44 @@ public struct FloppyAPIClient: Sendable {
         mimeType: String = "application/octet-stream",
         progressHandler: ((Int64, Int64) -> Void)? = nil
     ) async throws -> FloppyItem {
-        let attributes = try FileManager.default.attributesOfItem(atPath: fileURL.path)
-        let fallbackSize = (attributes[.size] as? NSNumber)?.int64Value ?? 0
-        let totalSize = try fileURL.resourceValues(forKeys: [.fileSizeKey]).fileSize.map(Int64.init) ?? fallbackSize
-        let contentHash = try Self.sha256HexDigest(for: fileURL)
+        let totalSize = try Self.fileSize(for: fileURL)
         let uploadSession = try await createUploadSession(
             filename: filename,
             parentID: parentID,
             totalSize: totalSize,
-            contentHash: contentHash,
+            contentHash: try Self.sha256HexDigest(for: fileURL),
             mimeType: mimeType
         )
 
+        return try await uploadChunks(from: fileURL, session: uploadSession, totalSize: totalSize, progressHandler: progressHandler)
+    }
+
+    public func replaceFile(
+        id: Int64,
+        at fileURL: URL,
+        filename: String,
+        contentVersion: String,
+        mimeType: String = "application/octet-stream",
+        progressHandler: ((Int64, Int64) -> Void)? = nil
+    ) async throws -> FloppyItem {
+        let totalSize = try Self.fileSize(for: fileURL)
+        let uploadSession = try await createReplaceSession(
+            fileID: id,
+            contentVersion: contentVersion,
+            totalSize: totalSize,
+            contentHash: try Self.sha256HexDigest(for: fileURL),
+            mimeType: mimeType
+        )
+
+        return try await uploadChunks(from: fileURL, session: uploadSession, totalSize: totalSize, progressHandler: progressHandler)
+    }
+
+    private func uploadChunks(
+        from fileURL: URL,
+        session uploadSession: FloppyUploadSession,
+        totalSize: Int64,
+        progressHandler: ((Int64, Int64) -> Void)? = nil
+    ) async throws -> FloppyItem {
         let chunkSize = max(1, uploadSession.chunkSize)
         let handle = try FileHandle(forReadingFrom: fileURL)
         defer { try? handle.close() }
@@ -520,6 +574,12 @@ public struct FloppyAPIClient: Sendable {
         }
 
         return hasher.finalize().map { String(format: "%02x", $0) }.joined()
+    }
+
+    private static func fileSize(for fileURL: URL) throws -> Int64 {
+        let attributes = try FileManager.default.attributesOfItem(atPath: fileURL.path)
+        let fallbackSize = (attributes[.size] as? NSNumber)?.int64Value ?? 0
+        return try fileURL.resourceValues(forKeys: [.fileSizeKey]).fileSize.map(Int64.init) ?? fallbackSize
     }
 }
 
