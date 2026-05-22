@@ -6,7 +6,9 @@ Floppy is a Dropbox-like file service where the storage, metadata, permissions, 
 
 It is not trying to be another SaaS file silo. Floppy turns a WordPress install into a private, indexed, authenticated file system with a native macOS companion app. Files stay under your WordPress site, private by default, served through capability-checked endpoints, and synced through scoped device tokens.
 
-![Floppy icon](FloppyMac/Packaging/FloppyIcon.png)
+<p>
+  <img src="floppy/assets/images/floppy-icon-256.png" alt="Floppy icon" width="144">
+</p>
 
 ## Why This Is Exciting
 
@@ -195,4 +197,3 @@ The web keeps centralizing storage into services that are convenient until they 
 It is not just "Dropbox, but WordPress."
 
 It is a bet that people should be able to keep their files close to the websites, identities, and communities they already control.
-
