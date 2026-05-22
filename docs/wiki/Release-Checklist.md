@@ -2,8 +2,10 @@
 
 ## WordPress Plugin
 
+- Run `composer validate --strict`.
+- Run `composer audit:composer`.
 - Confirm `floppy/floppy.php` exists in the release ZIP.
-- Run PHP lint across all plugin files.
+- Run `composer lint:all` for PHP syntax, PHP compatibility, and WordPress API checks.
 - Run Composer PHPUnit integration tests against the WordPress test suite and MySQL.
 - Validate `.distignore` release ZIP shape so Composer, PHPUnit, GitHub, and test artifacts stay out of the plugin ZIP.
 - Run WordPress Plugin Check before WordPress.org submission.
@@ -14,8 +16,10 @@
 
 ## macOS App
 
-- Run Swift tests.
+- Run `swift package --package-path FloppyMac resolve`.
+- Run Swift build and tests with `-Xswiftc -warnings-as-errors`.
 - Run the Xcode doctor script.
+- Run `bash -n FloppyMac/Scripts/*.sh` and `shellcheck -x FloppyMac/Scripts/*.sh`.
 - Export a Mac diagnostics bundle from Settings and confirm tokens/query strings are redacted.
 - Verify File Provider extension embedding.
 - Verify App Group and File Provider entitlements.

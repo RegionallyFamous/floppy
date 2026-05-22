@@ -69,7 +69,7 @@ for file in "${required_files[@]}"; do
         echo "Missing required signing/extension file: $file" >&2
         exit 1
     fi
-    echo "ok ${file#$ROOT/}"
+    echo "ok ${file#"$ROOT"/}"
 done
 
 if ! /usr/libexec/PlistBuddy -c "Print :NSExtension:NSExtensionPointIdentifier" "$ROOT/Extension/Info.plist" | grep -q "com.apple.fileprovider-nonui"; then
@@ -78,7 +78,7 @@ if ! /usr/libexec/PlistBuddy -c "Print :NSExtension:NSExtensionPointIdentifier" 
 fi
 for entitlement in "$ROOT/Packaging/FloppyMac.entitlements" "$ROOT/Extension/FloppyFileProvider.entitlements"; do
     if ! grep -q "group.com.floppy.mac" "$entitlement"; then
-        echo "App Group group.com.floppy.mac is missing from ${entitlement#$ROOT/}." >&2
+        echo "App Group group.com.floppy.mac is missing from ${entitlement#"$ROOT"/}." >&2
         exit 1
     fi
 done

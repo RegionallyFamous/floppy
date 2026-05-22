@@ -3,17 +3,29 @@
   "description": "Freedom for your files: a WordPress-owned private file system with Finder-native sync.",
   "type": "wordpress-plugin",
   "license": "GPL-2.0-or-later",
-  "require": {},
   "require-dev": {
+    "dealerdirect/phpcodesniffer-composer-installer": "^1.0",
+    "phpcompatibility/phpcompatibility-wp": "^2.1",
     "phpunit/phpunit": "^9.6",
+    "squizlabs/php_codesniffer": "^3.10",
+    "wp-coding-standards/wpcs": "^3.1",
     "yoast/phpunit-polyfills": "^2.0"
   },
   "scripts": {
-    "lint": "find floppy -name '*.php' -not -path '*/vendor/*' -print0 | xargs -0 -n1 php -l",
+    "audit:composer": "composer audit --locked",
+    "lint": "find floppy tests/phpunit -name '*.php' -not -path '*/vendor/*' -print0 | xargs -0 -n1 php -l",
+    "lint:all": [
+      "@lint:php",
+      "@lint:phpcs"
+    ],
+    "lint:php": "find floppy tests/phpunit -name '*.php' -not -path '*/vendor/*' -print0 | xargs -0 -n1 php -l",
+    "lint:phpcs": "phpcs -q --report=summary --standard=phpcs.xml.dist",
     "test": "phpunit -c phpunit.xml.dist"
   },
   "config": {
-    "allow-plugins": false,
+    "allow-plugins": {
+      "dealerdirect/phpcodesniffer-composer-installer": true
+    },
     "platform": {
       "php": "8.1.34"
     },

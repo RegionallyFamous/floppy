@@ -8,6 +8,20 @@ on:
   pull_request:
 
 jobs:
+  repository-quality:
+    name: Repository Quality
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install shellcheck
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends shellcheck
+      - name: Validate shell scripts
+        run: |
+          find FloppyMac/Scripts -name '*.sh' -print0 | xargs -0 -n1 bash -n
+          find FloppyMac/Scripts -name '*.sh' -print0 | xargs -0 shellcheck -x
+
   wordpress-plugin:
     name: WordPress Plugin
     runs-on: ubuntu-latest
@@ -28,15 +42,19 @@ jobs:
       WP_CORE_DIR: /tmp/wordpress
       WP_TESTS_DIR: /tmp/wordpress-tests-lib
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: shivammathur/setup-php@v2
         with:
           php-version: "8.1"
           extensions: mysqli, zip
       - name: Install Composer dependencies
         run: composer install --no-interaction --prefer-dist
+      - name: Validate Composer metadata
+        run: composer validate --strict
+      - name: Composer security audit
+        run: composer audit:composer
       - name: PHP lint
-        run: composer lint
+        run: composer lint:all
       - name: Install WordPress test suite
         run: |
           curl -fsSL https://raw.githubusercontent.com/wp-cli/scaffold-command/main/templates/install-wp-tests.sh \
@@ -48,16 +66,18 @@ jobs:
       - name: Validate plugin ZIP shape
         run: |
           unzip -l dist/floppy.zip | grep 'floppy/floppy.php'
-          ! unzip -l dist/floppy.zip | grep -E 'floppy/(vendor|tests/phpunit|composer\.json|composer\.lock|phpunit\.xml|\.github/)'
+          ! unzip -l dist/floppy.zip | grep -E 'floppy/(vendor|tests|composer\.json|composer\.lock|phpunit\.xml|phpcs\.xml|\.github/|\.distignore)'
 
   mac:
     name: macOS App
     runs-on: macos-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
+      - name: Resolve Swift package
+        run: swift package --package-path FloppyMac resolve
       - name: Swift build
-        run: swift build --package-path FloppyMac
+        run: swift build --package-path FloppyMac -Xswiftc -warnings-as-errors
       - name: Swift tests
-        run: swift test --package-path FloppyMac
+        run: swift test --package-path FloppyMac -Xswiftc -warnings-as-errors
       - name: Xcode doctor
         run: FloppyMac/Scripts/xcode-doctor.sh
