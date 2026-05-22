@@ -10,6 +10,11 @@ if ( ! $_tests_dir ) {
 	$_tests_dir = '/tmp/wordpress-tests-lib';
 }
 
+$autoload = dirname( __DIR__, 2 ) . '/vendor/autoload.php';
+if ( file_exists( $autoload ) ) {
+	require_once $autoload;
+}
+
 require_once $_tests_dir . '/includes/functions.php';
 
 tests_add_filter(
