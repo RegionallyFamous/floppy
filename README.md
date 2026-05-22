@@ -1,10 +1,12 @@
 # Floppy
 
-**Your WordPress site, reborn as a private file drive.**
+**Freedom for your files.**
 
-Floppy is a Dropbox-like file service where the storage, metadata, permissions, sync feed, and device authorization live inside infrastructure you own: WordPress.
+Floppy is a private file drive that lives on infrastructure you own: WordPress.
 
-It is not trying to be another SaaS file silo. Floppy turns a WordPress install into a private, indexed, authenticated file system with a native macOS companion app. Files stay under your WordPress site, private by default, served through capability-checked endpoints, and synced through scoped device tokens.
+Own your data. Get rid of the SaaS lock-in. Let WordPress set your files free.
+
+Floppy is not trying to be another cloud storage silo. It turns a WordPress install into a private, indexed, authenticated file system with a native macOS companion app. Files stay under your WordPress site, private by default, served through capability-checked endpoints, and synced through scoped device tokens.
 
 <p>
   <img src="floppy/assets/images/floppy-icon-256.png" alt="Floppy icon" width="144">
@@ -27,6 +29,8 @@ That makes Floppy different:
 - **Built for scale from the start**: Floppy uses custom indexed tables for file-system metadata instead of forcing huge folder queries through Media Library attachment tables.
 
 Floppy is the old-web idea of ownership, dressed up with modern sync semantics.
+
+Read the fuller positioning in [`MARKETING.md`](MARKETING.md).
 
 ## Repository Contents
 
