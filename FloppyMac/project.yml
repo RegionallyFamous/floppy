@@ -1,0 +1,46 @@
+name: FloppyMac
+
+options:
+  bundleIdPrefix: com.floppy
+  deploymentTarget:
+    macOS: "14.0"
+
+settings:
+  base:
+    SWIFT_VERSION: "5.10"
+    MACOSX_DEPLOYMENT_TARGET: "14.0"
+    CODE_SIGN_STYLE: Manual
+    DEVELOPMENT_TEAM: "$(DEVELOPMENT_TEAM)"
+    OTHER_LDFLAGS:
+      - "-lsqlite3"
+
+targets:
+  FloppyMac:
+    type: application
+    platform: macOS
+    sources:
+      - path: Sources/FloppyMac
+      - path: Sources/FloppyCore
+    resources:
+      - path: Packaging/FloppyIcon.icns
+    dependencies:
+      - target: FloppyFileProviderExtension
+        embed: true
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.floppy.mac
+        INFOPLIST_FILE: Packaging/Info.plist
+        CODE_SIGN_ENTITLEMENTS: Packaging/FloppyMac.entitlements
+
+  FloppyFileProviderExtension:
+    type: app-extension
+    platform: macOS
+    sources:
+      - path: Sources/FloppyFileProvider
+      - path: Sources/FloppyCore
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.floppy.mac.FileProvider
+        INFOPLIST_FILE: Extension/Info.plist
+        CODE_SIGN_ENTITLEMENTS: Extension/FloppyFileProvider.entitlements
+        SKIP_INSTALL: "YES"

@@ -6,6 +6,9 @@ enum FileProviderDomainController {
     static func register(account: FloppyAccount) async throws {
         let record = FloppyDomainRegistry.record(for: account)
         try FloppyDomainRegistry.save(record)
+        let domainLedger = LocalLedger(appGroupIdentifier: FloppyDomainRegistry.appGroupIdentifier, domainIdentifier: record.domainIdentifier)
+        try await domainLedger.upsert(account: account)
+        await domainLedger.close()
 
         let domain = NSFileProviderDomain(
             identifier: NSFileProviderDomainIdentifier(record.domainIdentifier),
@@ -29,6 +32,33 @@ enum FileProviderDomainController {
                     continuation.resume()
                 }
             }
+        }
+    }
+
+    static func signal(account: FloppyAccount) async {
+        let record = FloppyDomainRegistry.record(for: account)
+        let domain = NSFileProviderDomain(
+            identifier: NSFileProviderDomainIdentifier(record.domainIdentifier),
+            displayName: record.displayName
+        )
+
+        guard let manager = NSFileProviderManager(for: domain) else {
+            return
+        }
+
+        do {
+            try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+                manager.signalEnumerator(for: .workingSet) { error in
+                    if let error {
+                        continuation.resume(throwing: error)
+                    } else {
+                        continuation.resume()
+                    }
+                }
+            }
+            FloppyDiagnostics.fileProvider.info("Signaled File Provider working set for \(record.domainIdentifier, privacy: .public)")
+        } catch {
+            FloppyDiagnostics.fileProvider.error("File Provider signal failed: \(error.localizedDescription, privacy: .public)")
         }
     }
 

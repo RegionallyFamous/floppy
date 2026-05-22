@@ -128,8 +128,14 @@ final class FloppyFileProviderExtension: NSObject, NSFileProviderReplicatedExten
                 if itemTemplate.contentType == .folder {
                     item = try await apiClient.createFolder(name: itemTemplate.filename, parentID: parentID)
                 } else if let url {
-                    let data = try Data(contentsOf: url)
-                    item = try await apiClient.upload(data: data, filename: itemTemplate.filename, parentID: parentID, mimeType: itemTemplate.contentType?.preferredMIMEType ?? "application/octet-stream")
+                    item = try await apiClient.uploadFile(
+                        at: url,
+                        filename: itemTemplate.filename,
+                        parentID: parentID,
+                        mimeType: itemTemplate.contentType?.preferredMIMEType ?? "application/octet-stream"
+                    ) { sent, total in
+                        progress.completedUnitCount = total > 0 ? min(Int64(99), Int64(Double(sent) / Double(total) * 99.0)) : 0
+                    }
                 } else {
                     throw NSFileProviderError(.cannotSynchronize)
                 }
@@ -233,12 +239,12 @@ final class FloppyFileProviderExtension: NSObject, NSFileProviderReplicatedExten
 
                 if item.kind == .folder {
                     if options.contains(.recursive) {
-                        try await apiClient.deleteFolder(id: item.id)
+                        try await apiClient.deleteFolder(id: item.id, metadataVersion: version.floppyMetadataVersion)
                     } else {
                         try await apiClient.trashFolder(id: item.id, metadataVersion: version.floppyMetadataVersion)
                     }
                 } else if options.contains(.recursive) {
-                    try await apiClient.deleteFile(id: item.id)
+                    try await apiClient.deleteFile(id: item.id, metadataVersion: version.floppyMetadataVersion)
                 } else {
                     try await apiClient.trashFile(id: item.id, metadataVersion: version.floppyMetadataVersion)
                 }
@@ -284,6 +290,10 @@ final class FloppyFileProviderExtension: NSObject, NSFileProviderReplicatedExten
     private func parentIdentifier(for item: FloppyItem) async -> NSFileProviderItemIdentifier {
         guard item.parentID != 0 else {
             return .rootContainer
+        }
+
+        if let parentUUID = item.parentUUID, !parentUUID.isEmpty {
+            return NSFileProviderItemIdentifier(FloppyFileProviderIdentifierCodec.itemIdentifierRawValue(uuid: parentUUID))
         }
 
         if let parent = await ledger.item(id: item.parentID) {

@@ -54,10 +54,39 @@ echo "File Provider source target:"
 run_xcode_command swift build --package-path "$ROOT" --target FloppyFileProvider
 echo
 
+echo "Signing-ready assets:"
+required_files=(
+    "$ROOT/Packaging/Info.plist"
+    "$ROOT/Packaging/FloppyMac.entitlements"
+    "$ROOT/Packaging/FloppyIcon.icns"
+    "$ROOT/Extension/Info.plist"
+    "$ROOT/Extension/FloppyFileProvider.entitlements"
+    "$ROOT/Sources/FloppyFileProvider/FloppyFileProviderExtension.swift"
+    "$ROOT/project.yml"
+)
+for file in "${required_files[@]}"; do
+    if [[ ! -f "$file" ]]; then
+        echo "Missing required signing/extension file: $file" >&2
+        exit 1
+    fi
+    echo "ok ${file#$ROOT/}"
+done
+
+if ! /usr/libexec/PlistBuddy -c "Print :NSExtension:NSExtensionPointIdentifier" "$ROOT/Extension/Info.plist" | grep -q "com.apple.fileprovider-nonui"; then
+    echo "Extension/Info.plist is not configured as a non-UI File Provider extension." >&2
+    exit 1
+fi
+for entitlement in "$ROOT/Packaging/FloppyMac.entitlements" "$ROOT/Extension/FloppyFileProvider.entitlements"; do
+    if ! grep -q "group.com.floppy.mac" "$entitlement"; then
+        echo "App Group group.com.floppy.mac is missing from ${entitlement#$ROOT/}." >&2
+        exit 1
+    fi
+done
+echo
+
 echo "Next Xcode steps:"
-echo "1. Open FloppyMac/Package.swift in Xcode."
-echo "2. Add a macOS File Provider extension app-extension target."
-echo "3. Add Sources/FloppyFileProvider/*.swift to that extension target."
-echo "4. Use Extension/Info.plist and Extension/FloppyFileProvider.entitlements."
-echo "5. Set a real Team ID, App Group, and Keychain access group before signing."
-echo "6. Use Scripts/archive-notarize.sh from that Xcode project/workspace for Developer ID export and notarization."
+echo "1. Generate the project with: cd FloppyMac && xcodegen generate"
+echo "2. Open FloppyMac.xcodeproj and set a real Team ID."
+echo "3. Confirm the app embeds the File Provider extension target."
+echo "4. Confirm App Group and Keychain access group match across both targets."
+echo "5. Use Scripts/archive-notarize.sh from that Xcode project/workspace for Developer ID export and notarization."

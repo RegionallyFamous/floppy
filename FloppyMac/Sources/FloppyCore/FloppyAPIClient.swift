@@ -1,4 +1,5 @@
 import Foundation
+import CryptoKit
 
 public enum FloppyAPIError: Error, Equatable, LocalizedError {
     case invalidSiteURL
@@ -272,16 +273,28 @@ public struct FloppyAPIClient: Sendable {
         let _: EmptyResponse = try await request(path: "folders/\(id)/trash", method: "POST", body: Body(metadataVersion: metadataVersion))
     }
 
-    public func deleteFile(id: Int64) async throws {
-        let request = try makeRequest(path: "files/\(id)", method: "DELETE")
-        let (data, response) = try await session.data(for: request)
-        try validate(response: response, data: data)
+    public func deleteFile(id: Int64, metadataVersion: String) async throws {
+        struct Body: Encodable {
+            let metadataVersion: String
+
+            enum CodingKeys: String, CodingKey {
+                case metadataVersion = "metadata_version"
+            }
+        }
+
+        let _: EmptyResponse = try await request(path: "files/\(id)", method: "DELETE", body: Body(metadataVersion: metadataVersion))
     }
 
-    public func deleteFolder(id: Int64) async throws {
-        let request = try makeRequest(path: "folders/\(id)", method: "DELETE")
-        let (data, response) = try await session.data(for: request)
-        try validate(response: response, data: data)
+    public func deleteFolder(id: Int64, metadataVersion: String) async throws {
+        struct Body: Encodable {
+            let metadataVersion: String
+
+            enum CodingKeys: String, CodingKey {
+                case metadataVersion = "metadata_version"
+            }
+        }
+
+        let _: EmptyResponse = try await request(path: "folders/\(id)", method: "DELETE", body: Body(metadataVersion: metadataVersion))
     }
 
     public func upload(data: Data, filename: String, parentID: Int64 = 0, mimeType: String = "application/octet-stream") async throws -> FloppyItem {
@@ -296,6 +309,86 @@ public struct FloppyAPIClient: Sendable {
         request.httpBody = body
 
         return try await decode(session.data(for: request))
+    }
+
+    public func createUploadSession(
+        filename: String,
+        parentID: Int64 = 0,
+        totalSize: Int64,
+        contentHash: String,
+        mimeType: String = "application/octet-stream"
+    ) async throws -> FloppyUploadSession {
+        struct Body: Encodable {
+            let filename: String
+            let parentID: Int64
+            let totalSize: Int64
+            let contentHash: String
+            let mimeType: String
+
+            enum CodingKeys: String, CodingKey {
+                case filename
+                case parentID = "parent_id"
+                case totalSize = "total_size"
+                case contentHash = "content_hash"
+                case mimeType = "mime_type"
+            }
+        }
+
+        return try await request(
+            path: "upload-sessions",
+            method: "POST",
+            body: Body(filename: filename, parentID: parentID, totalSize: totalSize, contentHash: contentHash, mimeType: mimeType)
+        )
+    }
+
+    public func uploadFile(
+        at fileURL: URL,
+        filename: String,
+        parentID: Int64 = 0,
+        mimeType: String = "application/octet-stream",
+        progressHandler: ((Int64, Int64) -> Void)? = nil
+    ) async throws -> FloppyItem {
+        let attributes = try FileManager.default.attributesOfItem(atPath: fileURL.path)
+        let fallbackSize = (attributes[.size] as? NSNumber)?.int64Value ?? 0
+        let totalSize = try fileURL.resourceValues(forKeys: [.fileSizeKey]).fileSize.map(Int64.init) ?? fallbackSize
+        let contentHash = try Self.sha256HexDigest(for: fileURL)
+        let uploadSession = try await createUploadSession(
+            filename: filename,
+            parentID: parentID,
+            totalSize: totalSize,
+            contentHash: contentHash,
+            mimeType: mimeType
+        )
+
+        let chunkSize = max(1, uploadSession.chunkSize)
+        let handle = try FileHandle(forReadingFrom: fileURL)
+        defer { try? handle.close() }
+
+        var offset = uploadSession.receivedBytes
+        try handle.seek(toOffset: UInt64(offset))
+        while offset < totalSize {
+            try Task.checkCancellation()
+            guard let chunk = try handle.read(upToCount: min(chunkSize, Int(totalSize - offset))), !chunk.isEmpty else {
+                break
+            }
+            let response = try await appendUploadChunk(sessionUUID: uploadSession.sessionUUID, chunk: chunk, offset: offset)
+            offset = response.receivedBytes
+            progressHandler?(offset, totalSize)
+        }
+
+        return try await completeUploadSession(sessionUUID: uploadSession.sessionUUID)
+    }
+
+    private func appendUploadChunk(sessionUUID: String, chunk: Data, offset: Int64) async throws -> FloppyUploadProgress {
+        var request = try makeRequest(path: "upload-sessions/\(sessionUUID)/chunk", method: "POST")
+        request.setValue("application/octet-stream", forHTTPHeaderField: "Content-Type")
+        request.setValue(String(offset), forHTTPHeaderField: "X-Floppy-Offset")
+        request.httpBody = chunk
+        return try await decode(session.data(for: request))
+    }
+
+    public func completeUploadSession(sessionUUID: String) async throws -> FloppyItem {
+        return try await request(path: "upload-sessions/\(sessionUUID)/complete", method: "POST", body: EmptyRequestBody())
     }
 
     public func replaceFile(id: Int64, data: Data, filename: String, contentVersion: String, mimeType: String = "application/octet-stream") async throws -> FloppyItem {
@@ -416,6 +509,18 @@ public struct FloppyAPIClient: Sendable {
             throw FloppyAPIError.httpStatus(http.statusCode, message)
         }
     }
+
+    private static func sha256HexDigest(for fileURL: URL) throws -> String {
+        let handle = try FileHandle(forReadingFrom: fileURL)
+        defer { try? handle.close() }
+
+        var hasher = SHA256()
+        while let data = try handle.read(upToCount: 1024 * 1024), !data.isEmpty {
+            hasher.update(data: data)
+        }
+
+        return hasher.finalize().map { String(format: "%02x", $0) }.joined()
+    }
 }
 
 private extension URL {
@@ -484,6 +589,10 @@ extension FloppyAPIClient {
 
         if let code = items["code"], !code.isEmpty {
             return FloppyDeviceApproval(siteURL: site, deviceUUID: "", token: "", scope: "", state: items["state"] ?? "", exchangeCode: code)
+        }
+
+        guard ProcessInfo.processInfo.environment["FLOPPY_ALLOW_RAW_DEVICE_TOKEN_CALLBACK"] == "1" else {
+            throw FloppyAPIError.invalidResponse
         }
 
         guard let deviceUUID = items["device_uuid"], let token = items["token"], let scope = items["scope"] else {

@@ -124,6 +124,10 @@ final class FloppyFileProviderEnumerator: NSObject, NSFileProviderEnumerator {
             return .rootContainer
         }
 
+        if let parentUUID = item.parentUUID, !parentUUID.isEmpty {
+            return NSFileProviderItemIdentifier(FloppyFileProviderIdentifierCodec.itemIdentifierRawValue(uuid: parentUUID))
+        }
+
         if let parent = await ledger.item(id: item.parentID) {
             return parent.fileProviderIdentifier
         }

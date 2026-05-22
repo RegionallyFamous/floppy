@@ -49,7 +49,16 @@ final class Floppy_Sync {
 		$limit = max( 1, min( 500, $limit ) );
 		$min_cursor = self::oldest_cursor();
 		if ( $cursor > 0 && $min_cursor > 0 && $cursor < $min_cursor ) {
-			return new WP_Error( 'floppy_sync_anchor_expired', __( 'The sync cursor has expired. A full re-enumeration is required.', 'floppy' ), array( 'status' => 409, 'min_cursor' => $min_cursor ) );
+			return new WP_Error(
+				'floppy_sync_anchor_expired',
+				__( 'The sync cursor has expired. A full re-enumeration is required.', 'floppy' ),
+				array(
+					'status'                => 410,
+					'min_cursor'            => $min_cursor,
+					'full_resync_required'  => true,
+					'client_recovery_hint'  => 'reenumerate',
+				)
+			);
 		}
 
 		$rows = $wpdb->get_results(
@@ -222,6 +231,7 @@ final class Floppy_Sync {
 				'uuid'             => (string) $payload['uuid'],
 				'owner_id'         => (int) ( $payload['owner_id'] ?? 0 ),
 				'parent_id'        => (int) ( $payload['parent_id'] ?? 0 ),
+				'parent_uuid'      => (string) ( $payload['parent_uuid'] ?? Floppy_Rest::parent_uuid_for( (int) ( $payload['parent_id'] ?? 0 ) ) ),
 				'name'             => (string) $payload['name'],
 				'metadata_version' => (string) ( $payload['metadata_version'] ?? '' ),
 				'status'           => (string) ( $payload['status'] ?? 'active' ),
@@ -242,7 +252,7 @@ final class Floppy_Sync {
 			return $item;
 		}
 
-		$allowed = array( 'target_type', 'target_id', 'principal_type', 'principal_ref', 'capability', 'uuid', 'reason' );
+		$allowed = array( 'target_type', 'target_id', 'principal_type', 'principal_ref', 'capability', 'uuid', 'parent_uuid', 'reason' );
 		return array_intersect_key( $payload, array_fill_keys( $allowed, true ) );
 	}
 

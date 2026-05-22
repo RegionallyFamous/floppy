@@ -43,7 +43,7 @@ NOTARY_PROFILE=floppy-notary \
 FloppyMac/Scripts/archive-notarize.sh
 ```
 
-See `docs/archive-sign-notarize.md` for the export options, notarytool setup, and manual verification commands.
+See `docs/xcode-signing-ready.md` for target setup and `docs/archive-sign-notarize.md` for export options, notarytool setup, and manual verification commands.
 
 ## Package The WordPress Plugin ZIP
 

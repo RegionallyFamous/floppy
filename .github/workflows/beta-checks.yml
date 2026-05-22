@@ -1,0 +1,37 @@
+name: Floppy Beta Checks
+
+on:
+  push:
+    branches:
+      - main
+      - "codex/**"
+  pull_request:
+
+jobs:
+  wordpress-plugin:
+    name: WordPress Plugin
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: "8.1"
+      - name: PHP lint
+        run: find floppy -name '*.php' -not -path '*/vendor/*' -print0 | xargs -0 -n1 php -l
+      - name: Build plugin ZIP
+        run: FloppyMac/Scripts/package-wordpress-plugin.sh
+      - name: Validate plugin ZIP shape
+        run: |
+          unzip -l dist/floppy.zip | grep 'floppy/floppy.php'
+
+  mac:
+    name: macOS App
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Swift build
+        run: swift build --package-path FloppyMac
+      - name: Swift tests
+        run: swift test --package-path FloppyMac
+      - name: Xcode doctor
+        run: FloppyMac/Scripts/xcode-doctor.sh

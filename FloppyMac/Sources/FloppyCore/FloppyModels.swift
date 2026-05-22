@@ -166,6 +166,7 @@ public struct FloppyItem: Codable, Equatable, Identifiable, Sendable {
     public let attachmentID: Int64?
     public let ownerID: Int64
     public let parentID: Int64
+    public let parentUUID: String?
     public let name: String
     public let mimeType: String?
     public let sizeBytes: Int64?
@@ -185,6 +186,7 @@ public struct FloppyItem: Codable, Equatable, Identifiable, Sendable {
         case attachmentID = "attachment_id"
         case ownerID = "owner_id"
         case parentID = "parent_id"
+        case parentUUID = "parent_uuid"
         case name
         case mimeType = "mime_type"
         case sizeBytes = "size_bytes"
@@ -205,6 +207,7 @@ public struct FloppyItem: Codable, Equatable, Identifiable, Sendable {
         attachmentID: Int64? = nil,
         ownerID: Int64,
         parentID: Int64,
+        parentUUID: String? = nil,
         name: String,
         mimeType: String? = nil,
         sizeBytes: Int64? = nil,
@@ -223,6 +226,7 @@ public struct FloppyItem: Codable, Equatable, Identifiable, Sendable {
         self.attachmentID = attachmentID
         self.ownerID = ownerID
         self.parentID = parentID
+        self.parentUUID = parentUUID
         self.name = name
         self.mimeType = mimeType
         self.sizeBytes = sizeBytes
@@ -310,6 +314,7 @@ public struct FloppyChange: Codable, Equatable, Identifiable, Sendable {
     public let targetType: String
     public let targetID: Int64
     public let parentID: Int64
+    public let parentUUID: String?
     public let metadataVersion: String
     public let contentVersion: String
     public let createdAtGMT: String
@@ -322,6 +327,7 @@ public struct FloppyChange: Codable, Equatable, Identifiable, Sendable {
         case targetType = "target_type"
         case targetID = "target_id"
         case parentID = "parent_id"
+        case parentUUID = "parent_uuid"
         case metadataVersion = "metadata_version"
         case contentVersion = "content_version"
         case createdAtGMT = "created_at_gmt"
@@ -456,4 +462,26 @@ public struct FloppyDevice: Codable, Equatable, Identifiable, Sendable {
 
 public struct FloppyDeviceList: Codable, Equatable, Sendable {
     public let devices: [FloppyDevice]
+}
+
+public struct FloppyUploadSession: Codable, Equatable, Sendable {
+    public let sessionUUID: String
+    public let receivedBytes: Int64
+    public let chunkSize: Int
+    public let expiresAtGMT: String
+
+    enum CodingKeys: String, CodingKey {
+        case sessionUUID = "session_uuid"
+        case receivedBytes = "received_bytes"
+        case chunkSize = "chunk_size"
+        case expiresAtGMT = "expires_at_gmt"
+    }
+}
+
+public struct FloppyUploadProgress: Codable, Equatable, Sendable {
+    public let receivedBytes: Int64
+
+    enum CodingKeys: String, CodingKey {
+        case receivedBytes = "received_bytes"
+    }
 }

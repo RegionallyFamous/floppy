@@ -54,16 +54,15 @@ import Testing
     }
 }
 
-@Test func parsesApprovalCallback() throws {
+@Test func rejectsRawTokenApprovalCallbackByDefault() throws {
     let url = URL(string: "floppy://device-approved?site=https%3A%2F%2Fexample.com&device_uuid=dev-1&token=flp_secret&scope=files%3Aread%2Cfiles%3Awrite%2Csync&state=abc")!
-    let approval = try FloppyAPIClient.parseApprovalCallback(url)
-
-    #expect(approval.siteURL.absoluteString == "https://example.com")
-    #expect(approval.deviceUUID == "dev-1")
-    #expect(approval.token == "flp_secret")
-    #expect(approval.scope == "files:read,files:write,sync")
-    #expect(approval.state == "abc")
-    #expect(approval.requiresCodeExchange == false)
+    do {
+        _ = try FloppyAPIClient.parseApprovalCallback(url)
+        Issue.record("Expected raw device-token callbacks to be rejected by default.")
+    } catch FloppyAPIError.invalidResponse {
+    } catch {
+        Issue.record("Expected invalid response, got \(error).")
+    }
 }
 
 @Test func parsesDeviceCodeApprovalCallback() throws {
@@ -85,6 +84,7 @@ import Testing
       "attachment_id": 44,
       "owner_id": 1,
       "parent_id": 0,
+      "parent_uuid": "",
       "name": "hello.txt",
       "mime_type": "text/plain",
       "size_bytes": 5,
@@ -102,7 +102,23 @@ import Testing
     let item = try JSONDecoder.floppy.decode(FloppyItem.self, from: json)
     #expect(item.kind == .file)
     #expect(item.name == "hello.txt")
+    #expect(item.parentUUID == "")
     #expect(item.downloadURL?.path.contains("/floppy/v1/files/12/download") == true)
+}
+
+@Test func decodesUploadSession() throws {
+    let json = """
+    {
+      "session_uuid": "session-uuid",
+      "received_bytes": 0,
+      "chunk_size": 8388608,
+      "expires_at_gmt": "2026-05-23 00:00:00"
+    }
+    """.data(using: .utf8)!
+
+    let session = try JSONDecoder.floppy.decode(FloppyUploadSession.self, from: json)
+    #expect(session.sessionUUID == "session-uuid")
+    #expect(session.chunkSize == 8_388_608)
 }
 
 @Test func fileProviderIdentifierCodecUsesStableUUIDs() throws {

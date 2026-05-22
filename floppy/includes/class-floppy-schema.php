@@ -85,6 +85,21 @@ final class Floppy_Schema {
 			KEY updated_id (updated_at_gmt,id)
 		) $charset;";
 
+		$sql[] = 'CREATE TABLE ' . self::table( 'item_names' ) . " (
+			id bigint(20) unsigned NOT NULL AUTO_INCREMENT,
+			parent_id bigint(20) unsigned DEFAULT 0 NOT NULL,
+			normalized_name varchar(255) NOT NULL,
+			target_type varchar(20) NOT NULL,
+			target_id bigint(20) unsigned NOT NULL,
+			status varchar(20) NOT NULL DEFAULT 'active',
+			created_at_gmt datetime NOT NULL,
+			updated_at_gmt datetime NOT NULL,
+			PRIMARY KEY  (id),
+			UNIQUE KEY live_name (parent_id,normalized_name(120),status),
+			UNIQUE KEY target_lookup (target_type,target_id),
+			KEY parent_lookup (parent_id,status)
+		) $charset;";
+
 		$sql[] = 'CREATE TABLE ' . self::table( 'acl_grants' ) . " (
 			id bigint(20) unsigned NOT NULL AUTO_INCREMENT,
 			target_type varchar(20) NOT NULL,
@@ -231,7 +246,7 @@ final class Floppy_Schema {
 		global $wpdb;
 
 		$missing = array();
-		foreach ( array( 'files', 'folders', 'acl_grants', 'sync_events', 'devices', 'upload_sessions', 'tombstones', 'audit_log', 'jobs' ) as $name ) {
+		foreach ( array( 'files', 'folders', 'item_names', 'acl_grants', 'sync_events', 'devices', 'upload_sessions', 'tombstones', 'audit_log', 'jobs' ) as $name ) {
 			$table = self::table( $name );
 			$found = $wpdb->get_var( $wpdb->prepare( 'SHOW TABLES LIKE %s', $table ) );
 			if ( $found !== $table ) {
@@ -264,6 +279,7 @@ final class Floppy_Schema {
 		$indexes = array(
 			'files'           => array( 'uuid', 'parent_status_id', 'normalized_status_id', 'updated_id', 'content_hash' ),
 			'folders'         => array( 'uuid', 'parent_status_id', 'normalized_status_id', 'updated_id' ),
+			'item_names'      => array( 'live_name', 'target_lookup', 'parent_lookup' ),
 			'acl_grants'      => array( 'target_principal', 'principal_lookup', 'target_lookup' ),
 			'sync_events'     => array( 'event_uuid', 'target_lookup', 'actor_seq', 'parent_seq' ),
 			'devices'         => array( 'device_uuid', 'token_hash', 'user_status', 'last_seen' ),

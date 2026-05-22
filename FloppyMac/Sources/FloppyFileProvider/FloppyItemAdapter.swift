@@ -91,7 +91,10 @@ extension FloppyItem {
     }
 
     var parentFileProviderIdentifier: NSFileProviderItemIdentifier? {
-        parentID == 0 ? nil : NSFileProviderItemIdentifier(FloppyFileProviderIdentifierCodec.legacyItemIdentifierRawValue(id: parentID))
+        if let parentUUID, !parentUUID.isEmpty {
+            return NSFileProviderItemIdentifier(FloppyFileProviderIdentifierCodec.itemIdentifierRawValue(uuid: parentUUID))
+        }
+        return parentID == 0 ? nil : NSFileProviderItemIdentifier(FloppyFileProviderIdentifierCodec.legacyItemIdentifierRawValue(id: parentID))
     }
 
     var createdAt: Date? {

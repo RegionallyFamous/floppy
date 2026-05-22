@@ -366,6 +366,7 @@ final class FloppyAppModel: ObservableObject {
             try await ledger?.record(changeFeed: changes, accountID: account.id)
             accounts = await ledger?.accounts() ?? accounts
             items = await ledger?.items(accountID: account.id) ?? items
+            await FileProviderDomainController.signal(account: account)
             status = "Synced \(changes.events.count) changes. Cursor \(changes.nextCursor)."
         } catch {
             status = error.localizedDescription
