@@ -1,0 +1,425 @@
+import AppKit
+import FloppyCore
+import Foundation
+import SwiftUI
+
+@MainActor
+final class FloppyAppModel: ObservableObject {
+    @Published var siteURLText: String = ""
+    @Published var deviceName: String = Host.current().localizedName ?? "Mac"
+    @Published var accounts: [FloppyAccount] = []
+    @Published var selectedAccountID: String?
+    @Published var items: [FloppyItem] = []
+    @Published var health: FloppyHealthSummary?
+    @Published var status: String = "Ready"
+    @Published var isWorking = false
+    @Published var onboardingStep: FloppyOnboardingStep = .idle
+    @Published var pluginMainFile: String = "floppy/floppy.php"
+    @Published var githubPluginZipURLText: String = ""
+
+    private let tokenStore: FloppyTokenStore = KeychainTokenStore.default()
+    private var ledger: LocalLedger?
+    private var pendingOnboarding: PendingOnboarding?
+
+    init() {
+        Task { await load() }
+    }
+
+    func load() async {
+        let ledger = LocalLedger()
+        self.ledger = ledger
+        accounts = await ledger.accounts()
+        selectedAccountID = accounts.first?.id
+        await refreshSelectedAccount()
+    }
+
+    func startBrowserApproval() {
+        guard let siteURL = URL.floppySiteURL(from: siteURLText), siteURL.host != nil else {
+            status = "Enter a valid WordPress site URL."
+            return
+        }
+
+        guard siteURL.normalizedScheme == "https" else {
+            status = "Use an HTTPS WordPress site URL."
+            return
+        }
+
+        let state = UUID().uuidString
+        let normalizedSiteURL = siteURL.normalizedForDisplay
+        pendingOnboarding = PendingOnboarding(siteURL: normalizedSiteURL, state: state)
+        onboardingStep = .waitingForWordPressAuthorization
+
+        Task {
+            do {
+                let discoveryClient = FloppyAPIClient(siteURL: normalizedSiteURL)
+                let root = try await discoveryClient.wordPressRESTRoot()
+                guard let authorizationURL = root.authentication?.applicationPasswords?.endpoints.authorization else {
+                    status = "This site does not expose WordPress Application Password authorization over HTTPS."
+                    onboardingStep = .failed
+                    return
+                }
+
+                NSWorkspace.shared.open(FloppyAPIClient.applicationPasswordAuthorizationURL(siteURL: normalizedSiteURL, authorizationURL: authorizationURL, state: state, deviceName: deviceName))
+                status = "Opened WordPress. Approve Floppy so it can finish the GitHub install."
+            } catch {
+                status = error.localizedDescription
+                onboardingStep = .failed
+            }
+        }
+    }
+
+    func handleCallback(_ url: URL) {
+        Task {
+            do {
+                if url.host == "wordpress-rejected" {
+                    let rejectedState = try FloppyAPIClient.parseRejectionCallback(url)
+                    guard let pendingOnboarding, pendingOnboarding.matches(state: rejectedState) else {
+                        status = "Ignored a stale Floppy connection rejection."
+                        return
+                    }
+                    self.pendingOnboarding = nil
+                    onboardingStep = .failed
+                    status = "WordPress connection was cancelled."
+                    return
+                }
+
+                if url.host == "wordpress-authorized" {
+                    let credential = try FloppyAPIClient.parseApplicationPasswordCallback(url)
+                    try validatePendingOnboarding(state: credential.state, siteURL: credential.siteURL)
+                    await finishApplicationPasswordOnboarding(credential)
+                    return
+                }
+
+                if url.host == "device-approved" {
+                    let approval = try FloppyAPIClient.parseApprovalCallback(url)
+                    try validatePendingOnboarding(state: approval.state, siteURL: approval.siteURL)
+                    await finishDeviceApproval(approval)
+                    return
+                }
+
+                throw FloppyAPIError.unsupportedCallback
+            } catch {
+                status = error.localizedDescription
+                onboardingStep = .failed
+            }
+        }
+    }
+
+    private func finishApplicationPasswordOnboarding(_ credential: WordPressApplicationCredential) async {
+        let bootstrapClient = FloppyAPIClient(siteURL: credential.siteURL, applicationPassword: credential)
+        onboardingStep = .installingPlugin
+
+        do {
+            let initialState = try await pluginInstallState(client: bootstrapClient)
+            if initialState == .missing {
+                try await beginGitHubZipInstall(client: bootstrapClient, credential: credential)
+                return
+            }
+
+            onboardingStep = .activatingPlugin
+            if try await pluginInstallState(client: bootstrapClient) == .inactive {
+                _ = try await bootstrapClient.activatePlugin(plugin: pluginMainFile)
+            }
+
+            try await completeApplicationPasswordOnboarding(client: bootstrapClient, credential: credential)
+        } catch {
+            await bootstrapClient.deleteCurrentApplicationPassword()
+            status = error.localizedDescription
+            onboardingStep = .failed
+        }
+    }
+
+    private func beginGitHubZipInstall(client: FloppyAPIClient, credential: WordPressApplicationCredential) async throws {
+        guard let zipURL = URL.floppySiteURL(from: githubPluginZipURLText), zipURL.path.lowercased().hasSuffix(".zip") else {
+            throw FloppyOnboardingError.githubZipRequired
+        }
+
+        onboardingStep = .waitingForManualGitHubInstall
+        status = "Downloading the GitHub plugin ZIP."
+
+        let localZip = try await downloadPluginZip(from: zipURL)
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(localZip.path, forType: .string)
+        NSWorkspace.shared.activateFileViewerSelecting([localZip])
+        NSWorkspace.shared.open(credential.siteURL.pluginUploadURL)
+        status = "Install the revealed ZIP in WordPress. Floppy will continue after it appears."
+
+        let deadline = Date().addingTimeInterval(10 * 60)
+        while Date() < deadline {
+            try await Task.sleep(nanoseconds: 3_000_000_000)
+            let state = try await pluginInstallState(client: client)
+            if state == .inactive {
+                onboardingStep = .activatingPlugin
+                _ = try await client.activatePlugin(plugin: pluginMainFile)
+            }
+            if try await pluginInstallState(client: client) == .active {
+                try await completeApplicationPasswordOnboarding(client: client, credential: credential)
+                return
+            }
+        }
+
+        await client.deleteCurrentApplicationPassword()
+        throw FloppyOnboardingError.githubInstallTimedOut
+    }
+
+    private func completeApplicationPasswordOnboarding(client: FloppyAPIClient, credential: WordPressApplicationCredential) async throws {
+        onboardingStep = .creatingDeviceToken
+        let discovery = try await client.discover()
+        let device = try await client.authorizeDevice(deviceName: deviceName)
+        await client.deleteCurrentApplicationPassword()
+
+        let account = FloppyAccount(
+            siteURL: credential.siteURL,
+            restURL: discovery.restURL,
+            userHint: credential.userLogin,
+            deviceUUID: device.deviceUUID,
+            scope: device.scope
+        )
+        try await saveConnectedAccount(account: account, token: device.token)
+        pendingOnboarding = nil
+        onboardingStep = .connected
+        status = "GitHub plugin installed and connected \(credential.siteURL.host ?? credential.siteURL.absoluteString)."
+    }
+
+    private func downloadPluginZip(from url: URL) async throws -> URL {
+        let (temporaryURL, response) = try await URLSession.shared.download(from: url)
+        guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
+            throw FloppyOnboardingError.githubZipDownloadFailed
+        }
+
+        let downloads = FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first ?? FileManager.default.temporaryDirectory
+        let filename = url.lastPathComponent.isEmpty ? "floppy.zip" : url.lastPathComponent
+        let destination = downloads.appendingPathComponent(filename)
+        if FileManager.default.fileExists(atPath: destination.path) {
+            try FileManager.default.removeItem(at: destination)
+        }
+        try FileManager.default.moveItem(at: temporaryURL, to: destination)
+        return destination
+    }
+
+    private func finishDeviceApproval(_ approval: FloppyDeviceApproval) async {
+        do {
+            let discoveryClient = FloppyAPIClient(siteURL: approval.siteURL)
+            let discovery = try await discoveryClient.discover()
+            let account = FloppyAccount(
+                siteURL: approval.siteURL,
+                restURL: discovery.restURL,
+                userHint: "wordpress-user",
+                deviceUUID: approval.deviceUUID,
+                scope: approval.scope
+            )
+            try await saveConnectedAccount(account: account, token: approval.token)
+            pendingOnboarding = nil
+            onboardingStep = .connected
+            status = "Connected to \(approval.siteURL.host ?? approval.siteURL.absoluteString)."
+        } catch {
+            status = error.localizedDescription
+            onboardingStep = .failed
+        }
+    }
+
+    private func saveConnectedAccount(account: FloppyAccount, token: String) async throws {
+        try tokenStore.save(token: token, accountID: account.id)
+        try tokenStore.save(token: token, accountID: FloppyDomainRegistry.domainIdentifier(for: account))
+        try await ledger?.upsert(account: account)
+        try await FileProviderDomainController.register(account: account)
+        accounts = await ledger?.accounts() ?? []
+        selectedAccountID = account.id
+        await refreshSelectedAccount()
+    }
+
+    private func pluginInstallState(client: FloppyAPIClient) async throws -> PluginInstallState {
+        do {
+            let plugin = try await client.getPlugin(plugin: pluginMainFile)
+            return plugin.status == .active ? .active : .inactive
+        } catch FloppyAPIError.httpStatus(let status, _) where status == 404 {
+            return .missing
+        }
+    }
+
+    private func validatePendingOnboarding(state: String, siteURL: URL) throws {
+        guard let pendingOnboarding else {
+            throw FloppyAPIError.unsupportedCallback
+        }
+        guard pendingOnboarding.matches(state: state), pendingOnboarding.matches(siteURL: siteURL) else {
+            throw FloppyAPIError.unsupportedCallback
+        }
+        guard !pendingOnboarding.isExpired else {
+            throw FloppyAPIError.unsupportedCallback
+        }
+    }
+
+    func refreshSelectedAccount() async {
+        guard let account = selectedAccount else {
+            items = []
+            health = nil
+            return
+        }
+
+        isWorking = true
+        defer { isWorking = false }
+
+        do {
+            let client = try client(for: account)
+            let list = try await client.listFiles()
+            try await ledger?.merge(items: list.items, accountID: account.id)
+            items = list.items
+            status = "Loaded \(list.items.count) items."
+        } catch {
+            status = error.localizedDescription
+            items = await ledger?.items(accountID: account.id) ?? []
+        }
+    }
+
+    func syncSelectedAccount() async {
+        guard let account = selectedAccount else {
+            return
+        }
+
+        isWorking = true
+        defer { isWorking = false }
+
+        do {
+            let client = try client(for: account)
+            let changes = try await client.syncChanges(cursor: account.lastCursor)
+            try await ledger?.record(changeFeed: changes, accountID: account.id)
+            accounts = await ledger?.accounts() ?? accounts
+            status = "Synced \(changes.events.count) changes. Cursor \(changes.nextCursor)."
+        } catch {
+            status = error.localizedDescription
+        }
+    }
+
+    func loadHealth() async {
+        guard let account = selectedAccount else {
+            return
+        }
+
+        do {
+            health = try await client(for: account).health()
+            status = health?.ok == true ? "Server health passed." : "Server needs attention."
+        } catch {
+            status = error.localizedDescription
+        }
+    }
+
+    func disconnectSelectedAccount() {
+        guard let account = selectedAccount else {
+            return
+        }
+
+        do {
+            try tokenStore.delete(accountID: account.id)
+            Task {
+                try? await FileProviderDomainController.remove(account: account)
+                try? tokenStore.delete(accountID: FloppyDomainRegistry.domainIdentifier(for: account))
+                try await ledger?.removeAccount(id: account.id)
+                accounts = await ledger?.accounts() ?? []
+                selectedAccountID = accounts.first?.id
+                await refreshSelectedAccount()
+            }
+            status = "Disconnected \(account.siteURL.host ?? account.siteURL.absoluteString)."
+        } catch {
+            status = error.localizedDescription
+        }
+    }
+
+    var selectedAccount: FloppyAccount? {
+        accounts.first { $0.id == selectedAccountID }
+    }
+
+    private func client(for account: FloppyAccount) throws -> FloppyAPIClient {
+        guard let token = try tokenStore.load(accountID: account.id) else {
+            throw FloppyAPIError.missingToken
+        }
+        return FloppyAPIClient(siteURL: account.siteURL, restURL: account.restURL, token: token)
+    }
+}
+
+private enum PluginInstallState: Equatable {
+    case missing
+    case inactive
+    case active
+}
+
+enum FloppyOnboardingStep: Equatable {
+    case idle
+    case waitingForWordPressAuthorization
+    case installingPlugin
+    case waitingForManualGitHubInstall
+    case activatingPlugin
+    case creatingDeviceToken
+    case connected
+    case failed
+}
+
+enum FloppyOnboardingError: LocalizedError {
+    case githubZipRequired
+    case githubZipDownloadFailed
+    case githubInstallTimedOut
+
+    var errorDescription: String? {
+        switch self {
+        case .githubZipRequired:
+            "Enter an HTTPS GitHub release ZIP URL for the plugin."
+        case .githubZipDownloadFailed:
+            "Could not download the GitHub plugin ZIP."
+        case .githubInstallTimedOut:
+            "Timed out waiting for the GitHub plugin ZIP to be installed in WordPress."
+        }
+    }
+}
+
+private struct PendingOnboarding {
+    let siteURL: URL
+    let state: String
+    let expiresAt = Date().addingTimeInterval(10 * 60)
+
+    var isExpired: Bool {
+        Date() > expiresAt
+    }
+
+    func matches(state: String) -> Bool {
+        self.state == state
+    }
+
+    func matches(siteURL: URL) -> Bool {
+        self.siteURL.normalizedForDisplay.absoluteString == siteURL.normalizedForDisplay.absoluteString
+    }
+}
+
+private extension URL {
+    static func floppySiteURL(from text: String) -> URL? {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            return nil
+        }
+
+        if URLComponents(string: trimmed)?.scheme == nil {
+            return URL(string: "https://\(trimmed)")?.normalizedForDisplay
+        }
+
+        return URL(string: trimmed)?.normalizedForDisplay
+    }
+
+    var normalizedScheme: String {
+        (URLComponents(url: self, resolvingAgainstBaseURL: false)?.scheme ?? "https").lowercased()
+    }
+
+    var normalizedForDisplay: URL {
+        var components = URLComponents(url: self, resolvingAgainstBaseURL: false) ?? URLComponents()
+        if components.scheme == nil {
+            components.scheme = "https"
+        }
+        components.scheme = components.scheme?.lowercased()
+        components.host = components.host?.lowercased()
+        components.path = components.path.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        return components.url ?? self
+    }
+
+    var pluginUploadURL: URL {
+        var components = URLComponents(url: appendingPathComponent("wp-admin/plugin-install.php"), resolvingAgainstBaseURL: false) ?? URLComponents()
+        components.queryItems = [URLQueryItem(name: "tab", value: "upload")]
+        return components.url ?? self
+    }
+}

@@ -1,0 +1,14 @@
+.DS_Store
+
+# SwiftPM / local macOS builds
+.build/
+FloppyMac/.build/
+FloppyMac/.swiftpm/
+DerivedData/
+
+# Local editor and OS noise
+*.swp
+*.swo
+.idea/
+.vscode/
+
