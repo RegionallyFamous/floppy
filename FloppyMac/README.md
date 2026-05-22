@@ -17,7 +17,29 @@ swift test --package-path FloppyMac
 FloppyMac/Scripts/bundle-app.sh
 ```
 
-The local environment only has Xcode Command Line Tools, so SwiftPM builds the app executable and local `.app` bundle. Building the File Provider extension bundle, signing with a Developer ID, enabling entitlements, and notarizing require full Xcode.
+With full Xcode installed, run the doctor first:
+
+```bash
+FloppyMac/Scripts/xcode-doctor.sh
+```
+
+If `xcode-select` still points at Command Line Tools, switch it:
+
+```bash
+sudo xcode-select --switch /Applications/Xcode.app/Contents/Developer
+```
+
+SwiftPM builds the app executable and local `.app` bundle. Building the File Provider extension bundle, signing with a Developer ID, enabling entitlements, and notarizing require full Xcode.
+
+## Package The WordPress Plugin ZIP
+
+The GitHub-first onboarding expects a plugin ZIP whose root directory is `floppy/` and whose main file is `floppy/floppy.php`.
+
+```bash
+FloppyMac/Scripts/package-wordpress-plugin.sh
+```
+
+This writes `dist/floppy.zip`, suitable for attaching to a GitHub release as `floppy.zip`.
 
 ## Connect Flow
 

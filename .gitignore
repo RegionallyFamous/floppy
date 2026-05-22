@@ -5,10 +5,10 @@
 FloppyMac/.build/
 FloppyMac/.swiftpm/
 DerivedData/
+dist/
 
 # Local editor and OS noise
 *.swp
 *.swo
 .idea/
 .vscode/
-

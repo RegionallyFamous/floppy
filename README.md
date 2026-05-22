@@ -167,6 +167,8 @@ swift build --package-path FloppyMac
 swift build --package-path FloppyMac --target FloppyFileProvider
 swift test --package-path FloppyMac
 FloppyMac/Scripts/bundle-app.sh
+FloppyMac/Scripts/xcode-doctor.sh
+FloppyMac/Scripts/package-wordpress-plugin.sh
 ```
 
 ## WP-CLI Commands

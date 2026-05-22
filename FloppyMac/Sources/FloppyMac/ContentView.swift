@@ -44,31 +44,67 @@ struct ContentView: View {
     }
 
     private var connectPanel: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 8) {
                 Image(nsImage: NSApp.applicationIconImage)
                     .resizable()
-                    .frame(width: 28, height: 28)
+                    .frame(width: 32, height: 32)
                     .clipShape(RoundedRectangle(cornerRadius: 6))
-                Text("Connect Site")
-                    .font(.headline)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Connect Site")
+                        .font(.headline)
+                    Text("GitHub ZIP + WordPress approval")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
             }
-            TextField("https://example.com", text: $model.siteURLText)
-                .textFieldStyle(.roundedBorder)
-            TextField("https://github.com/owner/repo/releases/latest/download/floppy.zip", text: $model.githubPluginZipURLText)
-                .textFieldStyle(.roundedBorder)
-            TextField("Plugin file", text: $model.pluginMainFile)
-                .textFieldStyle(.roundedBorder)
-            TextField("Device name", text: $model.deviceName)
-                .textFieldStyle(.roundedBorder)
-            Button {
-                model.startBrowserApproval()
-            } label: {
-                Label(connectButtonTitle, systemImage: "safari")
+
+            Group {
+                TextField("WordPress site", text: $model.siteURLText)
+                TextField("GitHub release ZIP", text: $model.githubPluginZipURLText)
+                TextField("Plugin file", text: $model.pluginMainFile)
+                TextField("Device name", text: $model.deviceName)
             }
-            .buttonStyle(.borderedProminent)
-            .disabled(model.isOnboarding)
-            onboardingProgress
+            .textFieldStyle(.roundedBorder)
+
+            HStack {
+                Button {
+                    model.startBrowserApproval()
+                } label: {
+                    Label(connectButtonTitle, systemImage: model.onboardingStep.systemImage)
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(model.isOnboarding)
+
+                if model.isOnboarding {
+                    Button {
+                        model.cancelOnboarding()
+                    } label: {
+                        Label("Cancel", systemImage: "xmark.circle")
+                    }
+                }
+            }
+
+            onboardingCard
+
+            if model.lastDownloadedPluginZipURL != nil || model.pendingPluginUploadURL != nil {
+                HStack {
+                    Button {
+                        model.revealDownloadedPluginZip()
+                    } label: {
+                        Label("Reveal ZIP", systemImage: "folder")
+                    }
+                    .disabled(model.lastDownloadedPluginZipURL == nil)
+
+                    Button {
+                        model.openPluginUploadPage()
+                    } label: {
+                        Label("Open Upload", systemImage: "safari")
+                    }
+                    .disabled(model.pendingPluginUploadURL == nil)
+                }
+                .controlSize(.small)
+            }
         }
     }
 
@@ -89,16 +125,38 @@ struct ContentView: View {
         }
     }
 
-    @ViewBuilder
-    private var onboardingProgress: some View {
-        if model.isOnboarding {
-            HStack(spacing: 6) {
-                ProgressView()
-                    .controlSize(.small)
-                Text(connectButtonTitle)
+    private var onboardingCard: some View {
+        HStack(alignment: .top, spacing: 8) {
+            Image(systemName: model.onboardingStep.systemImage)
+                .foregroundStyle(onboardingColor)
+                .frame(width: 18)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(model.onboardingStep.title)
+                    .font(.caption.bold())
+                Text(model.onboardingStep.detail)
+                    .font(.caption)
                     .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                if model.isOnboarding {
+                    ProgressView()
+                        .controlSize(.small)
+                        .padding(.top, 3)
+                }
             }
-            .font(.caption)
+        }
+        .padding(8)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(.quaternary.opacity(0.45), in: RoundedRectangle(cornerRadius: 8))
+    }
+
+    private var onboardingColor: Color {
+        switch model.onboardingStep {
+        case .connected:
+            .green
+        case .failed:
+            .orange
+        default:
+            .accentColor
         }
     }
 
@@ -176,12 +234,7 @@ struct ContentView: View {
 
 private extension FloppyAppModel {
     var isOnboarding: Bool {
-        switch onboardingStep {
-        case .waitingForWordPressAuthorization, .installingPlugin, .waitingForManualGitHubInstall, .activatingPlugin, .creatingDeviceToken:
-            true
-        default:
-            false
-        }
+        onboardingStep.isActiveSetupStep
     }
 }
 

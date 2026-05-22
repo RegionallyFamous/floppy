@@ -15,11 +15,14 @@ final class FloppyAppModel: ObservableObject {
     @Published var isWorking = false
     @Published var onboardingStep: FloppyOnboardingStep = .idle
     @Published var pluginMainFile: String = "floppy/floppy.php"
-    @Published var githubPluginZipURLText: String = ""
+    @Published var githubPluginZipURLText: String = "https://github.com/RegionallyFamous/floppy/releases/latest/download/floppy.zip"
+    @Published var lastDownloadedPluginZipURL: URL?
+    @Published var pendingPluginUploadURL: URL?
 
     private let tokenStore: FloppyTokenStore = KeychainTokenStore.default()
     private var ledger: LocalLedger?
     private var pendingOnboarding: PendingOnboarding?
+    private var onboardingTask: Task<Void, Never>?
 
     init() {
         Task { await load() }
@@ -34,6 +37,8 @@ final class FloppyAppModel: ObservableObject {
     }
 
     func startBrowserApproval() {
+        onboardingTask?.cancel()
+
         guard let siteURL = URL.floppySiteURL(from: siteURLText), siteURL.host != nil else {
             status = "Enter a valid WordPress site URL."
             return
@@ -48,8 +53,10 @@ final class FloppyAppModel: ObservableObject {
         let normalizedSiteURL = siteURL.normalizedForDisplay
         pendingOnboarding = PendingOnboarding(siteURL: normalizedSiteURL, state: state)
         onboardingStep = .waitingForWordPressAuthorization
+        lastDownloadedPluginZipURL = nil
+        pendingPluginUploadURL = nil
 
-        Task {
+        onboardingTask = Task {
             do {
                 let discoveryClient = FloppyAPIClient(siteURL: normalizedSiteURL)
                 let root = try await discoveryClient.wordPressRESTRoot()
@@ -61,11 +68,38 @@ final class FloppyAppModel: ObservableObject {
 
                 NSWorkspace.shared.open(FloppyAPIClient.applicationPasswordAuthorizationURL(siteURL: normalizedSiteURL, authorizationURL: authorizationURL, state: state, deviceName: deviceName))
                 status = "Opened WordPress. Approve Floppy so it can finish the GitHub install."
+            } catch is CancellationError {
+                status = "Setup cancelled."
+                onboardingStep = .idle
             } catch {
                 status = error.localizedDescription
                 onboardingStep = .failed
             }
         }
+    }
+
+    func cancelOnboarding() {
+        onboardingTask?.cancel()
+        onboardingTask = nil
+        pendingOnboarding = nil
+        onboardingStep = .idle
+        status = "Setup cancelled."
+    }
+
+    func revealDownloadedPluginZip() {
+        guard let lastDownloadedPluginZipURL else {
+            return
+        }
+
+        NSWorkspace.shared.activateFileViewerSelecting([lastDownloadedPluginZipURL])
+    }
+
+    func openPluginUploadPage() {
+        guard let pendingPluginUploadURL else {
+            return
+        }
+
+        NSWorkspace.shared.open(pendingPluginUploadURL)
     }
 
     func handleCallback(_ url: URL) {
@@ -138,6 +172,8 @@ final class FloppyAppModel: ObservableObject {
         status = "Downloading the GitHub plugin ZIP."
 
         let localZip = try await downloadPluginZip(from: zipURL)
+        lastDownloadedPluginZipURL = localZip
+        pendingPluginUploadURL = credential.siteURL.pluginUploadURL
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(localZip.path, forType: .string)
         NSWorkspace.shared.activateFileViewerSelecting([localZip])
@@ -146,6 +182,7 @@ final class FloppyAppModel: ObservableObject {
 
         let deadline = Date().addingTimeInterval(10 * 60)
         while Date() < deadline {
+            try Task.checkCancellation()
             try await Task.sleep(nanoseconds: 3_000_000_000)
             let state = try await pluginInstallState(client: client)
             if state == .inactive {
@@ -177,6 +214,8 @@ final class FloppyAppModel: ObservableObject {
         )
         try await saveConnectedAccount(account: account, token: device.token)
         pendingOnboarding = nil
+        pendingPluginUploadURL = nil
+        onboardingTask = nil
         onboardingStep = .connected
         status = "GitHub plugin installed and connected \(credential.siteURL.host ?? credential.siteURL.absoluteString)."
     }
@@ -351,6 +390,80 @@ enum FloppyOnboardingStep: Equatable {
     case creatingDeviceToken
     case connected
     case failed
+}
+
+extension FloppyOnboardingStep {
+    var title: String {
+        switch self {
+        case .idle:
+            "Ready"
+        case .waitingForWordPressAuthorization:
+            "Approve in WordPress"
+        case .installingPlugin:
+            "Prepare GitHub ZIP"
+        case .waitingForManualGitHubInstall:
+            "Install ZIP"
+        case .activatingPlugin:
+            "Activate Plugin"
+        case .creatingDeviceToken:
+            "Secure Device"
+        case .connected:
+            "Connected"
+        case .failed:
+            "Needs Attention"
+        }
+    }
+
+    var detail: String {
+        switch self {
+        case .idle:
+            "Enter your site and GitHub ZIP URL."
+        case .waitingForWordPressAuthorization:
+            "WordPress is asking you to approve a temporary Application Password."
+        case .installingPlugin:
+            "Floppy is preparing the plugin ZIP for upload."
+        case .waitingForManualGitHubInstall:
+            "Install the revealed ZIP in the WordPress upload screen."
+        case .activatingPlugin:
+            "Floppy found the plugin and is activating it."
+        case .creatingDeviceToken:
+            "Floppy is replacing the temporary credential with a scoped device token."
+        case .connected:
+            "This Mac can now sync through the Floppy REST API."
+        case .failed:
+            "Review the status message and try again."
+        }
+    }
+
+    var systemImage: String {
+        switch self {
+        case .idle:
+            "circle"
+        case .waitingForWordPressAuthorization:
+            "safari"
+        case .installingPlugin:
+            "arrow.down.doc"
+        case .waitingForManualGitHubInstall:
+            "shippingbox"
+        case .activatingPlugin:
+            "powerplug"
+        case .creatingDeviceToken:
+            "key"
+        case .connected:
+            "checkmark.seal"
+        case .failed:
+            "exclamationmark.triangle"
+        }
+    }
+
+    var isActiveSetupStep: Bool {
+        switch self {
+        case .waitingForWordPressAuthorization, .installingPlugin, .waitingForManualGitHubInstall, .activatingPlugin, .creatingDeviceToken:
+            true
+        default:
+            false
+        }
+    }
 }
 
 enum FloppyOnboardingError: LocalizedError {
