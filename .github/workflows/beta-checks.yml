@@ -96,6 +96,17 @@ jobs:
         run: |
           unzip -l dist/floppy.zip | grep 'floppy/floppy.php'
           ! unzip -l dist/floppy.zip | grep -E 'floppy/(vendor|tests|composer\.json|composer\.lock|phpunit\.xml|phpcs\.xml|\.github/|\.distignore)'
+      - name: Prepare Plugin Check build
+        run: |
+          rm -rf dist/plugin-check
+          mkdir -p dist/plugin-check
+          unzip -q dist/floppy.zip -d dist/plugin-check
+      - name: WordPress Plugin Check
+        uses: wordpress/plugin-check-action@v1
+        with:
+          build-dir: './dist/plugin-check/floppy'
+          slug: floppy
+          strict: true
 
   mac:
     name: macOS App
