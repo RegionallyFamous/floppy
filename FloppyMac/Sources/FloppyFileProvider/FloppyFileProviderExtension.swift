@@ -660,6 +660,11 @@ final class FloppyFileProviderExtension: NSObject, NSFileProviderReplicatedExten
                 try? await ledger.removeUploadTransferSession(sessionUUID: session.sessionUUID, accountID: accountID)
                 continue
             }
+            guard Self.fileHasNotChangedSinceSessionUpdate(localURL, sessionUpdatedAt: session.updatedAt) else {
+                try? await ledger.removeUploadTransferSession(sessionUUID: session.sessionUUID, accountID: accountID)
+                FloppyDiagnostics.fileProvider.info("Discarding stale \(operation, privacy: .public) session \(session.sessionUUID, privacy: .public) because the local file changed after the saved offset")
+                continue
+            }
             FloppyDiagnostics.fileProvider.info("Resuming \(operation, privacy: .public) session \(session.sessionUUID, privacy: .public) at offset \(session.offset, privacy: .public)")
             return FloppyUploadSession(
                 sessionUUID: session.sessionUUID,
@@ -671,6 +676,13 @@ final class FloppyFileProviderExtension: NSObject, NSFileProviderReplicatedExten
         }
 
         return nil
+    }
+
+    private static func fileHasNotChangedSinceSessionUpdate(_ url: URL, sessionUpdatedAt: Date) -> Bool {
+        guard let modifiedAt = try? url.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate else {
+            return false
+        }
+        return modifiedAt <= sessionUpdatedAt
     }
 
     private static func conflictFilename(for name: String) -> String {

@@ -2364,8 +2364,17 @@ final class Floppy_Rest {
 		$principal_type = sanitize_key( (string) $request->get_param( 'principal_type' ) );
 		$principal_ref = sanitize_text_field( (string) $request->get_param( 'principal_ref' ) );
 
+		if ( ! in_array( $target_type, array( 'file', 'folder' ), true ) || ! in_array( $principal_type, array( 'user', 'role' ), true ) ) {
+			return new WP_Error( 'floppy_invalid_share', __( 'Invalid share target or principal.', 'floppy' ), array( 'status' => 400 ) );
+		}
+
 		if ( ! Floppy_Permissions::can_write( $target_type, $target_id ) ) {
 			return new WP_Error( 'floppy_forbidden', __( 'You cannot unshare this item.', 'floppy' ), array( 'status' => 403 ) );
+		}
+
+		$principal = self::normalize_share_principal( $principal_type, $principal_ref );
+		if ( ! is_wp_error( $principal ) ) {
+			$principal_ref = $principal['principal_ref'];
 		}
 
 		$wpdb->delete(

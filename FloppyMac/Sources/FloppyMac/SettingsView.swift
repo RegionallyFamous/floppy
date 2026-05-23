@@ -222,9 +222,9 @@ struct SettingsView: View {
                     .disabled(model.selectedAccount == nil)
 
                     SettingsActionButton("Refresh", systemImage: "arrow.clockwise") {
-                        Task { await model.syncSelectedAccount() }
+                        Task { await model.refreshSelectedAccountIfStale(maxAge: 0) }
                     }
-                    .disabled(model.selectedAccount == nil)
+                    .disabled(!canRunNetworkAction)
 
                     SettingsActionButton("Disconnect", systemImage: "xmark.circle", role: .destructive) {
                         model.disconnectSelectedAccount()
@@ -279,12 +279,12 @@ struct SettingsView: View {
                     SettingsActionButton("Sync Now", systemImage: "arrow.triangle.2.circlepath", prominence: .primary) {
                         Task { await model.syncSelectedAccount() }
                     }
-                    .disabled(model.selectedAccount == nil)
+                    .disabled(!canRunNetworkAction)
 
                     SettingsActionButton("Run Health Check", systemImage: "stethoscope") {
                         Task { await model.loadHealth() }
                     }
-                    .disabled(model.selectedAccount == nil)
+                    .disabled(!canRunNetworkAction)
                 }
                 .padding(.top, 4)
             }
@@ -354,7 +354,7 @@ struct SettingsView: View {
                     SettingsActionButton("Refresh Health", systemImage: "stethoscope") {
                         Task { await model.loadHealth() }
                     }
-                    .disabled(model.selectedAccount == nil)
+                    .disabled(!canRunNetworkAction)
                 }
                 .padding(.top, 4)
             }
@@ -409,6 +409,10 @@ struct SettingsView: View {
         }
         let failed = health.checks.values.filter { !$0.ok }.count
         return failed == 0 ? "All passed" : "\(failed) need review"
+    }
+
+    private var canRunNetworkAction: Bool {
+        model.selectedAccount != nil && !model.isWorking && model.isNetworkReachable
     }
 }
 

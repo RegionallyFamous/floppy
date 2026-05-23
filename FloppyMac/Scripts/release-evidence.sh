@@ -131,7 +131,18 @@ else
 fi
 
 if [[ -f "$ZIP_PATH" ]]; then
-    add_check "notarization-zip" "pass" "Notarization ZIP exists." "$(redact_path "$ZIP_PATH")"
+    if ! command -v zipinfo >/dev/null; then
+        add_check "notarization-zip" "fail" "Notarization ZIP could not be inspected because zipinfo is unavailable." "zipinfo not found"
+    elif zip_entries="$(zipinfo -1 "$ZIP_PATH" 2>/dev/null)"; then
+        if printf '%s\n' "$zip_entries" | grep -Eq '(^|/)[^/]+\.app/Contents/Info\.plist$' && \
+            printf '%s\n' "$zip_entries" | grep -Eq '(^|/)[^/]+\.app/Contents/PlugIns/FloppyFileProviderExtension\.appex/Contents/Info\.plist$'; then
+            add_check "notarization-zip" "pass" "Notarization ZIP contains the exported app and embedded File Provider extension." "$(redact_path "$ZIP_PATH")"
+        else
+            add_check "notarization-zip" "fail" "Notarization ZIP is missing the exported app or embedded File Provider extension." "$(redact_path "$ZIP_PATH")"
+        fi
+    else
+        add_check "notarization-zip" "fail" "Notarization ZIP is not a readable ZIP archive." "$(redact_path "$ZIP_PATH")"
+    fi
 else
     add_check "notarization-zip" "skipped" "No notarization ZIP was found yet." "$(redact_path "$ZIP_PATH")"
 fi

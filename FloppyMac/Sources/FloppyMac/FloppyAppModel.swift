@@ -608,6 +608,10 @@ final class FloppyAppModel: ObservableObject {
             status = "Connect a WordPress site before adding files."
             return
         }
+        guard isNetworkReachable else {
+            status = "Floppy is offline. Reconnect before adding files."
+            return
+        }
 
         let panel = NSOpenPanel()
         panel.allowsMultipleSelection = true
@@ -636,6 +640,10 @@ final class FloppyAppModel: ObservableObject {
             status = "Connect a WordPress site before adding files."
             return true
         }
+        guard isNetworkReachable else {
+            status = "Floppy is offline. Reconnect before adding files."
+            return true
+        }
 
         Task {
             do {
@@ -655,6 +663,10 @@ final class FloppyAppModel: ObservableObject {
 
     func uploadFileURLs(_ urls: [URL]) {
         guard !urls.isEmpty else {
+            return
+        }
+        guard isNetworkReachable else {
+            status = "Floppy is offline. Reconnect before adding files."
             return
         }
 

@@ -212,6 +212,40 @@ final class Floppy_REST_Replacement_Sessions_Test extends WP_UnitTestCase {
 		$this->assertStringNotContainsString( $file['storage_key'], $json );
 	}
 
+	public function test_unshare_normalizes_user_principal_like_share(): void {
+		global $wpdb;
+
+		$file = $this->insert_private_file( 'hello' );
+		$grantee_id = self::factory()->user->create(
+			array(
+				'role'       => 'subscriber',
+				'user_login' => 'floppy_grantee',
+				'user_email' => 'floppy-grantee@example.test',
+			)
+		);
+
+		$share = new WP_REST_Request( 'POST', '/floppy/v1/share' );
+		$share->set_param( 'target_type', 'file' );
+		$share->set_param( 'target_id', $file['id'] );
+		$share->set_param( 'principal_type', 'user' );
+		$share->set_param( 'principal_ref', 'floppy_grantee' );
+		$share->set_param( 'capability', 'read' );
+		$share_response = Floppy_Rest::share_target( $share );
+
+		$this->assertInstanceOf( WP_REST_Response::class, $share_response );
+		$this->assertSame( 1, (int) $wpdb->get_var( $wpdb->prepare( 'SELECT COUNT(*) FROM ' . Floppy_Schema::table( 'acl_grants' ) . ' WHERE target_type = %s AND target_id = %d AND principal_ref = %s', 'file', $file['id'], (string) $grantee_id ) ) );
+
+		$unshare = new WP_REST_Request( 'DELETE', '/floppy/v1/share' );
+		$unshare->set_param( 'target_type', 'file' );
+		$unshare->set_param( 'target_id', $file['id'] );
+		$unshare->set_param( 'principal_type', 'user' );
+		$unshare->set_param( 'principal_ref', 'floppy-grantee@example.test' );
+		$unshare_response = Floppy_Rest::unshare_target( $unshare );
+
+		$this->assertInstanceOf( WP_REST_Response::class, $unshare_response );
+		$this->assertSame( 0, (int) $wpdb->get_var( $wpdb->prepare( 'SELECT COUNT(*) FROM ' . Floppy_Schema::table( 'acl_grants' ) . ' WHERE target_type = %s AND target_id = %d', 'file', $file['id'] ) ) );
+	}
+
 	public function test_thumbnail_for_non_image_is_rejected_privately(): void {
 		$file = $this->insert_private_file( 'hello' );
 		$request = new WP_REST_Request( 'GET', '/floppy/v1/files/' . $file['id'] . '/thumbnail' );

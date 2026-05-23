@@ -141,7 +141,9 @@ const checks = {
 		{ label: 'native window returned cleanup function', pass: typeof execution.windowCleanup === 'function' },
 		{ label: 'registered drop target has deregister callback', pass: execution.dropDeregistered > 0 },
 		{ label: 'window hook actions cleaned up', pass: execution.removedActions > 0 },
-		{ label: 'window hook filters cleaned up', pass: execution.removedFilters > 0 }
+		{ label: 'window hook filters cleaned up', pass: execution.removedFilters > 0 },
+		{ label: 'native window DOM listeners cleaned up', pass: execution.addedDomListeners > 0 && execution.removedDomListeners === execution.addedDomListeners },
+		{ label: 'native window cleanup is idempotent', pass: execution.cleanupIdempotent }
 	],
 	banned: bannedPatterns.map( ( entry ) => ( {
 		label: entry.label,
@@ -176,7 +178,10 @@ const report = {
 		hook_registrations: execution.hookRegistrations.length,
 		removed_actions: execution.removedActions,
 		removed_filters: execution.removedFilters,
-		drop_deregistered: execution.dropDeregistered
+		drop_deregistered: execution.dropDeregistered,
+		added_dom_listeners: execution.addedDomListeners,
+		removed_dom_listeners: execution.removedDomListeners,
+		cleanup_idempotent: execution.cleanupIdempotent
 	},
 	failures
 };
@@ -211,7 +216,18 @@ function executeDesktopModeScript( script ) {
 	let removedActions = 0;
 	let removedFilters = 0;
 	let dropDeregistered = 0;
+	let addedDomListeners = 0;
+	let removedDomListeners = 0;
+	let cleanupIdempotent = false;
 	let windowCleanup = null;
+	const eventStats = {
+		added: () => {
+			addedDomListeners += 1;
+		},
+		removed: () => {
+			removedDomListeners += 1;
+		}
+	};
 
 	const hooks = {
 		addAction( name, namespace ) {
@@ -314,7 +330,7 @@ function executeDesktopModeScript( script ) {
 			Blob,
 			URL
 		},
-		document: makeDocument(),
+		document: makeDocument( eventStats ),
 		wp: null,
 		console,
 		Blob,
@@ -331,7 +347,7 @@ function executeDesktopModeScript( script ) {
 		if ( typeof callback !== 'function' ) {
 			errors.push( 'native window callback was not registered' );
 		} else {
-			const container = makeElement( 'container' );
+			const container = makeElement( 'container', eventStats );
 			windowCleanup = callback( container, {
 				window: {
 					markLoading() {},
@@ -340,6 +356,17 @@ function executeDesktopModeScript( script ) {
 			} );
 			if ( typeof windowCleanup === 'function' ) {
 				windowCleanup();
+				const afterFirstCleanup = {
+					removedActions,
+					removedFilters,
+					dropDeregistered,
+					removedDomListeners
+				};
+				windowCleanup();
+				cleanupIdempotent = removedActions === afterFirstCleanup.removedActions &&
+					removedFilters === afterFirstCleanup.removedFilters &&
+					dropDeregistered === afterFirstCleanup.dropDeregistered &&
+					removedDomListeners === afterFirstCleanup.removedDomListeners;
 			}
 		}
 	} catch ( error ) {
@@ -360,18 +387,29 @@ function executeDesktopModeScript( script ) {
 		removedActions,
 		removedFilters,
 		dropDeregistered,
+		addedDomListeners,
+		removedDomListeners,
+		cleanupIdempotent,
 		windowCleanup,
 		errors
 	};
 }
 
-function makeDocument() {
+function makeDocument( eventStats = null ) {
 	return {
 		readyState: 'complete',
-		body: makeElement( 'body' ),
-		addEventListener() {},
-		removeEventListener() {},
-		createElement: makeElement,
+		body: makeElement( 'body', eventStats ),
+		addEventListener() {
+			if ( eventStats ) {
+				eventStats.added();
+			}
+		},
+		removeEventListener() {
+			if ( eventStats ) {
+				eventStats.removed();
+			}
+		},
+		createElement: ( name ) => makeElement( name, eventStats ),
 		querySelector() {
 			return null;
 		},
@@ -381,7 +419,7 @@ function makeDocument() {
 	};
 }
 
-function makeElement( name = 'element' ) {
+function makeElement( name = 'element', eventStats = null ) {
 	const children = new Map();
 	const classNames = new Set();
 	const element = {
@@ -418,8 +456,16 @@ function makeElement( name = 'element' ) {
 		remove() {
 			element.isConnected = false;
 		},
-		addEventListener() {},
-		removeEventListener() {},
+		addEventListener() {
+			if ( eventStats ) {
+				eventStats.added();
+			}
+		},
+		removeEventListener() {
+			if ( eventStats ) {
+				eventStats.removed();
+			}
+		},
 		focus() {},
 		click() {},
 		matches() {
@@ -430,7 +476,7 @@ function makeElement( name = 'element' ) {
 		},
 		querySelector( selector ) {
 			if ( ! children.has( selector ) ) {
-				children.set( selector, makeElement( selector ) );
+				children.set( selector, makeElement( selector, eventStats ) );
 			}
 			return children.get( selector );
 		},

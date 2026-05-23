@@ -203,34 +203,37 @@ struct ContentView: View {
             } label: {
                 Label("Add Files", systemImage: "plus")
             }
-            .disabled(model.selectedAccount == nil || model.isWorking)
+            .disabled(!canRunNetworkAction)
             Button {
                 model.openNativeFolder()
             } label: {
                 Label("Open Folder", systemImage: "folder")
             }
-            .disabled(model.selectedAccount == nil)
+            .disabled(!hasSelectedAccount)
             Button {
-                Task { await model.syncSelectedAccount() }
+                Task { await model.refreshSelectedAccountIfStale(maxAge: 0) }
             } label: {
                 Label("Refresh", systemImage: "arrow.clockwise")
             }
+            .disabled(!canRunNetworkAction)
             Button {
                 Task { await model.syncSelectedAccount() }
             } label: {
                 Label("Sync", systemImage: "arrow.triangle.2.circlepath")
             }
+            .disabled(!canRunNetworkAction)
             Button {
                 Task { await model.loadHealth() }
             } label: {
                 Label("Health", systemImage: "stethoscope")
             }
+            .disabled(!canRunNetworkAction)
             Button(role: .destructive) {
                 model.disconnectSelectedAccount()
             } label: {
                 Label("Disconnect", systemImage: "xmark.circle")
             }
-            .disabled(model.selectedAccount == nil)
+            .disabled(!hasSelectedAccount)
         }
         .padding()
     }
@@ -297,6 +300,18 @@ struct ContentView: View {
         .font(.caption)
         .padding(.horizontal)
         .padding(.vertical, 8)
+    }
+
+    private var hasSelectedAccount: Bool {
+        model.selectedAccount != nil
+    }
+
+    private var canStartAccountWork: Bool {
+        hasSelectedAccount && !model.isWorking
+    }
+
+    private var canRunNetworkAction: Bool {
+        canStartAccountWork && model.isNetworkReachable
     }
 }
 

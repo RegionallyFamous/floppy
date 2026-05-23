@@ -1860,7 +1860,19 @@
 			}
 		}
 
-		container.addEventListener( 'click', function ( event ) {
+		function addManagedListener( element, type, listener, options ) {
+			if ( ! element || typeof element.addEventListener !== 'function' ) {
+				return;
+			}
+			element.addEventListener( type, listener, options );
+			cleanup.push( function () {
+				if ( typeof element.removeEventListener === 'function' ) {
+					element.removeEventListener( type, listener, options );
+				}
+			} );
+		}
+
+		addManagedListener( container, 'click', function ( event ) {
 			currentMount = container;
 			var nav = event.target.closest( '.floppy-nav' );
 			if ( nav ) {
@@ -1934,7 +1946,7 @@
 			}
 		} );
 
-		container.addEventListener( 'dblclick', function ( event ) {
+		addManagedListener( container, 'dblclick', function ( event ) {
 			currentMount = container;
 			var row = event.target.closest( '.floppy-file-row' );
 			if ( row && ! event.target.closest( 'button,input,a' ) ) {
@@ -1942,12 +1954,12 @@
 			}
 		} );
 
-		container.addEventListener( 'keydown', function ( event ) {
+		addManagedListener( container, 'keydown', function ( event ) {
 			currentMount = container;
 			handleKeyboardNavigation( event );
 		} );
 
-		container.addEventListener( 'input', function ( event ) {
+		addManagedListener( container, 'input', function ( event ) {
 			currentMount = container;
 			var search = event.target.closest( '[data-file-search]' );
 			if ( search ) {
@@ -1956,7 +1968,7 @@
 			}
 		} );
 
-		container.addEventListener( 'change', function ( event ) {
+		addManagedListener( container, 'change', function ( event ) {
 			currentMount = container;
 			var selectVisible = event.target.closest( '[data-select-visible]' );
 			var selectItem = event.target.closest( '[data-select-item]' );
@@ -1967,7 +1979,7 @@
 			}
 		} );
 
-		container.addEventListener( 'submit', function ( event ) {
+		addManagedListener( container, 'submit', function ( event ) {
 			var folderForm = event.target.closest( '[data-folder-form]' );
 			var shareForm = event.target.closest( '[data-share-form]' );
 			if ( folderForm ) {
@@ -1979,19 +1991,19 @@
 			}
 		} );
 
-		container.addEventListener( 'dragover', function ( event ) {
+		addManagedListener( container, 'dragover', function ( event ) {
 			event.preventDefault();
 			container.classList.add( 'is-dragging' );
 		} );
-		container.addEventListener( 'dragleave', function () {
+		addManagedListener( container, 'dragleave', function () {
 			container.classList.remove( 'is-dragging' );
 		} );
-		container.addEventListener( 'drop', function ( event ) {
+		addManagedListener( container, 'drop', function ( event ) {
 			event.preventDefault();
 			container.classList.remove( 'is-dragging' );
 			uploadFiles( event.dataTransfer.files );
 		} );
-		fileInput.addEventListener( 'change', function () {
+		addManagedListener( fileInput, 'change', function () {
 			uploadFiles( fileInput.files );
 			fileInput.value = '';
 		} );
@@ -2134,7 +2146,12 @@
 		refreshOsSettings( false );
 		loadFiles();
 
+		var disposed = false;
 		return function () {
+			if ( disposed ) {
+				return;
+			}
+			disposed = true;
 			cleanup.forEach( function ( dispose ) {
 				if ( typeof dispose === 'function' ) {
 					dispose();

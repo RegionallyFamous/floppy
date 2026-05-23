@@ -101,7 +101,7 @@ if [[ -z "$APP_PATH" ]]; then
 fi
 
 codesign --verify --deep --strict --verbose=2 "$APP_PATH"
-if ! codesign -d --verbose=4 "$APP_PATH" 2>&1 | grep -q "Runtime"; then
+if ! codesign -d --verbose=4 "$APP_PATH" 2>&1 | grep -qi "runtime"; then
     echo "Exported app is not using the hardened runtime." >&2
     exit 4
 fi

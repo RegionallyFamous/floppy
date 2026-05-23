@@ -153,7 +153,7 @@ struct MenuBarView: View {
                         .frame(maxWidth: .infinity)
                 }
                 .buttonStyle(FloppySecondaryButtonStyle())
-                .disabled(model.isWorking)
+                .disabled(model.isWorking || !model.isNetworkReachable)
             }
 
             dropStrip
