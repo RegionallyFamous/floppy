@@ -53,6 +53,14 @@ public enum FloppyDiagnostics {
             result = result.replacingOccurrences(of: pattern, with: "[redacted-file]", options: [.regularExpression, .caseInsensitive])
         }
 
+        let secretPatterns = [
+            #"\b(?:access_token|application_password|app_password|authorization|device_token|password|refresh_token|secret|token)\s*[:=]\s*[^\s"',;}]+(?:;[^\s"',;}]+)*"#,
+            #"\bBearer\s+[A-Za-z0-9._~+/\-=]+"#
+        ]
+        for pattern in secretPatterns {
+            result = result.replacingOccurrences(of: pattern, with: "[redacted-secret]", options: [.regularExpression, .caseInsensitive])
+        }
+
         return result
     }
 

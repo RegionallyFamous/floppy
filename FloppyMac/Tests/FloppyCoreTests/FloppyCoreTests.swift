@@ -261,11 +261,14 @@ import Testing
 
 @Test func diagnosticsStatusRedactsFilenamesAndLocalPaths() throws {
     let homePath = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Secret/report.pdf").path
-    let redacted = FloppyDiagnostics.redactedStatus("Uploading client-list.csv from \(homePath)")
+    let redacted = FloppyDiagnostics.redactedStatus("Uploading client-list.csv from \(homePath) token=secret Bearer abc123")
 
     #expect(redacted.contains("[redacted-file]"))
+    #expect(redacted.contains("[redacted-secret]"))
     #expect(!redacted.contains("client-list.csv"))
     #expect(!redacted.contains("report.pdf"))
+    #expect(!redacted.contains("token=secret"))
+    #expect(!redacted.contains("abc123"))
     #expect(!redacted.contains(FileManager.default.homeDirectoryForCurrentUser.path))
 }
 
