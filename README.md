@@ -1,75 +1,134 @@
 # Floppy
 
 <p align="center">
-  <img src="floppy/assets/images/floppy-icon-256.png" width="96" alt="Floppy icon">
+  <img src="floppy/assets/images/floppy-icon-256.png" width="92" alt="Floppy icon">
 </p>
 
-## Freedom for your files.
+<h1 align="center">Freedom for your files.</h1>
 
-Floppy turns your WordPress site into a private file drive that you own.
+<p align="center">
+  <strong>A private, WordPress-owned file drive for Mac.</strong><br>
+  Dropbox-like sync ambition. WordPress as the control plane. No SaaS lock-in.
+</p>
 
-It starts with a simple belief: your documents, photos, archives, client files, project folders, and shared team work should not have to live inside someone else's subscription box forever. You should be able to bring them home, keep them private, sync them where you work, and leave with your files and metadata whenever you want.
+<p align="center">
+  <a href="https://github.com/RegionallyFamous/floppy/actions/workflows/beta-checks.yml">
+    <img src="https://github.com/RegionallyFamous/floppy/actions/workflows/beta-checks.yml/badge.svg" alt="Floppy Beta Checks">
+  </a>
+  <a href="docs/wiki/Home.md">
+    <img src="https://img.shields.io/badge/docs-technical%20wiki-1f6f43" alt="Technical wiki">
+  </a>
+  <a href="docs/wiki/Public-GitHub-Beta.md">
+    <img src="https://img.shields.io/badge/status-public%20beta%20buildout-0a7cff" alt="Public beta buildout">
+  </a>
+</p>
 
-Floppy makes WordPress that home: your site owns the storage, permissions, metadata, device approvals, audit trail, exports, and diagnostics. The Mac app is the bridge back to the desktop, where files should feel native and effortless.
+<p align="center">
+  <a href="docs/wiki/Public-GitHub-Beta.md"><strong>Public Beta</strong></a>
+  ·
+  <a href="docs/wiki/Mac-App.md"><strong>Mac App</strong></a>
+  ·
+  <a href="docs/wiki/WordPress-Plugin.md"><strong>WordPress Plugin</strong></a>
+  ·
+  <a href="docs/wiki/Security-And-Sync.md"><strong>Security And Sync</strong></a>
+</p>
 
-## Own Your Data
+---
 
-WordPress already gives millions of people a place on the open web that they control. Floppy extends that idea to private files: not another closed cloud drive, not another monthly tax on access to your own work, and not another place where export is an afterthought.
+## Stop renting your file system.
 
-Your site becomes the center. Your files stay in infrastructure you choose. Your Mac connects to it like a real part of your desktop.
+Floppy turns your WordPress site into a private file drive for the open web.
 
-## Why This Matters
+Your files, metadata, permissions, device approvals, audit logs, diagnostics, and exports live in infrastructure you control. The Mac app brings that drive back to the desktop, where real file work belongs: Finder, local folders, drag and drop, previews, conflicts, recovery, and sync that feels native.
 
-The modern file cloud is convenient, but it quietly asks for a lot:
+This is not another cloud account. It is a path back to ownership.
 
-- Trust us with everything.
-- Pay us forever.
-- Use our app, our storage, our sharing rules, and our exit path.
-- Hope the product, price, and policies still work for you next year.
+## The Big Idea
 
-Floppy is the opposite instinct: familiar file sync without renting the control plane.
+| WordPress-Owned | Mac-Native | No SaaS Lock-In |
+| --- | --- | --- |
+| Your site is the source of truth for users, roles, files, metadata, versions, devices, audit logs, and exports. | The Mac companion app is built around Finder-native sync through Apple's File Provider direction. | GitHub distributes the software. Your WordPress site and Mac own the data boundary. |
 
-It is built around ownership, portability, and the open web. WordPress becomes your file base. The Mac app becomes your bridge. Your files stop feeling rented.
+WordPress already gives millions of people a place on the open web that they control. Floppy extends that same promise to private files.
 
-## The Floppy Promise
+## What Floppy Is Building
 
-- **Freedom from SaaS lock-in.** Keep your files in a system you can inspect, back up, migrate, and host yourself.
-- **WordPress-owned storage.** Use the platform you already trust to publish, manage users, and run your digital life.
-- **Private by default.** Floppy is designed for personal and team files first, not public media galleries.
-- **A native desktop feel.** Connect your Mac, work from Finder, and let your WordPress site stay quietly in charge.
-- **No external service required.** GitHub can distribute the software, but your files belong to your site.
-- **A real exit door.** Export and restore are part of the product philosophy, not a someday feature.
+Floppy is a Dropbox-like private drive where the control plane belongs to you:
 
-## What Makes It Different
+- **Private files on WordPress.** File bytes stay in protected WordPress storage and are served through authenticated endpoints.
+- **A native Mac drive.** The Mac app connects your site to a Finder-native file surface.
+- **WordPress users and roles.** Permissions build on the identity system site owners already understand.
+- **Device approval and revocation.** Macs connect with scoped device tokens that can be revoked from WordPress.
+- **Versioning, trash, conflicts, and recovery.** The product is designed around never silently overwriting user work.
+- **Export without drama.** Ownership only counts if you can leave with your files and metadata.
 
-- **Your WordPress site is the source of truth.** Users, roles, permissions, devices, files, sync events, and diagnostics live where you can inspect them.
-- **The desktop matters.** Floppy is Mac-first because serious file work still happens in Finder.
-- **Privacy is the default posture.** Files are served through authenticated Floppy endpoints instead of public media URLs.
-- **Trust is backed by evidence.** The beta lane includes automated checks for the WordPress plugin, Desktop Mode integration, macOS app, release ZIP shape, and scale targets.
-- **The open web gets a file system.** Floppy is not another silo. It is a way to make the infrastructure you already own more powerful.
+## Why It Matters
+
+The modern file cloud is convenient, but the bargain is strange:
+
+- Pay forever for access to your own work.
+- Store private files in someone else's control plane.
+- Accept their pricing, policies, sharing model, and exit path.
+- Hope the service still fits next year.
+
+Floppy points the other way: familiar file sync, but owned by the site you control.
+
+## The Promise
+
+| Promise | What it means |
+| --- | --- |
+| **Freedom from SaaS lock-in** | Keep files in a system you can inspect, back up, migrate, and host yourself. |
+| **Private by default** | Floppy is for personal and team files first, not public media galleries. |
+| **Native where it counts** | Finder is the file surface. WordPress is the command center. |
+| **Trust backed by evidence** | CI checks plugin shape, Desktop Mode hooks, WordPress tests, Swift builds, Xcode readiness, and load budgets. |
+| **No hosted data service** | No Floppy cloud is required for file data, diagnostics, telemetry, metadata, or sync state. |
+| **A real exit door** | Export and restore are product requirements, not afterthoughts. |
+
+## Current Beta Shape
+
+Floppy is early, ambitious public-beta software focused on one milestone first:
+
+**Mac plus WordPress as a serious private drive replacement.**
+
+The current build includes:
+
+- a WordPress plugin for private storage, REST APIs, permissions, diagnostics, jobs, versions, conflicts, trash, and export/recovery tooling
+- a Desktop Mode control center for My Drive, Recents, Trash, Versions, Conflicts, Shared, Sync, Devices, Diagnostics, Jobs, Evidence, and Settings
+- a native macOS companion app moving toward signed and notarized File Provider distribution
+- release gates for Composer validation/audit, dependency freshness, PHP lint, WordPress PHPUnit/MySQL tests, plugin ZIP shape, Desktop Mode executable hook audit, Swift build/tests, Xcode doctor, and query-budget evidence
+
+The goal is not a toy demo. The goal is boring reliability for private files under bad networks, stale clients, broken hosts, token revokes, quota failures, large libraries, and support/debug situations.
 
 ## Who It Is For
 
-Floppy is for people and teams who love the open web but still need a serious place for private files:
+Floppy is for people and teams who want the convenience of a cloud drive without giving away the control plane:
 
-- freelancers and studios who want client files under their own domain
-- families who want a private archive without another closed account
-- small teams who already live in WordPress
-- agencies who want file workflows their clients can actually own
+- WordPress power users who want a private file drive under their own domain
+- agencies and studios managing client files
+- small teams already built around WordPress users and roles
+- families and independent creators who want a private archive
 - open-web people who are tired of renting their file cabinet
 
-## Status
+## What It Is Not Yet
 
-Floppy is early, ambitious software in an active public-beta buildout. The current lane is Mac plus WordPress: a WordPress plugin for private storage, a Desktop Mode control center, and a native macOS companion app moving toward signed and notarized distribution.
+Floppy is deliberately focused. The current milestone does not include Windows, mobile apps, public share links, hosted telemetry, hosted diagnostics, hosted scanning, full regulated-compliance claims, or user-facing end-to-end encryption.
 
-The engineering bar is intentionally high. Current beta work is shaped by CI, WordPress integration tests, Desktop Mode hook audits, Mac build/tests, release ZIP validation, diagnostics, and scale evidence. The goal is not a toy demo; it is a serious owned-file system that can become boringly reliable.
+First, the Mac drive has to be excellent.
 
-The north star is simple:
+## Technical Wiki
+
+This README is the front door. The engineering details live in the wiki:
+
+| Area | Read this |
+| --- | --- |
+| Public beta shape | [Public GitHub Beta](docs/wiki/Public-GitHub-Beta.md) |
+| WordPress storage and APIs | [WordPress Plugin](docs/wiki/WordPress-Plugin.md) |
+| macOS and File Provider direction | [Mac App](docs/wiki/Mac-App.md) |
+| Security, privacy, and sync correctness | [Security And Sync](docs/wiki/Security-And-Sync.md) |
+| Desktop Mode public API integration | [Desktop Mode And Release Evidence](docs/wiki/Desktop-Mode-Release-Evidence.md) |
+| Release gates | [Release Checklist](docs/wiki/Release-Checklist.md) |
+| Known beta boundaries | [Known Limits](docs/wiki/Known-Limits.md) |
+
+## North Star
 
 **Own your data. Get rid of the SaaS. Let WordPress set your files free.**
-
-## Technical Docs
-
-This README is for the story.
-
-The architecture, security model, sync behavior, development workflow, release checklist, WordPress plugin details, and macOS implementation notes live in the [Floppy Wiki](https://github.com/RegionallyFamous/floppy/wiki).
