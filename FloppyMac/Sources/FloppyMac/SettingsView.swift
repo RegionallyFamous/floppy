@@ -3,7 +3,7 @@ import SwiftUI
 
 struct SettingsView: View {
     @ObservedObject var model: FloppyAppModel
-    @State private var selectedSection: FloppySettingsSection = .sync
+    @State private var selectedSection: FloppySettingsSection = .general
 
     var body: some View {
         HStack(spacing: 0) {
@@ -114,6 +114,8 @@ struct SettingsView: View {
     @ViewBuilder
     private var sectionContent: some View {
         switch selectedSection {
+        case .general:
+            generalSection
         case .account:
             accountSection
         case .sync:
@@ -124,6 +126,72 @@ struct SettingsView: View {
             diagnosticsSection
         case .advanced:
             advancedSection
+        }
+    }
+
+    private var generalSection: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            SettingsCard("Mac Behavior", systemImage: "macwindow") {
+                Toggle(isOn: Binding(
+                    get: { model.launchAtLoginEnabled },
+                    set: { model.setLaunchAtLoginEnabled($0) }
+                )) {
+                    SettingsToggleLabel(
+                        title: "Launch at Login",
+                        message: model.launchAtLoginStatusText,
+                        systemImage: "power"
+                    )
+                }
+                .toggleStyle(.switch)
+
+                Toggle(isOn: Binding(
+                    get: { model.backgroundSyncEnabled },
+                    set: { model.setBackgroundSyncEnabled($0) }
+                )) {
+                    SettingsToggleLabel(
+                        title: "Background Sync",
+                        message: "Syncs on a timer, when the Mac wakes, when Floppy becomes active, and when the network comes back.",
+                        systemImage: "arrow.triangle.2.circlepath"
+                    )
+                }
+                .toggleStyle(.switch)
+
+                SettingsInfoRow(
+                    "Network",
+                    value: model.isNetworkReachable ? "Reachable" : "Offline",
+                    systemImage: model.isNetworkReachable ? "network" : "wifi.slash"
+                )
+
+                HStack(spacing: 10) {
+                    SettingsActionButton("Open Login Items", systemImage: "gearshape") {
+                        model.openLoginItemsSettings()
+                    }
+
+                    SettingsActionButton("Sync Now", systemImage: "arrow.triangle.2.circlepath", prominence: .primary) {
+                        Task { await model.syncSelectedAccount() }
+                    }
+                    .disabled(model.selectedAccount == nil || model.isWorking || !model.isNetworkReachable)
+                }
+                .padding(.top, 4)
+            }
+
+            SettingsCard("Native Recovery", systemImage: "lifepreserver") {
+                SettingsCheckRow(
+                    title: "Wake and relaunch recovery",
+                    message: "Floppy reconciles the File Provider domain and sync cursor after wake, activation, reconnect, and network restore.",
+                    state: .pass
+                )
+                SettingsCheckRow(
+                    title: "Finder signaling",
+                    message: "Sync-affecting actions signal the working set plus active folder enumerators.",
+                    state: .pass
+                )
+                SettingsCheckRow(
+                    title: "Last automatic sync",
+                    message: model.lastAutomaticSyncAt?.formatted(date: .abbreviated, time: .shortened) ?? "Not run in this app session.",
+                    state: model.lastAutomaticSyncAt == nil ? .neutral : .pass
+                )
+            }
         }
     }
 
@@ -153,7 +221,7 @@ struct SettingsView: View {
                     .disabled(model.selectedAccount == nil)
 
                     SettingsActionButton("Refresh", systemImage: "arrow.clockwise") {
-                        Task { await model.refreshSelectedAccount() }
+                        Task { await model.syncSelectedAccount() }
                     }
                     .disabled(model.selectedAccount == nil)
 
@@ -336,6 +404,7 @@ struct SettingsView: View {
 }
 
 private enum FloppySettingsSection: String, CaseIterable, Identifiable {
+    case general
     case account
     case sync
     case finder
@@ -346,6 +415,7 @@ private enum FloppySettingsSection: String, CaseIterable, Identifiable {
 
     var title: String {
         switch self {
+        case .general: "General"
         case .account: "Account"
         case .sync: "Sync"
         case .finder: "Finder"
@@ -356,6 +426,7 @@ private enum FloppySettingsSection: String, CaseIterable, Identifiable {
 
     var subtitle: String {
         switch self {
+        case .general: "Mac launch, background sync, wake recovery, and network behavior."
         case .account: "WordPress site, scoped device token, and local account details."
         case .sync: "Cursor-based sync, SQLite ledger, and server health."
         case .finder: "Native folder availability and File Provider readiness."
@@ -366,6 +437,7 @@ private enum FloppySettingsSection: String, CaseIterable, Identifiable {
 
     var systemImage: String {
         switch self {
+        case .general: "macwindow"
         case .account: "person.crop.circle"
         case .sync: "arrow.triangle.2.circlepath"
         case .finder: "folder"
@@ -572,6 +644,30 @@ private struct SettingsCompactText: View {
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
         }
+    }
+}
+
+private struct SettingsToggleLabel: View {
+    let title: String
+    let message: String
+    let systemImage: String
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: systemImage)
+                .foregroundStyle(.secondary)
+                .frame(width: 18)
+                .padding(.top, 1)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                    .font(.callout.weight(.semibold))
+                Text(message)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .contentShape(Rectangle())
     }
 }
 

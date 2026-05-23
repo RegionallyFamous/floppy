@@ -70,6 +70,7 @@ public struct FloppyMacDiagnosticsBundleV3: Codable, Equatable, Sendable {
     public let versionRestores: FloppyMacDiagnosticsVersionRestoreInfo
     public let releaseBuild: FloppyReleaseBuildIdentity
     public let releaseEvidence: FloppyReleaseEvidenceSummary
+    public let nativeRuntime: FloppyMacDiagnosticsNativeRuntimeInfo
     public let lastStatus: String
 
     public init(
@@ -88,6 +89,7 @@ public struct FloppyMacDiagnosticsBundleV3: Codable, Equatable, Sendable {
         versionRestores: FloppyMacDiagnosticsVersionRestoreInfo,
         releaseBuild: FloppyReleaseBuildIdentity,
         releaseEvidence: FloppyReleaseEvidenceSummary,
+        nativeRuntime: FloppyMacDiagnosticsNativeRuntimeInfo = .empty,
         lastStatus: String
     ) {
         self.format = "floppy-mac-diagnostics-v3"
@@ -106,6 +108,7 @@ public struct FloppyMacDiagnosticsBundleV3: Codable, Equatable, Sendable {
         self.versionRestores = versionRestores
         self.releaseBuild = releaseBuild
         self.releaseEvidence = releaseEvidence
+        self.nativeRuntime = nativeRuntime
         self.lastStatus = lastStatus
     }
 
@@ -126,6 +129,7 @@ public struct FloppyMacDiagnosticsBundleV3: Codable, Equatable, Sendable {
         case versionRestores = "version_restores"
         case releaseBuild = "release_build"
         case releaseEvidence = "release_evidence"
+        case nativeRuntime = "native_runtime"
         case lastStatus = "last_status"
     }
 }
@@ -223,6 +227,34 @@ public struct FloppyMacDiagnosticsVersionRestoreInfo: Codable, Equatable, Sendab
         case restoresAttempted = "restores_attempted"
         case lastRestoreAt = "last_restore_at"
         case lastError = "last_error"
+    }
+}
+
+public struct FloppyMacDiagnosticsNativeRuntimeInfo: Codable, Equatable, Sendable {
+    public let launchAtLogin: String
+    public let backgroundSyncEnabled: Bool
+    public let networkReachable: Bool
+    public let lastAutomaticSyncAt: String
+
+    public init(launchAtLogin: String, backgroundSyncEnabled: Bool, networkReachable: Bool, lastAutomaticSyncAt: String) {
+        self.launchAtLogin = launchAtLogin
+        self.backgroundSyncEnabled = backgroundSyncEnabled
+        self.networkReachable = networkReachable
+        self.lastAutomaticSyncAt = lastAutomaticSyncAt
+    }
+
+    public static let empty = FloppyMacDiagnosticsNativeRuntimeInfo(
+        launchAtLogin: "unknown",
+        backgroundSyncEnabled: false,
+        networkReachable: true,
+        lastAutomaticSyncAt: ""
+    )
+
+    enum CodingKeys: String, CodingKey {
+        case launchAtLogin = "launch_at_login"
+        case backgroundSyncEnabled = "background_sync_enabled"
+        case networkReachable = "network_reachable"
+        case lastAutomaticSyncAt = "last_automatic_sync_at"
     }
 }
 

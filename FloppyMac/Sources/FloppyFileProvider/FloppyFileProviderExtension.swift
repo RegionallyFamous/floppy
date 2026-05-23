@@ -142,7 +142,8 @@ final class FloppyFileProviderExtension: NSObject, NSFileProviderReplicatedExten
                 if itemTemplate.contentType == .folder {
                     item = try await apiClient.createFolder(name: itemTemplate.filename, parentID: parentID)
                 } else if let url {
-                    item = try await apiClient.uploadFile(
+                    item = try await uploadTrackedFile(
+                        using: apiClient,
                         at: url,
                         filename: itemTemplate.filename,
                         parentID: parentID,
@@ -208,7 +209,9 @@ final class FloppyFileProviderExtension: NSObject, NSFileProviderReplicatedExten
 
                 if let newContents, current.kind == .file {
                     do {
-                        current = try await apiClient.replaceFile(
+                        current = try await replaceTrackedFile(
+                            using: apiClient,
+                            original: current,
                             id: current.id,
                             at: newContents,
                             filename: current.name,
@@ -424,6 +427,114 @@ final class FloppyFileProviderExtension: NSObject, NSFileProviderReplicatedExten
         }
 
         return NSFileProviderItemIdentifier(FloppyFileProviderIdentifierCodec.legacyItemIdentifierRawValue(id: item.parentID))
+    }
+
+    private func uploadTrackedFile(
+        using apiClient: FloppyAPIClient,
+        at url: URL,
+        filename: String,
+        parentID: Int64,
+        mimeType: String,
+        progressHandler: ((Int64, Int64) -> Void)? = nil
+    ) async throws -> FloppyItem {
+        let totalSize = try FloppyAPIClient.fileSize(for: url)
+        let contentHash = try FloppyAPIClient.sha256HexDigest(for: url)
+        let session = try await apiClient.createUploadSession(
+            filename: filename,
+            parentID: parentID,
+            totalSize: totalSize,
+            contentHash: contentHash,
+            mimeType: mimeType
+        )
+        return try await finishTrackedTransfer(
+            using: apiClient,
+            session: session,
+            operation: "upload",
+            itemUUID: nil,
+            fileID: nil,
+            localURL: url,
+            totalSize: totalSize,
+            progressHandler: progressHandler
+        )
+    }
+
+    private func replaceTrackedFile(
+        using apiClient: FloppyAPIClient,
+        original: FloppyItem,
+        id: Int64,
+        at url: URL,
+        filename: String,
+        contentVersion: String,
+        mimeType: String,
+        progressHandler: ((Int64, Int64) -> Void)? = nil
+    ) async throws -> FloppyItem {
+        let totalSize = try FloppyAPIClient.fileSize(for: url)
+        let contentHash = try FloppyAPIClient.sha256HexDigest(for: url)
+        let session = try await apiClient.createReplaceSession(
+            fileID: id,
+            contentVersion: contentVersion,
+            totalSize: totalSize,
+            contentHash: contentHash,
+            mimeType: mimeType
+        )
+        return try await finishTrackedTransfer(
+            using: apiClient,
+            session: session,
+            operation: "replace",
+            itemUUID: original.uuid,
+            fileID: id,
+            localURL: url,
+            totalSize: totalSize,
+            progressHandler: progressHandler
+        )
+    }
+
+    private func finishTrackedTransfer(
+        using apiClient: FloppyAPIClient,
+        session: FloppyUploadSession,
+        operation: String,
+        itemUUID: String?,
+        fileID: Int64?,
+        localURL: URL,
+        totalSize: Int64,
+        progressHandler: ((Int64, Int64) -> Void)? = nil
+    ) async throws -> FloppyItem {
+        let accountID = await ledger.accounts().first?.id
+        let ledger = self.ledger
+        if let accountID {
+            try await ledger.saveUploadTransferSession(FloppyUploadTransferSession(
+                accountID: accountID,
+                sessionUUID: session.sessionUUID,
+                operation: operation,
+                itemUUID: itemUUID,
+                fileID: fileID,
+                localPath: localURL.path,
+                totalSize: totalSize,
+                offset: session.receivedBytes,
+                idempotencyKey: UUID().uuidString
+            ))
+        }
+
+        do {
+            let item = try await apiClient.uploadChunks(
+                from: localURL,
+                session: session,
+                totalSize: totalSize,
+                progressHandler: progressHandler
+            ) { offset in
+                guard let accountID else {
+                    return
+                }
+                try? await ledger.updateUploadTransferSession(sessionUUID: session.sessionUUID, offset: offset, accountID: accountID)
+            }
+            if let accountID {
+                try? await ledger.removeUploadTransferSession(sessionUUID: session.sessionUUID, accountID: accountID)
+            }
+            return item
+        } catch {
+            FloppyDiagnostics.fileProvider.error("Preserved interrupted \(operation, privacy: .public) session \(session.sessionUUID, privacy: .public) for diagnostics")
+            throw error
+        }
     }
 
     private static func conflictFilename(for name: String) -> String {

@@ -7,8 +7,10 @@ final class FloppyStatusItemController: NSObject {
 
     private var statusItem: NSStatusItem?
     private var popover: NSPopover?
+    private weak var model: FloppyAppModel?
 
     func install(model: FloppyAppModel) {
+        self.model = model
         if statusItem == nil {
             statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
         }
@@ -21,7 +23,10 @@ final class FloppyStatusItemController: NSObject {
         button.imagePosition = .imageOnly
         button.toolTip = "Floppy"
         button.target = self
-        button.action = #selector(togglePopover(_:))
+        button.action = #selector(handleStatusItemClick(_:))
+        button.sendAction(on: [.leftMouseUp, .rightMouseUp])
+        button.setAccessibilityLabel("Floppy")
+        button.setAccessibilityHelp("Open Floppy sync status")
 
         let popover = NSPopover()
         popover.behavior = .transient
@@ -31,6 +36,15 @@ final class FloppyStatusItemController: NSObject {
     }
 
     @objc
+    private func handleStatusItemClick(_ sender: NSStatusBarButton) {
+        if NSApp.currentEvent?.type == .rightMouseUp {
+            showStatusMenu(from: sender)
+            return
+        }
+
+        togglePopover(sender)
+    }
+
     private func togglePopover(_ sender: NSStatusBarButton) {
         guard let popover else {
             return
@@ -42,6 +56,48 @@ final class FloppyStatusItemController: NSObject {
             NSApp.activate()
             popover.show(relativeTo: sender.bounds, of: sender, preferredEdge: .minY)
         }
+    }
+
+    private func showStatusMenu(from sender: NSStatusBarButton) {
+        popover?.performClose(sender)
+
+        let menu = NSMenu()
+        menu.autoenablesItems = false
+        menu.addItem(menuItem("Open Floppy Folder", action: #selector(openFolderFromMenu), keyEquivalent: "o", enabled: model?.selectedAccount != nil))
+        menu.addItem(menuItem("Sync Now", action: #selector(syncNowFromMenu), keyEquivalent: "r", enabled: model?.selectedAccount != nil && model?.isWorking == false))
+        menu.addItem(.separator())
+        menu.addItem(menuItem("Settings...", action: #selector(openSettingsFromMenu), keyEquivalent: ",", enabled: true))
+        menu.addItem(menuItem("Quit Floppy", action: #selector(quitFromMenu), keyEquivalent: "q", enabled: true))
+        menu.popUp(positioning: nil, at: NSPoint(x: 0, y: sender.bounds.height + 4), in: sender)
+    }
+
+    private func menuItem(_ title: String, action: Selector, keyEquivalent: String, enabled: Bool) -> NSMenuItem {
+        let item = NSMenuItem(title: title, action: action, keyEquivalent: keyEquivalent)
+        item.target = self
+        item.isEnabled = enabled
+        return item
+    }
+
+    @objc
+    private func openFolderFromMenu() {
+        model?.openNativeFolder()
+    }
+
+    @objc
+    private func syncNowFromMenu() {
+        Task { @MainActor [weak self] in
+            await self?.model?.syncSelectedAccount()
+        }
+    }
+
+    @objc
+    private func openSettingsFromMenu() {
+        model?.openSettingsWindow()
+    }
+
+    @objc
+    private func quitFromMenu() {
+        NSApp.terminate(nil)
     }
 
     private func makeStatusImage() -> NSImage {

@@ -346,6 +346,7 @@ import Testing
     #expect(json.contains("version_restores"))
     #expect(json.contains("release_build"))
     #expect(json.contains("release_evidence"))
+    #expect(json.contains("native_runtime"))
     #expect(!json.contains("device-secret-uuid"))
     #expect(!json.contains("password"))
     #expect(!json.contains("token=secret"))

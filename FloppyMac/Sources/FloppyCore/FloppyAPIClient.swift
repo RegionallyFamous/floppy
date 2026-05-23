@@ -459,11 +459,12 @@ public struct FloppyAPIClient: Sendable {
         return try await uploadChunks(from: fileURL, session: uploadSession, totalSize: totalSize, progressHandler: progressHandler)
     }
 
-    private func uploadChunks(
+    public func uploadChunks(
         from fileURL: URL,
         session uploadSession: FloppyUploadSession,
         totalSize: Int64,
-        progressHandler: ((Int64, Int64) -> Void)? = nil
+        progressHandler: ((Int64, Int64) -> Void)? = nil,
+        progressRecorder: ((Int64) async -> Void)? = nil
     ) async throws -> FloppyItem {
         let chunkSize = max(1, uploadSession.chunkSize)
         let handle = try FileHandle(forReadingFrom: fileURL)
@@ -484,6 +485,9 @@ public struct FloppyAPIClient: Sendable {
             )
             offset = response.receivedBytes
             progressHandler?(offset, totalSize)
+            if let progressRecorder {
+                await progressRecorder(offset)
+            }
         }
 
         return try await completeUploadSession(sessionUUID: uploadSession.sessionUUID)
@@ -800,7 +804,7 @@ public struct FloppyAPIClient: Sendable {
         return hasher.finalize().map { String(format: "%02x", $0) }.joined()
     }
 
-    private static func fileSize(for fileURL: URL) throws -> Int64 {
+    public static func fileSize(for fileURL: URL) throws -> Int64 {
         let attributes = try FileManager.default.attributesOfItem(atPath: fileURL.path)
         let fallbackSize = (attributes[.size] as? NSNumber)?.int64Value ?? 0
         return try fileURL.resourceValues(forKeys: [.fileSizeKey]).fileSize.map(Int64.init) ?? fallbackSize

@@ -1,11 +1,16 @@
 import AppKit
 import FloppyCore
 import Foundation
+import Network
+import ServiceManagement
 import SwiftUI
 import UniformTypeIdentifiers
 
 @MainActor
 final class FloppyAppModel: ObservableObject {
+    private static let backgroundSyncEnabledDefaultsKey = "FloppyBackgroundSyncEnabled"
+    private static let backgroundSyncIntervalNanoseconds: UInt64 = 60_000_000_000
+
     @Published var siteURLText: String = ""
     @Published var deviceName: String = Host.current().localizedName ?? "Mac"
     @Published var accounts: [FloppyAccount] = []
@@ -20,11 +25,20 @@ final class FloppyAppModel: ObservableObject {
     @Published var lastDownloadedPluginZipURL: URL?
     @Published var pendingPluginUploadURL: URL?
     @Published var nativeFolderReadiness = FloppyNativeFolderReadiness.current()
+    @Published var launchAtLoginEnabled = false
+    @Published var launchAtLoginStatusText = "Not checked"
+    @Published var backgroundSyncEnabled: Bool
+    @Published var isNetworkReachable = true
+    @Published var lastAutomaticSyncAt: Date?
 
     private let tokenStore: FloppyTokenStore = KeychainTokenStore.default()
     private var ledger: LocalLedger?
     private var pendingOnboarding: PendingOnboarding?
     private var onboardingTask: Task<Void, Never>?
+    private var backgroundSyncTask: Task<Void, Never>?
+    private var lifecycleObservers: [NSObjectProtocol] = []
+    private var networkMonitor: NWPathMonitor?
+    private let networkMonitorQueue = DispatchQueue(label: "com.floppy.mac.network-monitor")
 
     var isOnboarding: Bool {
         onboardingStep.isActiveSetupStep
@@ -35,6 +49,8 @@ final class FloppyAppModel: ObservableObject {
     }
 
     init() {
+        let savedBackgroundSync = UserDefaults.standard.object(forKey: Self.backgroundSyncEnabledDefaultsKey) as? Bool
+        self.backgroundSyncEnabled = savedBackgroundSync ?? true
         FloppyURLRouter.shared.setHandler { [weak self] url in
             self?.handleCallback(url)
         }
@@ -46,6 +62,10 @@ final class FloppyAppModel: ObservableObject {
         self.ledger = ledger
         restorePendingOnboarding()
         nativeFolderReadiness = FloppyNativeFolderReadiness.current()
+        refreshLaunchAtLoginStatus()
+        startNativeLifecycleMonitoring()
+        startNetworkMonitoring()
+        startBackgroundSyncLoop()
         accounts = await ledger.accounts()
         await prepareNativeDomainsIfAvailable(for: accounts)
         selectedAccountID = accounts.first?.id
@@ -341,6 +361,69 @@ final class FloppyAppModel: ObservableObject {
         FloppyDiagnostics.app.info("Saved connected account for \(FloppyDiagnostics.redactedURL(account.siteURL), privacy: .public)")
     }
 
+    func refreshLaunchAtLoginStatus() {
+        let status = SMAppService.mainApp.status
+        launchAtLoginEnabled = status == .enabled
+        launchAtLoginStatusText = Self.launchAtLoginDescription(for: status)
+    }
+
+    func setLaunchAtLoginEnabled(_ enabled: Bool) {
+        do {
+            let service = SMAppService.mainApp
+            switch (enabled, service.status) {
+            case (true, .enabled):
+                break
+            case (true, _):
+                try service.register()
+            case (false, .notRegistered), (false, .notFound):
+                break
+            case (false, _):
+                try service.unregister()
+            }
+            refreshLaunchAtLoginStatus()
+            status = launchAtLoginEnabled ? "Floppy will launch at login." : "Launch at login is off."
+            if SMAppService.mainApp.status == .requiresApproval {
+                SMAppService.openSystemSettingsLoginItems()
+                status = "Approve Floppy in Login Items to launch at login."
+            }
+        } catch {
+            refreshLaunchAtLoginStatus()
+            status = "Could not update Launch at Login: \(error.localizedDescription)"
+        }
+    }
+
+    func openLoginItemsSettings() {
+        SMAppService.openSystemSettingsLoginItems()
+    }
+
+    func setBackgroundSyncEnabled(_ enabled: Bool) {
+        backgroundSyncEnabled = enabled
+        UserDefaults.standard.set(enabled, forKey: Self.backgroundSyncEnabledDefaultsKey)
+        if enabled {
+            startBackgroundSyncLoop()
+            status = "Background sync is on."
+        } else {
+            backgroundSyncTask?.cancel()
+            backgroundSyncTask = nil
+            status = "Background sync is off."
+        }
+    }
+
+    func recoverNativeSync(reason: String) async {
+        guard selectedAccount != nil else {
+            return
+        }
+
+        guard backgroundSyncEnabled, isNetworkReachable, !isWorking, !isOnboarding else {
+            return
+        }
+
+        status = reason
+        await reconcileSelectedNativeDomain()
+        await syncSelectedAccount()
+        lastAutomaticSyncAt = Date()
+    }
+
     private func prepareNativeDomainsIfAvailable(for accounts: [FloppyAccount]) async {
         guard nativeFolderReadiness.isReady else {
             return
@@ -415,6 +498,19 @@ final class FloppyAppModel: ObservableObject {
             items = await ledger?.items(accountID: account.id) ?? items
             await FileProviderDomainController.signal(account: account)
             status = "Synced \(changes.events.count) changes. Cursor \(changes.nextCursor)."
+        } catch {
+            status = error.localizedDescription
+        }
+    }
+
+    func reconcileSelectedNativeDomain() async {
+        guard let account = selectedAccount else {
+            return
+        }
+
+        nativeFolderReadiness = FileProviderDomainController.readiness()
+        do {
+            try await FileProviderDomainController.reconcile(account: account)
         } catch {
             status = error.localizedDescription
         }
@@ -737,6 +833,12 @@ final class FloppyAppModel: ObservableObject {
             versionRestores: FloppyMacDiagnosticsVersionRestoreInfo(),
             releaseBuild: FloppyReleaseBuildIdentity.current(),
             releaseEvidence: .empty,
+            nativeRuntime: FloppyMacDiagnosticsNativeRuntimeInfo(
+                launchAtLogin: launchAtLoginStatusText,
+                backgroundSyncEnabled: backgroundSyncEnabled,
+                networkReachable: isNetworkReachable,
+                lastAutomaticSyncAt: lastAutomaticSyncAt.map { formatter.string(from: $0) } ?? ""
+            ),
             lastStatus: status
         )
 
@@ -892,6 +994,107 @@ final class FloppyAppModel: ObservableObject {
 
     private func clearPendingOnboarding() {
         UserDefaults.standard.removeObject(forKey: PendingOnboarding.defaultsKey)
+    }
+
+    private static func launchAtLoginDescription(for status: SMAppService.Status) -> String {
+        switch status {
+        case .enabled:
+            "Enabled"
+        case .notRegistered:
+            "Off"
+        case .requiresApproval:
+            "Needs approval in System Settings"
+        case .notFound:
+            "Not available for this build"
+        @unknown default:
+            "Unknown"
+        }
+    }
+
+    private func startNativeLifecycleMonitoring() {
+        guard lifecycleObservers.isEmpty else {
+            return
+        }
+
+        lifecycleObservers.append(NotificationCenter.default.addObserver(
+            forName: NSApplication.didBecomeActiveNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                await self?.recoverNativeSync(reason: "Checking for changes after Floppy became active.")
+            }
+        })
+
+        lifecycleObservers.append(NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.didWakeNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                await self?.recoverNativeSync(reason: "Checking for changes after this Mac woke up.")
+            }
+        })
+
+        lifecycleObservers.append(NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.screensDidWakeNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                await self?.recoverNativeSync(reason: "Checking for changes after the display woke up.")
+            }
+        })
+    }
+
+    private func startNetworkMonitoring() {
+        guard networkMonitor == nil else {
+            return
+        }
+
+        let monitor = NWPathMonitor()
+        monitor.pathUpdateHandler = { [weak self] path in
+            let reachable = path.status == .satisfied
+            Task { @MainActor [weak self] in
+                guard let self else {
+                    return
+                }
+                let wasReachable = self.isNetworkReachable
+                self.isNetworkReachable = reachable
+                if reachable, !wasReachable {
+                    await self.recoverNativeSync(reason: "Network restored. Checking for Floppy changes.")
+                } else if !reachable {
+                    self.status = "Offline. Floppy will sync when the network returns."
+                }
+            }
+        }
+        monitor.start(queue: networkMonitorQueue)
+        networkMonitor = monitor
+    }
+
+    private func startBackgroundSyncLoop() {
+        guard backgroundSyncEnabled, backgroundSyncTask == nil else {
+            return
+        }
+
+        backgroundSyncTask = Task { [weak self] in
+            while !Task.isCancelled {
+                do {
+                    try await Task.sleep(nanoseconds: Self.backgroundSyncIntervalNanoseconds)
+                } catch {
+                    return
+                }
+
+                await MainActor.run {
+                    guard let self else {
+                        return
+                    }
+                    Task {
+                        await self.recoverNativeSync(reason: "Background sync is checking for changes.")
+                    }
+                }
+            }
+        }
     }
 }
 

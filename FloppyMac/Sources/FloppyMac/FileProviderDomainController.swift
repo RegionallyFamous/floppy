@@ -84,6 +84,26 @@ enum FileProviderDomainController {
         }
     }
 
+    static func reconcile(account: FloppyAccount) async throws {
+        let keychainAvailable = (try? KeychainTokenStore.default().load(accountID: account.id)) != nil
+        let diagnostic = await lifecycleDiagnostic(account: account, keychainAvailable: keychainAvailable)
+
+        switch diagnostic.state {
+        case .configured:
+            return
+        case .nativeFolderNotReady:
+            throw FileProviderFolderError.notReady(readiness())
+        case .missingToken, .revokedToken:
+            throw FileProviderFolderError.missingToken
+        case .registryMissing, .domainUnavailable, .unconfigured:
+            try await register(account: account, strict: true)
+        case .needsLedgerRepair, .materializationStuck:
+            throw FileProviderFolderError.ledgerNeedsRepair
+        case .serverUnreachable, .reconnectFailed:
+            try await register(account: account, strict: false)
+        }
+    }
+
     static func lifecycleDiagnostic(account: FloppyAccount?, keychainAvailable: Bool) async -> FloppyFileProviderLifecycleDiagnostic {
         guard let account else {
             let readiness = readiness()
@@ -242,6 +262,8 @@ private enum FileProviderFolderError: LocalizedError {
     case unavailable
     case notReady(FloppyNativeFolderReadiness)
     case helperUnavailable(Error)
+    case ledgerNeedsRepair
+    case missingToken
 
     var errorDescription: String? {
         switch self {
@@ -251,6 +273,10 @@ private enum FileProviderFolderError: LocalizedError {
             readiness.message
         case .helperUnavailable:
             "macOS could not start the Floppy Finder helper. Open FloppyMac.xcodeproj, set a signing Team for both the app and File Provider extension, then build and run the FloppyMac scheme."
+        case .ledgerNeedsRepair:
+            "The Floppy Finder ledger needs repair before native sync can continue."
+        case .missingToken:
+            "Reconnect this WordPress site so Floppy can refresh the scoped device token in Keychain."
         }
     }
 }

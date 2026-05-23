@@ -59,7 +59,7 @@ struct MenuBarView: View {
                     .accessibilityLabel(model.selectedAccount == nil ? "Not connected" : "Connected")
 
                 Button {
-                    Task { await model.refreshSelectedAccount() }
+                    Task { await model.syncSelectedAccount() }
                 } label: {
                     Image(systemName: "arrow.clockwise")
                 }
@@ -262,7 +262,16 @@ struct MenuBarView: View {
         }
 
         let host = account.siteURL.host ?? "Connected"
-        return model.isWorking ? "\(host) · Syncing..." : "\(host) · Synced just now"
+        if model.isWorking {
+            return "\(host) · Syncing..."
+        }
+        guard model.isNetworkReachable else {
+            return "\(host) · Offline"
+        }
+        if let lastSyncAt = account.lastSyncAt {
+            return "\(host) · Synced \(lastSyncAt.formatted(date: .omitted, time: .shortened))"
+        }
+        return "\(host) · Ready"
     }
 
     private var footerStatus: String {

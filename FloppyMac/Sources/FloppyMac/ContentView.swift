@@ -214,7 +214,7 @@ struct ContentView: View {
             }
             .disabled(model.selectedAccount == nil)
             Button {
-                Task { await model.refreshSelectedAccount() }
+                Task { await model.syncSelectedAccount() }
             } label: {
                 Label("Refresh", systemImage: "arrow.clockwise")
             }
