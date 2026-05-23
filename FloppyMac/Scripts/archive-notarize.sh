@@ -196,7 +196,7 @@ if [[ "$ALLOW_NOTARIZATION_SKIP" == "1" ]] && ! spctl --assess --type execute --
     echo "Gatekeeper assessment failed for a local development build; continuing because ALLOW_NOTARIZATION_SKIP=1."
 fi
 
-ditto -c -k --sequesterRsrc --keepParent "$APP_PATH" "$ZIP_PATH"
+ditto -c -k --keepParent "$APP_PATH" "$ZIP_PATH"
 echo "Created notarization ZIP: $ZIP_PATH"
 
 NOTARYTOOL_KEY_PATH="${NOTARY_KEY_PATH:-$APP_STORE_CONNECT_KEY_PATH}"
@@ -204,15 +204,15 @@ NOTARYTOOL_KEY_ID="${NOTARY_KEY_ID:-$APP_STORE_CONNECT_KEY_ID}"
 NOTARYTOOL_ISSUER_ID="${NOTARY_ISSUER_ID:-$APP_STORE_CONNECT_ISSUER_ID}"
 
 if [[ -n "$NOTARY_PROFILE" ]]; then
-    xcrun notarytool submit "$ZIP_PATH" --keychain-profile "$NOTARY_PROFILE" --wait
+    DEVELOPER_DIR="$XCODE_DEVELOPER_DIR" xcrun notarytool submit "$ZIP_PATH" --keychain-profile "$NOTARY_PROFILE" --wait
 elif [[ -n "$NOTARYTOOL_KEY_PATH" && -n "$NOTARYTOOL_KEY_ID" && -n "$NOTARYTOOL_ISSUER_ID" ]]; then
-    xcrun notarytool submit "$ZIP_PATH" \
+    DEVELOPER_DIR="$XCODE_DEVELOPER_DIR" xcrun notarytool submit "$ZIP_PATH" \
         --key "$NOTARYTOOL_KEY_PATH" \
         --key-id "$NOTARYTOOL_KEY_ID" \
         --issuer "$NOTARYTOOL_ISSUER_ID" \
         --wait
 elif [[ -n "$APPLE_ID" && -n "$APPLE_PASSWORD" && -n "$NOTARY_TEAM_ID" ]]; then
-    xcrun notarytool submit "$ZIP_PATH" \
+    DEVELOPER_DIR="$XCODE_DEVELOPER_DIR" xcrun notarytool submit "$ZIP_PATH" \
         --apple-id "$APPLE_ID" \
         --password "$APPLE_PASSWORD" \
         --team-id "$NOTARY_TEAM_ID" \
@@ -228,13 +228,13 @@ else
     exit 4
 fi
 
-xcrun stapler staple "$APP_PATH"
+DEVELOPER_DIR="$XCODE_DEVELOPER_DIR" xcrun stapler staple "$APP_PATH"
 codesign --verify --deep --strict --verbose=2 "$APP_PATH"
 codesign --verify --strict --verbose=2 "$EXTENSION_PATH"
 spctl --assess --type execute --verbose "$APP_PATH"
 
 rm -f "$ZIP_PATH"
-ditto -c -k --sequesterRsrc --keepParent "$APP_PATH" "$ZIP_PATH"
+ditto -c -k --keepParent "$APP_PATH" "$ZIP_PATH"
 
 echo "$APP_PATH"
 echo "$ZIP_PATH"
