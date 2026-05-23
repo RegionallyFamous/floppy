@@ -96,6 +96,44 @@ final class FloppyAppModel: ObservableObject {
         await refreshSelectedAccountIfStale(maxAge: 0)
     }
 
+    func selectAccount(id: String?) {
+        guard selectedAccountID != id else {
+            return
+        }
+
+        selectedAccountID = id
+        health = nil
+        lastHealthCheckAt = nil
+        lastHealthError = ""
+        lastRefreshAt = nil
+
+        Task { @MainActor in
+            await loadSelectedAccountCacheAndRefresh(expectedAccountID: id)
+        }
+    }
+
+    private func loadSelectedAccountCacheAndRefresh(expectedAccountID id: String?) async {
+        guard selectedAccountID == id else {
+            return
+        }
+
+        guard let id else {
+            items = []
+            openConflictCount = 0
+            pendingTransferCount = 0
+            return
+        }
+
+        let cachedItems = await ledger?.items(accountID: id) ?? []
+        guard selectedAccountID == id else {
+            return
+        }
+
+        items = cachedItems
+        await refreshLocalCounters(accountID: id)
+        await refreshSelectedAccountIfStale(maxAge: 0)
+    }
+
     func startBrowserApproval() {
         onboardingTask?.cancel()
 
@@ -1011,8 +1049,7 @@ final class FloppyAppModel: ObservableObject {
                 try? await FileProviderDomainController.remove(account: account)
                 try await ledger?.removeAccount(id: account.id)
                 accounts = await ledger?.accounts() ?? []
-                selectedAccountID = accounts.first?.id
-                await refreshSelectedAccountIfStale(maxAge: 0)
+                selectAccount(id: accounts.first?.id)
                 if let revokeError {
                     status = "Disconnected locally. Server revoke failed: \(revokeError.localizedDescription)"
                 } else {

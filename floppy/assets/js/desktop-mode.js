@@ -430,6 +430,16 @@
 			return current;
 		}
 
+		function showPanelError( token ) {
+			return function ( error ) {
+				if ( ! panelRequestIsCurrent( token ) ) {
+					return null;
+				}
+				showError( error );
+				return null;
+			};
+		}
+
 		function renderInlineError( error ) {
 			var message = error && error.message ? error.message : __( 'Floppy request failed.', 'floppy' );
 			state.lastError = {
@@ -905,7 +915,7 @@
 				}
 				renderFiles();
 				markReady( ctx );
-			} ).catch( showError );
+			} ).catch( showPanelError( token ) );
 		}
 
 		function loadMoreFiles() {
@@ -938,7 +948,7 @@
 				}
 				renderShared();
 				markReady( ctx );
-			} ).catch( showError );
+			} ).catch( showPanelError( token ) );
 		}
 
 		function fetchSharedEvents() {
@@ -1004,7 +1014,7 @@
 				}
 				renderDiagnostics();
 				markReady( ctx );
-			} ).catch( showError );
+			} ).catch( showPanelError( token ) );
 		}
 
 		function loadDeepHealth() {
@@ -1036,7 +1046,7 @@
 				state.conflicts = normalizeConflictRows( data, state.syncEvents );
 				renderConflicts();
 				markReady( ctx );
-			} ).catch( showError );
+			} ).catch( showPanelError( token ) );
 		}
 
 		function loadVersions() {
@@ -1062,7 +1072,7 @@
 					markReady( ctx );
 					return data;
 				} );
-			} ).catch( showError );
+			} ).catch( showPanelError( token ) );
 		}
 
 		function loadJobs() {
@@ -1078,7 +1088,7 @@
 				}
 				renderJobs();
 				markReady( ctx );
-			} ).catch( showError );
+			} ).catch( showPanelError( token ) );
 		}
 
 		function loadEvidence() {
@@ -1093,7 +1103,7 @@
 				}
 				renderEvidence();
 				markReady( ctx );
-			} ).catch( showError );
+			} ).catch( showPanelError( token ) );
 		}
 
 		function loadDevices() {
@@ -1117,7 +1127,7 @@
 				}
 				renderDevices();
 				markReady( ctx );
-			} ).catch( showError );
+			} ).catch( showPanelError( token ) );
 		}
 
 		function loadSync( reset ) {
@@ -1133,7 +1143,7 @@
 				state.syncEvents = reset ? ( data.events || [] ) : mergeEvents( state.syncEvents, data.events || [] );
 				renderSync();
 				markReady( ctx );
-			} ).catch( showError );
+			} ).catch( showPanelError( token ) );
 		}
 
 		function refreshOsSettings( shouldRender ) {

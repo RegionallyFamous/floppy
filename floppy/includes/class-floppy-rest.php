@@ -2975,7 +2975,15 @@ final class Floppy_Rest {
 			);
 		}
 
-		$response = self::apply_folder_tree_status( $id, $status, $event_type, self::folder_tree_ids( $id ), absint( $payload['user_id'] ?? 0 ) );
+		$actor_id = absint( $payload['user_id'] ?? 0 );
+		if ( ! Floppy_Permissions::can_write( 'folder', $id, $actor_id ) ) {
+			return array(
+				'ok'      => false,
+				'message' => 'Queued actor can no longer write this folder.',
+			);
+		}
+
+		$response = self::apply_folder_tree_status( $id, $status, $event_type, self::folder_tree_ids( $id ), $actor_id );
 		if ( is_wp_error( $response ) ) {
 			return array(
 				'ok'      => false,

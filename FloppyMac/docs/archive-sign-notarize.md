@@ -6,7 +6,7 @@
 
 1. Full Xcode is installed and selected.
 2. The app target and File Provider extension target share:
-   - App Group: `group.com.floppy.mac`
+   - App Group: `$(TeamIdentifierPrefix)com.floppy.mac.sync` in Xcode, which resolves to `com.floppy.mac.sync` in the checked entitlements.
    - Keychain group: `$(AppIdentifierPrefix)com.floppy.mac`
 3. The extension target uses `Extension/Info.plist` and `Extension/FloppyFileProvider.entitlements`.
 4. The app target uses `Packaging/FloppyMac.entitlements`.

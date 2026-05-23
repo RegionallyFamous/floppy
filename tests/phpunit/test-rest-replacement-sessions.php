@@ -246,6 +246,43 @@ final class Floppy_REST_Replacement_Sessions_Test extends WP_UnitTestCase {
 		$this->assertSame( 0, (int) $wpdb->get_var( $wpdb->prepare( 'SELECT COUNT(*) FROM ' . Floppy_Schema::table( 'acl_grants' ) . ' WHERE target_type = %s AND target_id = %d', 'file', $file['id'] ) ) );
 	}
 
+	public function test_queued_folder_tree_status_rechecks_actor_permission(): void {
+		global $wpdb;
+
+		$actor_id = self::factory()->user->create( array( 'role' => 'author' ) );
+		$folder = $this->insert_private_folder( $actor_id );
+		$author = get_role( 'author' );
+
+		$this->assertNotNull( $author );
+		$this->assertTrue( Floppy_Permissions::can_write( 'folder', $folder['id'], $actor_id ) );
+
+		try {
+			$author->remove_cap( Floppy_Permissions::CAP_WRITE );
+			$result = Floppy_Rest::run_folder_tree_status_job(
+				array(
+					'user_id'          => $actor_id,
+					'folder_id'        => $folder['id'],
+					'status'           => 'trashed',
+					'event_type'       => 'folder.trashed',
+					'metadata_version' => $folder['metadata_version'],
+				)
+			);
+		} finally {
+			$author->add_cap( Floppy_Permissions::CAP_WRITE );
+		}
+
+		$status = (string) $wpdb->get_var(
+			$wpdb->prepare(
+				'SELECT status FROM ' . Floppy_Schema::table( 'folders' ) . ' WHERE id = %d',
+				$folder['id']
+			)
+		);
+
+		$this->assertFalse( $result['ok'] );
+		$this->assertSame( 'Queued actor can no longer write this folder.', $result['message'] );
+		$this->assertSame( 'active', $status );
+	}
+
 	public function test_thumbnail_for_non_image_is_rejected_privately(): void {
 		$file = $this->insert_private_file( 'hello' );
 		$request = new WP_REST_Request( 'GET', '/floppy/v1/files/' . $file['id'] . '/thumbnail' );
@@ -296,6 +333,30 @@ final class Floppy_REST_Replacement_Sessions_Test extends WP_UnitTestCase {
 			Floppy_Schema::table( 'files' ),
 			$row,
 			array( '%s', '%d', '%d', '%d', '%s', '%s', '%s', '%d', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s' )
+		);
+		$row['id'] = (int) $wpdb->insert_id;
+		return $row;
+	}
+
+	private function insert_private_folder( int $owner_id ): array {
+		global $wpdb;
+
+		$now = current_time( 'mysql', true );
+		$row = array(
+			'uuid'             => wp_generate_uuid4(),
+			'owner_id'         => $owner_id,
+			'parent_id'        => 0,
+			'name'             => 'Private Folder',
+			'normalized_name'  => 'private folder',
+			'metadata_version' => wp_generate_uuid4(),
+			'status'           => 'active',
+			'created_at_gmt'   => $now,
+			'updated_at_gmt'   => $now,
+		);
+		$wpdb->insert(
+			Floppy_Schema::table( 'folders' ),
+			$row,
+			array( '%s', '%d', '%d', '%s', '%s', '%s', '%s', '%s', '%s' )
 		);
 		$row['id'] = (int) $wpdb->insert_id;
 		return $row;

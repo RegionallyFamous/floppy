@@ -10,7 +10,12 @@ struct ContentView: View {
 
     var body: some View {
         NavigationSplitView {
-            List(selection: $model.selectedAccountID) {
+            List(
+                selection: Binding(
+                    get: { model.selectedAccountID },
+                    set: { model.selectAccount(id: $0) }
+                )
+            ) {
                 Section("Accounts") {
                     ForEach(model.accounts) { account in
                         VStack(alignment: .leading, spacing: 3) {

@@ -137,6 +137,9 @@ const checks = {
 		{ label: 'inline panel errors use an alert role', pass: /floppy-error-state" role="alert"/.test( source ) },
 		{ label: 'file search has an accessible label', pass: /<label class="floppy-search"><span class="screen-reader-text">[\s\S]*data-file-search/.test( source ) }
 	],
+	asyncRaces: [
+		{ label: 'panel error handlers are request-token guarded', pass: /function showPanelError/.test( source ) && ( source.match( /\.catch\( showPanelError\( token \) \)/g ) || [] ).length >= 8 }
+	],
 	cleanup: [
 		{ label: 'native window returned cleanup function', pass: typeof execution.windowCleanup === 'function' },
 		{ label: 'registered drop target has deregister callback', pass: execution.dropDeregistered > 0 },
@@ -158,6 +161,7 @@ const failures = [
 	...checks.panels.filter( ( check ) => ! check.pass ).map( ( check ) => `missing panel ${ check.panel }` ),
 	...checks.apis.filter( ( check ) => ! check.pass ).map( ( check ) => `missing API ${ check.api }` ),
 	...checks.accessibility.filter( ( check ) => ! check.pass ).map( ( check ) => `accessibility failed: ${ check.label }` ),
+	...checks.asyncRaces.filter( ( check ) => ! check.pass ).map( ( check ) => `async race failed: ${ check.label }` ),
 	...checks.cleanup.filter( ( check ) => ! check.pass ).map( ( check ) => `cleanup failed: ${ check.label }` ),
 	...checks.banned.filter( ( check ) => ! check.pass ).map( ( check ) => `banned pattern: ${ check.label }` ),
 	...execution.errors.map( ( error ) => `execution error: ${ error }` )
