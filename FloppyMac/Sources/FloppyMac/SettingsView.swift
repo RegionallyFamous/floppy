@@ -57,6 +57,8 @@ struct SettingsView: View {
                     }
                     .padding(.horizontal, 12)
                     .padding(.vertical, 8)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .contentShape(RoundedRectangle(cornerRadius: 8))
                     .foregroundStyle(selectedSection == section ? .primary : .secondary)
                     .background(
                         selectedSection == section ? Color.accentColor.opacity(0.16) : Color.clear,
