@@ -22,7 +22,7 @@ final class Floppy_Rate_Limiter {
 	public static function check( string $bucket, int $limit, int $window, string $identity = '' ) {
 		$identity = $identity ?: self::default_identity();
 		$key      = 'floppy_rate_' . md5( $bucket . '|' . $identity );
-		$count    = self::increment_bucket( $key, $window );
+		$count    = self::increment_bucket( $bucket, $key, $window );
 
 		if ( $count > $limit ) {
 			Floppy_Audit::log( 'rate_limit.exceeded', 'rate_limit', 0, $bucket, array( 'identity' => md5( $identity ) ) );
@@ -44,8 +44,9 @@ final class Floppy_Rate_Limiter {
 	 */
 	public static function diagnostics(): array {
 		return array(
-			'backend'      => wp_using_ext_object_cache() ? 'object-cache' : 'transient',
+			'backend'      => wp_using_ext_object_cache() ? 'object-cache' : 'database',
 			'cache_group'  => self::CACHE_GROUP,
+			'persistent_without_object_cache' => true,
 			'identity_pii' => 'hashed-only-in-audit-log',
 		);
 	}
@@ -53,7 +54,7 @@ final class Floppy_Rate_Limiter {
 	/**
 	 * Increment a bucket with object-cache support when available.
 	 */
-	private static function increment_bucket( string $key, int $window ): int {
+	private static function increment_bucket( string $bucket, string $key, int $window ): int {
 		if ( wp_using_ext_object_cache() ) {
 			$added = wp_cache_add( $key, 0, self::CACHE_GROUP, $window );
 			$count = wp_cache_incr( $key, 1, self::CACHE_GROUP );
@@ -65,9 +66,86 @@ final class Floppy_Rate_Limiter {
 			}
 		}
 
-		$count = (int) get_transient( $key ) + 1;
-		set_transient( $key, $count, $window );
-		return $count;
+		return self::increment_database_bucket( $bucket, $key, $window );
+	}
+
+	/**
+	 * Increment a persistent DB bucket for hosts without an object cache.
+	 */
+	private static function increment_database_bucket( string $bucket, string $key, int $window ): int {
+		global $wpdb;
+
+		$table = Floppy_Schema::table( 'rate_limits' );
+		if ( $wpdb->get_var( $wpdb->prepare( 'SHOW TABLES LIKE %s', $table ) ) !== $table ) {
+			$count = (int) get_transient( $key ) + 1;
+			set_transient( $key, $count, $window );
+			return $count;
+		}
+
+		$now = current_time( 'mysql', true );
+		$expires = gmdate( 'Y-m-d H:i:s', time() + max( 1, $window ) );
+		$identity_hash = hash( 'sha256', $key );
+
+		$wpdb->query(
+			$wpdb->prepare(
+				'DELETE FROM ' . $table . ' WHERE expires_at_gmt < %s LIMIT 100',
+				$now
+			)
+		); // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared
+
+		$existing = $wpdb->get_row(
+			$wpdb->prepare(
+				'SELECT id, count, expires_at_gmt FROM ' . $table . ' WHERE rate_key = %s LIMIT 1',
+				md5( $key )
+			),
+			ARRAY_A
+		); // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared
+
+		if ( $existing && strtotime( $existing['expires_at_gmt'] . ' GMT' ) >= time() ) {
+			$count = (int) $existing['count'] + 1;
+			$wpdb->update(
+				$table,
+				array(
+					'count'          => $count,
+					'updated_at_gmt' => $now,
+				),
+				array( 'id' => (int) $existing['id'] ),
+				array( '%d', '%s' ),
+				array( '%d' )
+			);
+			return $count;
+		}
+
+		if ( $existing ) {
+			$wpdb->update(
+				$table,
+				array(
+					'count'          => 1,
+					'expires_at_gmt' => $expires,
+					'updated_at_gmt' => $now,
+				),
+				array( 'id' => (int) $existing['id'] ),
+				array( '%d', '%s', '%s' ),
+				array( '%d' )
+			);
+			return 1;
+		}
+
+		$wpdb->insert(
+			$table,
+			array(
+				'rate_key'       => md5( $key ),
+				'bucket'         => $bucket,
+				'identity_hash'  => $identity_hash,
+				'count'          => 1,
+				'expires_at_gmt' => $expires,
+				'created_at_gmt' => $now,
+				'updated_at_gmt' => $now,
+			),
+			array( '%s', '%s', '%s', '%d', '%s', '%s', '%s' )
+		);
+
+		return 1;
 	}
 
 	/**

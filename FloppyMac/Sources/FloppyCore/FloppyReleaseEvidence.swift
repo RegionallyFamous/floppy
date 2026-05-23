@@ -73,7 +73,7 @@ public struct FloppyReleaseEvidenceReport: Codable, Equatable, Sendable {
         zipPath: String = "",
         checks: [FloppyReleaseEvidenceCheck]
     ) {
-        self.format = "floppy-mac-release-evidence-v1"
+        self.format = "floppy-mac-release-evidence-v2"
         self.generatedAt = generatedAt
         self.projectPath = FloppyDiagnostics.redactedFilePath(projectPath)
         self.appPath = FloppyDiagnostics.redactedFilePath(appPath)

@@ -7,6 +7,7 @@ These are intentional beta boundaries, not product goals.
 - Finder conflict copies are local-only; server-synced conflict files are a future phase.
 - Windows, mobile apps, and public share links are future phases.
 - Formal regulated-data compliance is out of scope for v1.
+- End-to-end encryption is not user-facing in this round. Floppy only adds storage metadata seams so a future encryption design can be evaluated without rushing key management.
 - The first production target is 100k files per site, with 1M metadata rows used as a stress path.
 
 ## Next Improvements

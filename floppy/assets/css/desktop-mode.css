@@ -149,6 +149,18 @@
 	color: #005c3a;
 }
 
+.floppy-app button:focus-visible,
+.floppy-app input:focus-visible,
+.floppy-app select:focus-visible,
+.floppy-file-row:focus-visible {
+	outline: 2px solid #3858e9;
+	outline-offset: 2px;
+}
+
+.floppy-file-row:focus-visible td {
+	background: #f3f6ff;
+}
+
 .floppy-content {
 	min-height: 0;
 	overflow: auto;

@@ -44,6 +44,12 @@ final class Floppy_Schema {
 			size_bytes bigint(20) unsigned DEFAULT 0 NOT NULL,
 			content_hash char(64) NOT NULL DEFAULT '',
 			storage_key varchar(255) NOT NULL DEFAULT '',
+			storage_adapter varchar(32) NOT NULL DEFAULT 'local',
+			blob_format varchar(32) NOT NULL DEFAULT 'plain',
+			hash_algorithm varchar(32) NOT NULL DEFAULT 'sha256',
+			encryption_state varchar(32) NOT NULL DEFAULT 'none',
+			key_id varchar(191) NOT NULL DEFAULT '',
+			nonce varchar(191) NOT NULL DEFAULT '',
 			content_version char(36) NOT NULL,
 			metadata_version char(36) NOT NULL,
 			status varchar(20) NOT NULL DEFAULT 'active',
@@ -57,7 +63,10 @@ final class Floppy_Schema {
 			KEY owner_parent_name (owner_id,parent_id,normalized_name(120)),
 			KEY parent_name (parent_id,normalized_name(120)),
 			KEY parent_status_id (parent_id,status,id),
+			KEY owner_parent_status_id (owner_id,parent_id,status,id),
+			KEY owner_normalized_status_id (owner_id,normalized_name(120),status,id),
 			KEY normalized_status_id (normalized_name(120),status,id),
+			KEY owner_status_updated_id (owner_id,status,updated_at_gmt,id),
 			KEY updated_id (updated_at_gmt,id),
 			KEY attachment_id (attachment_id),
 			KEY content_hash (content_hash),
@@ -81,7 +90,10 @@ final class Floppy_Schema {
 			KEY owner_parent_name (owner_id,parent_id,normalized_name(120)),
 			KEY parent_name (parent_id,normalized_name(120)),
 			KEY parent_status_id (parent_id,status,id),
+			KEY owner_parent_status_id (owner_id,parent_id,status,id),
+			KEY owner_normalized_status_id (owner_id,normalized_name(120),status,id),
 			KEY normalized_status_id (normalized_name(120),status,id),
+			KEY owner_status_updated_id (owner_id,status,updated_at_gmt,id),
 			KEY updated_id (updated_at_gmt,id)
 		) $charset;";
 
@@ -136,6 +148,19 @@ final class Floppy_Schema {
 			KEY parent_seq (parent_id,seq)
 		) $charset;";
 
+		$sql[] = 'CREATE TABLE ' . self::table( 'sync_audience' ) . " (
+			id bigint(20) unsigned NOT NULL AUTO_INCREMENT,
+			seq bigint(20) unsigned NOT NULL,
+			event_uuid char(36) NOT NULL,
+			principal_type varchar(20) NOT NULL,
+			principal_ref varchar(191) NOT NULL,
+			created_at_gmt datetime NOT NULL,
+			PRIMARY KEY  (id),
+			UNIQUE KEY event_principal (seq,principal_type,principal_ref),
+			KEY principal_seq (principal_type,principal_ref,seq),
+			KEY seq_lookup (seq)
+		) $charset;";
+
 		$sql[] = 'CREATE TABLE ' . self::table( 'devices' ) . " (
 			id bigint(20) unsigned NOT NULL AUTO_INCREMENT,
 			device_uuid char(36) NOT NULL,
@@ -171,6 +196,9 @@ final class Floppy_Schema {
 			operation varchar(20) NOT NULL DEFAULT 'create',
 			target_file_id bigint(20) unsigned DEFAULT 0 NOT NULL,
 			base_content_version char(36) NOT NULL DEFAULT '',
+			reserved_bytes bigint(20) unsigned DEFAULT 0 NOT NULL,
+			quota_delta_bytes bigint(20) unsigned DEFAULT 0 NOT NULL,
+			reservation_expires_at_gmt datetime DEFAULT NULL,
 			status varchar(20) NOT NULL DEFAULT 'open',
 			expires_at_gmt datetime NOT NULL,
 			created_at_gmt datetime NOT NULL,
@@ -179,7 +207,39 @@ final class Floppy_Schema {
 			UNIQUE KEY session_uuid (session_uuid),
 			KEY user_status (user_id,status),
 			KEY target_operation (target_file_id,operation,status),
+			KEY user_reservations (user_id,status,reservation_expires_at_gmt),
 			KEY expires_at (expires_at_gmt)
+		) $charset;";
+
+		$sql[] = 'CREATE TABLE ' . self::table( 'usage_counters' ) . " (
+			id bigint(20) unsigned NOT NULL AUTO_INCREMENT,
+			scope varchar(20) NOT NULL,
+			user_id bigint(20) unsigned DEFAULT 0 NOT NULL,
+			active_files bigint(20) unsigned DEFAULT 0 NOT NULL,
+			active_folders bigint(20) unsigned DEFAULT 0 NOT NULL,
+			active_bytes bigint(20) unsigned DEFAULT 0 NOT NULL,
+			version_bytes bigint(20) unsigned DEFAULT 0 NOT NULL,
+			reserved_bytes bigint(20) unsigned DEFAULT 0 NOT NULL,
+			calculated_at_gmt datetime NOT NULL,
+			updated_at_gmt datetime NOT NULL,
+			PRIMARY KEY  (id),
+			UNIQUE KEY scope_user (scope,user_id),
+			KEY updated_at (updated_at_gmt)
+		) $charset;";
+
+		$sql[] = 'CREATE TABLE ' . self::table( 'rate_limits' ) . " (
+			id bigint(20) unsigned NOT NULL AUTO_INCREMENT,
+			rate_key char(32) NOT NULL,
+			bucket varchar(80) NOT NULL,
+			identity_hash char(64) NOT NULL,
+			count int(10) unsigned DEFAULT 0 NOT NULL,
+			expires_at_gmt datetime NOT NULL,
+			created_at_gmt datetime NOT NULL,
+			updated_at_gmt datetime NOT NULL,
+			PRIMARY KEY  (id),
+			UNIQUE KEY rate_key (rate_key),
+			KEY expires_at (expires_at_gmt),
+			KEY bucket_expires (bucket,expires_at_gmt)
 		) $charset;";
 
 		$sql[] = 'CREATE TABLE ' . self::table( 'tombstones' ) . " (
@@ -320,7 +380,7 @@ final class Floppy_Schema {
 		global $wpdb;
 
 		$missing = array();
-		foreach ( array( 'files', 'folders', 'item_names', 'acl_grants', 'sync_events', 'devices', 'upload_sessions', 'tombstones', 'audit_log', 'file_versions', 'conflicts', 'thumbnails', 'jobs' ) as $name ) {
+		foreach ( array( 'files', 'folders', 'item_names', 'acl_grants', 'sync_events', 'sync_audience', 'devices', 'upload_sessions', 'usage_counters', 'rate_limits', 'tombstones', 'audit_log', 'file_versions', 'conflicts', 'thumbnails', 'jobs' ) as $name ) {
 			$table = self::table( $name );
 			$found = $wpdb->get_var( $wpdb->prepare( 'SHOW TABLES LIKE %s', $table ) );
 			if ( $found !== $table ) {
@@ -351,13 +411,16 @@ final class Floppy_Schema {
 	 */
 	private static function expected_indexes( string $name ): array {
 		$indexes = array(
-			'files'           => array( 'uuid', 'parent_status_id', 'normalized_status_id', 'updated_id', 'content_hash' ),
-			'folders'         => array( 'uuid', 'parent_status_id', 'normalized_status_id', 'updated_id' ),
+			'files'           => array( 'uuid', 'parent_status_id', 'owner_parent_status_id', 'owner_normalized_status_id', 'owner_status_updated_id', 'normalized_status_id', 'updated_id', 'content_hash' ),
+			'folders'         => array( 'uuid', 'parent_status_id', 'owner_parent_status_id', 'owner_normalized_status_id', 'owner_status_updated_id', 'normalized_status_id', 'updated_id' ),
 			'item_names'      => array( 'live_name', 'target_lookup', 'parent_lookup' ),
 			'acl_grants'      => array( 'target_principal', 'principal_lookup', 'target_lookup' ),
 			'sync_events'     => array( 'event_uuid', 'target_lookup', 'actor_seq', 'parent_seq' ),
+			'sync_audience'   => array( 'event_principal', 'principal_seq', 'seq_lookup' ),
 			'devices'         => array( 'device_uuid', 'token_hash', 'user_status', 'last_seen' ),
-			'upload_sessions' => array( 'session_uuid', 'user_status', 'target_operation', 'expires_at' ),
+			'upload_sessions' => array( 'session_uuid', 'user_status', 'target_operation', 'user_reservations', 'expires_at' ),
+			'usage_counters'  => array( 'scope_user', 'updated_at' ),
+			'rate_limits'     => array( 'rate_key', 'expires_at', 'bucket_expires' ),
 			'tombstones'      => array( 'target_lookup', 'owner_expires', 'sync_seq' ),
 			'audit_log'       => array( 'actor_created', 'action_created', 'target_lookup' ),
 			'file_versions'   => array( 'version_uuid', 'file_created', 'owner_file', 'content_hash' ),
@@ -384,10 +447,203 @@ final class Floppy_Schema {
 			'stale_thumbnails'          => self::repair_stale_thumbnails( $apply ),
 			'attachment_links'          => self::repair_attachment_links( $apply ),
 			'missing_tombstones'        => self::repair_missing_tombstones( $apply ),
+			'usage_counters'            => self::repair_usage_counters( $apply ),
+			'storage_keys'              => self::inspect_storage_keys(),
 			'blob_integrity'            => self::inspect_blob_integrity(),
 			'sync_event_continuity'     => self::inspect_sync_event_continuity(),
+			'sync_audience'             => self::inspect_sync_audience(),
 			'quota_usage'               => self::inspect_quota_usage(),
 			'orphaned_blobs'            => self::inspect_orphaned_blobs(),
+		);
+	}
+
+	/**
+	 * Return support-safe usage counter health.
+	 */
+	public static function usage_counter_summary(): array {
+		global $wpdb;
+
+		if ( ! self::table_exists( self::table( 'usage_counters' ) ) ) {
+			return array(
+				'available' => false,
+				'status'    => 'missing_table',
+			);
+		}
+
+		$site = $wpdb->get_row(
+			$wpdb->prepare(
+				'SELECT active_files, active_folders, active_bytes, version_bytes, reserved_bytes, calculated_at_gmt FROM ' . self::table( 'usage_counters' ) . ' WHERE scope = %s AND user_id = 0 LIMIT 1',
+				'site'
+			),
+			ARRAY_A
+		);
+
+		$user_rows = (int) $wpdb->get_var(
+			$wpdb->prepare(
+				'SELECT COUNT(*) FROM ' . self::table( 'usage_counters' ) . ' WHERE scope = %s',
+				'user'
+			)
+		);
+
+		return array(
+			'available'        => true,
+			'status'           => $site ? 'ready' : 'needs_backfill',
+			'user_rows'        => $user_rows,
+			'site'             => $site ? array(
+				'active_files'      => (int) $site['active_files'],
+				'active_folders'    => (int) $site['active_folders'],
+				'active_bytes'      => (int) $site['active_bytes'],
+				'version_bytes'     => (int) $site['version_bytes'],
+				'reserved_bytes'    => (int) $site['reserved_bytes'],
+				'calculated_at_gmt' => (string) $site['calculated_at_gmt'],
+			) : null,
+		);
+	}
+
+	/**
+	 * Recalculate usage counters from authoritative metadata.
+	 */
+	public static function refresh_usage_counters(): array {
+		global $wpdb;
+
+		if ( ! self::table_exists( self::table( 'usage_counters' ) ) ) {
+			return array( 'ok' => false, 'message' => 'Usage counter table is missing.' );
+		}
+
+		$now = current_time( 'mysql', true );
+		$files_table = self::table( 'files' );
+		$folders_table = self::table( 'folders' );
+		$versions_table = self::table( 'file_versions' );
+		$sessions_table = self::table( 'upload_sessions' );
+		$counters_table = self::table( 'usage_counters' );
+
+		$site = $wpdb->get_row(
+			"SELECT
+				(SELECT COUNT(*) FROM $files_table WHERE status != 'deleted') AS active_files,
+				(SELECT COUNT(*) FROM $folders_table WHERE status != 'deleted') AS active_folders,
+				(SELECT COALESCE(SUM(size_bytes),0) FROM $files_table WHERE status != 'deleted') AS active_bytes,
+				(SELECT COALESCE(SUM(size_bytes),0) FROM $versions_table) AS version_bytes,
+				(SELECT COALESCE(SUM(reserved_bytes),0) FROM $sessions_table WHERE status = 'open' AND expires_at_gmt >= '$now') AS reserved_bytes",
+			ARRAY_A
+		); // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared
+
+		self::upsert_usage_counter( 'site', 0, $site ?: array() );
+
+		$user_ids = array_map(
+			'absint',
+			array_unique(
+				array_merge(
+					$wpdb->get_col( "SELECT DISTINCT owner_id FROM $files_table WHERE owner_id > 0" ), // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared
+					$wpdb->get_col( "SELECT DISTINCT owner_id FROM $folders_table WHERE owner_id > 0" ), // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared
+					$wpdb->get_col( "SELECT DISTINCT user_id FROM $sessions_table WHERE user_id > 0" ) // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared
+				)
+			)
+		);
+
+		foreach ( $user_ids as $user_id ) {
+			$row = $wpdb->get_row(
+				$wpdb->prepare(
+					"SELECT
+						(SELECT COUNT(*) FROM $files_table WHERE owner_id = %d AND status != 'deleted') AS active_files,
+						(SELECT COUNT(*) FROM $folders_table WHERE owner_id = %d AND status != 'deleted') AS active_folders,
+						(SELECT COALESCE(SUM(size_bytes),0) FROM $files_table WHERE owner_id = %d AND status != 'deleted') AS active_bytes,
+						(SELECT COALESCE(SUM(size_bytes),0) FROM $versions_table WHERE owner_id = %d) AS version_bytes,
+						(SELECT COALESCE(SUM(reserved_bytes),0) FROM $sessions_table WHERE user_id = %d AND status = 'open' AND expires_at_gmt >= %s) AS reserved_bytes",
+					$user_id,
+					$user_id,
+					$user_id,
+					$user_id,
+					$user_id,
+					$now
+				),
+				ARRAY_A
+			); // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared
+			self::upsert_usage_counter( 'user', $user_id, $row ?: array() );
+		}
+
+		$wpdb->query(
+			$wpdb->prepare(
+				"DELETE FROM $counters_table WHERE scope = %s AND user_id > 0 AND user_id NOT IN (" . implode( ',', array_map( 'absint', $user_ids ?: array( 0 ) ) ) . ')',
+				'user'
+			)
+		); // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared
+
+		return array(
+			'ok'          => true,
+			'user_rows'   => count( $user_ids ),
+			'updated_at'  => $now,
+			'site_active_bytes' => (int) ( $site['active_bytes'] ?? 0 ),
+		);
+	}
+
+	/**
+	 * Upsert one usage counter row.
+	 */
+	private static function upsert_usage_counter( string $scope, int $user_id, array $row ): void {
+		global $wpdb;
+
+		$now = current_time( 'mysql', true );
+		$wpdb->replace(
+			self::table( 'usage_counters' ),
+			array(
+				'scope'             => $scope,
+				'user_id'           => $user_id,
+				'active_files'      => (int) ( $row['active_files'] ?? 0 ),
+				'active_folders'    => (int) ( $row['active_folders'] ?? 0 ),
+				'active_bytes'      => (int) ( $row['active_bytes'] ?? 0 ),
+				'version_bytes'     => (int) ( $row['version_bytes'] ?? 0 ),
+				'reserved_bytes'    => (int) ( $row['reserved_bytes'] ?? 0 ),
+				'calculated_at_gmt' => $now,
+				'updated_at_gmt'    => $now,
+			),
+			array( '%s', '%d', '%d', '%d', '%d', '%d', '%d', '%s', '%s' )
+		);
+	}
+
+	/**
+	 * Rebuild quota usage counters when needed.
+	 */
+	private static function repair_usage_counters( bool $apply ): array {
+		if ( ! self::table_exists( self::table( 'usage_counters' ) ) ) {
+			return array( 'status' => 'missing_table' );
+		}
+
+		$summary = self::usage_counter_summary();
+		if ( $apply || 'needs_backfill' === ( $summary['status'] ?? '' ) ) {
+			return array_merge( array( 'status' => 'recalculated' ), self::refresh_usage_counters() );
+		}
+
+		return $summary;
+	}
+
+	/**
+	 * Inspect stored keys for path traversal or unsupported adapter metadata.
+	 */
+	private static function inspect_storage_keys(): array {
+		global $wpdb;
+
+		$checks = array(
+			array( 'files', 'storage_key' ),
+			array( 'file_versions', 'storage_key' ),
+			array( 'upload_sessions', 'storage_key' ),
+			array( 'thumbnails', 'storage_key' ),
+		);
+		$invalid = 0;
+		$scanned = 0;
+		foreach ( $checks as $check ) {
+			$rows = $wpdb->get_col( 'SELECT ' . $check[1] . ' FROM ' . self::table( $check[0] ) . " WHERE " . $check[1] . " != '' LIMIT 1000" ); // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared
+			foreach ( $rows as $key ) {
+				++$scanned;
+				if ( ! Floppy_Storage::storage_key_is_valid( (string) $key ) ) {
+					++$invalid;
+				}
+			}
+		}
+
+		return array(
+			'scanned'      => $scanned,
+			'invalid'      => $invalid,
+			'scan_limited' => $scanned >= 4000,
 		);
 	}
 
@@ -744,6 +1000,32 @@ final class Floppy_Schema {
 	}
 
 	/**
+	 * Summarize sync-audience index coverage.
+	 */
+	private static function inspect_sync_audience(): array {
+		global $wpdb;
+
+		if ( ! self::table_exists( self::table( 'sync_audience' ) ) ) {
+			return array(
+				'available' => false,
+				'status'    => 'missing_table',
+			);
+		}
+
+		$total_events = (int) $wpdb->get_var( 'SELECT COUNT(*) FROM ' . self::table( 'sync_events' ) ); // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared
+		$audience_rows = (int) $wpdb->get_var( 'SELECT COUNT(*) FROM ' . self::table( 'sync_audience' ) ); // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared
+		$events_with_audience = (int) $wpdb->get_var( 'SELECT COUNT(DISTINCT seq) FROM ' . self::table( 'sync_audience' ) ); // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared
+
+		return array(
+			'available'            => true,
+			'total_events'         => $total_events,
+			'audience_rows'        => $audience_rows,
+			'events_with_audience' => $events_with_audience,
+			'strategy'             => 'principal-index-with-permission-fallback',
+		);
+	}
+
+	/**
 	 * Summarize quota-impacting metadata.
 	 */
 	private static function inspect_quota_usage(): array {
@@ -834,5 +1116,14 @@ final class Floppy_Schema {
 			'scanned'      => $scanned,
 			'scan_limited' => $scanned >= $limit,
 		);
+	}
+
+	/**
+	 * Check table existence during additive migrations.
+	 */
+	private static function table_exists( string $table ): bool {
+		global $wpdb;
+
+		return $wpdb->get_var( $wpdb->prepare( 'SHOW TABLES LIKE %s', $table ) ) === $table;
 	}
 }

@@ -17,6 +17,11 @@ final class Floppy_Storage {
 	private const PRIVATE_DIR = 'floppy-private';
 
 	/**
+	 * Maximum age for cached private-storage probes before fail-closed refresh.
+	 */
+	private const PROBE_TTL = DAY_IN_SECONDS;
+
+	/**
 	 * Register storage privacy hooks.
 	 */
 	public static function init(): void {
@@ -87,7 +92,16 @@ final class Floppy_Storage {
 		@unlink( $path ); // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged
 
 		if ( is_wp_error( $response ) ) {
-			$result = array( 'ok' => true, 'message' => __( 'Private files were not directly reachable during probe.', 'floppy' ) );
+			$result = array(
+				'ok'             => self::allows_unprotected_storage_for_local_development(),
+				'status'         => self::allows_unprotected_storage_for_local_development() ? 'warn' : 'fail',
+				'code'           => 0,
+				'label'          => self::allows_unprotected_storage_for_local_development() ? __( 'Local probe unavailable', 'floppy' ) : __( 'Private storage probe failed closed', 'floppy' ),
+				'message'        => self::allows_unprotected_storage_for_local_development()
+					? __( 'The direct-access probe could not reach this loopback site. This is allowed for local Studio testing only.', 'floppy' )
+					: __( 'Floppy could not prove private storage is blocked. Uploads stay disabled until the probe can verify direct access is denied.', 'floppy' ),
+				'checked_at_gmt' => current_time( 'mysql', true ),
+			);
 			update_option( 'floppy_private_probe', $result, false );
 			return $result;
 		}
@@ -102,6 +116,7 @@ final class Floppy_Storage {
 				'code'    => $code,
 				'label'   => __( 'Local development storage', 'floppy' ),
 				'message' => __( 'Private storage is directly reachable, but this loopback site is allowed for local Studio testing only. Production sites must block direct access to wp-content/uploads/floppy-private/.', 'floppy' ),
+				'checked_at_gmt' => current_time( 'mysql', true ),
 			);
 			update_option( 'floppy_private_probe', $result, false );
 
@@ -116,6 +131,7 @@ final class Floppy_Storage {
 			'message' => $ok
 				? __( 'Private storage probe passed.', 'floppy' )
 				: __( 'Private storage is directly reachable. Floppy private mode must not be used until the server blocks this path.', 'floppy' ),
+			'checked_at_gmt' => current_time( 'mysql', true ),
 		);
 		update_option( 'floppy_private_probe', $result, false );
 
@@ -131,6 +147,11 @@ final class Floppy_Storage {
 			return self::direct_access_probe();
 		}
 
+		$checked_at = isset( $probe['checked_at_gmt'] ) ? strtotime( (string) $probe['checked_at_gmt'] . ' GMT' ) : 0;
+		if ( ! $checked_at || time() - $checked_at > self::PROBE_TTL ) {
+			return self::direct_access_probe();
+		}
+
 		if ( empty( $probe['ok'] ) && self::allows_unprotected_storage_for_local_development() ) {
 			return array(
 				'ok'      => true,
@@ -138,6 +159,7 @@ final class Floppy_Storage {
 				'code'    => isset( $probe['code'] ) ? (int) $probe['code'] : 0,
 				'label'   => __( 'Local development storage', 'floppy' ),
 				'message' => __( 'Private storage is directly reachable, but this loopback site is allowed for local Studio testing only. Production sites must block direct access to wp-content/uploads/floppy-private/.', 'floppy' ),
+				'checked_at_gmt' => (string) ( $probe['checked_at_gmt'] ?? current_time( 'mysql', true ) ),
 			);
 		}
 
@@ -160,6 +182,8 @@ final class Floppy_Storage {
 			'server_family'     => $server,
 			'protected_path'    => 'wp-content/uploads/' . self::PRIVATE_DIR . '/',
 			'local_development' => self::allows_unprotected_storage_for_local_development(),
+			'probe_ttl_seconds' => self::PROBE_TTL,
+			'stale_fail_closed' => true,
 			'recommended_fixes' => self::private_storage_fixes_for_server( $server ),
 		);
 	}
@@ -316,6 +340,7 @@ final class Floppy_Storage {
 			'name'         => $name,
 			'path'         => $path,
 			'storage_key'  => $key,
+			'storage_meta' => self::storage_metadata( $key ),
 			'content_hash' => $hash,
 			'size_bytes'   => $size,
 			'mime_type'    => $type['type'],
@@ -333,13 +358,90 @@ final class Floppy_Storage {
 	}
 
 	/**
+	 * Return local-only adapter metadata with future encryption seams.
+	 */
+	public static function storage_metadata( string $storage_key ): array {
+		return array(
+			'adapter'          => 'local',
+			'storage_key'      => self::sanitize_storage_key( $storage_key ),
+			'blob_format'      => 'plain',
+			'hash_algorithm'   => 'sha256',
+			'encryption_state' => 'none',
+			'key_id'           => '',
+			'nonce'            => '',
+		);
+	}
+
+	/**
 	 * Resolve a private storage key to a local path.
 	 */
 	public static function path_for_key( string $key ): string {
 		$root = self::root();
-		$key  = ltrim( str_replace( array( '..', '\\' ), '', $key ), '/' );
+		$key  = self::sanitize_storage_key( $key );
+		if ( '' === $key || ! self::storage_key_is_valid( $key ) ) {
+			$key = '__invalid_storage_key__';
+		}
 
-		return trailingslashit( $root['path'] ) . $key;
+		$root_path = trailingslashit( self::canonicalize_path( (string) $root['path'] ) );
+		$path = self::canonicalize_path( $root_path . $key );
+
+		if ( 0 !== strpos( $path, $root_path ) ) {
+			return $root_path . '__invalid_storage_key__';
+		}
+
+		return $path;
+	}
+
+	/**
+	 * Normalize a storage key without exposing filesystem traversal.
+	 */
+	public static function sanitize_storage_key( string $key ): string {
+		$key = str_replace( '\\', '/', $key );
+		$key = preg_replace( '#/+#', '/', $key );
+		$key = ltrim( (string) $key, '/' );
+
+		return trim( $key );
+	}
+
+	/**
+	 * Validate private storage keys before resolving them.
+	 */
+	public static function storage_key_is_valid( string $key ): bool {
+		$key = self::sanitize_storage_key( $key );
+		if ( '' === $key || false !== strpos( $key, '../' ) || false !== strpos( $key, '/..' ) || '..' === $key ) {
+			return false;
+		}
+
+		if ( ! preg_match( '#^(?:[a-z0-9][a-z0-9._-]*/)*[a-z0-9][a-z0-9._-]*$#i', $key ) ) {
+			return false;
+		}
+
+		foreach ( explode( '/', $key ) as $part ) {
+			if ( '' === $part || '.' === $part || '..' === $part ) {
+				return false;
+			}
+		}
+
+		return true;
+	}
+
+	/**
+	 * Canonicalize a path even when the target file does not exist yet.
+	 */
+	private static function canonicalize_path( string $path ): string {
+		$real = realpath( $path );
+		if ( is_string( $real ) ) {
+			return $real;
+		}
+
+		$dir = dirname( $path );
+		$base = basename( $path );
+		$real_dir = realpath( $dir );
+		if ( is_string( $real_dir ) ) {
+			return trailingslashit( $real_dir ) . $base;
+		}
+
+		return wp_normalize_path( $path );
 	}
 
 	/**

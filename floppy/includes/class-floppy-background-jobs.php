@@ -92,6 +92,24 @@ final class Floppy_Background_Jobs {
 	}
 
 	/**
+	 * Return latest jobs of one type for diagnostics.
+	 *
+	 * @return array<int, array<string, mixed>>
+	 */
+	public static function latest_jobs( string $job_type, int $limit = 5 ): array {
+		global $wpdb;
+
+		return $wpdb->get_results(
+			$wpdb->prepare(
+				'SELECT job_uuid, job_type, status, attempts, not_before_gmt, locked_at_gmt, result_json, created_at_gmt, updated_at_gmt FROM ' . Floppy_Schema::table( 'jobs' ) . ' WHERE job_type = %s ORDER BY id DESC LIMIT %d',
+				sanitize_key( $job_type ),
+				max( 1, min( 20, $limit ) )
+			),
+			ARRAY_A
+		);
+	}
+
+	/**
 	 * Run due jobs.
 	 */
 	public static function run_due_jobs(): void {
@@ -170,6 +188,9 @@ final class Floppy_Background_Jobs {
 		} elseif ( 'thumbnail_generate' === $job['job_type'] ) {
 			$payload = json_decode( (string) $job['payload_json'], true );
 			$result = is_array( $payload ) ? Floppy_Rest::run_thumbnail_job( $payload ) : array( 'ok' => false, 'message' => 'Invalid thumbnail job payload.' );
+		} elseif ( 'doctor' === $job['job_type'] ) {
+			$payload = json_decode( (string) $job['payload_json'], true );
+			$result = is_array( $payload ) ? Floppy_Rest::run_doctor_job( $payload ) : array( 'ok' => false, 'message' => 'Invalid doctor job payload.' );
 		}
 
 		$status = empty( $result['ok'] ) ? ( (int) $job['attempts'] >= 3 ? 'failed' : 'queued' ) : 'complete';

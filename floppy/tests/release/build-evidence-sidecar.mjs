@@ -19,7 +19,7 @@ const wpDebugBundle = artifact( 'wordpress_debug_bundle', args[ 'wp-debug-bundle
 const signing = artifact( 'signing_notarization', args.signing );
 
 const evidence = {
-	format: 'floppy-release-evidence-sidecar-v1',
+	format: 'floppy-release-evidence-sidecar-v2',
 	generated_at: new Date().toISOString(),
 	repository: {
 		commit: git( [ 'rev-parse', 'HEAD' ] ),
@@ -43,7 +43,10 @@ const evidence = {
 		'private-storage probe matrix for the target host',
 		'export/restore drill with checksum verification',
 		'matching WordPress and Mac support correlation IDs',
-		'signing/notarization proof before distributing the Mac app'
+		'signing/notarization proof before distributing the Mac app',
+		'async WordPress doctor job summary and repair dry-run',
+		'Desktop Mode executable audit v2 report',
+		'future encryption seam remains metadata-only and disabled'
 	]
 };
 
@@ -60,7 +63,7 @@ function artifact( name, relativePath ) {
 		return {
 			name,
 			status: 'missing',
-			required_for_public_beta: name !== 'signing_notarization'
+			required_for_public_beta: true
 		};
 	}
 	const path = resolve( repo, relativePath );

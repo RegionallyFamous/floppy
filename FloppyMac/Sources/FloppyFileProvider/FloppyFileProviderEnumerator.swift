@@ -51,7 +51,7 @@ final class FloppyFileProviderEnumerator: NSObject, NSFileProviderEnumerator {
                     observer.finishEnumerating(upTo: response.hasMore ? NSFileProviderPage(floppyToken: String(response.nextCursor)) : nil)
                 }
             } catch {
-                observer.finishEnumeratingWithError(error.asFileProviderError)
+                observer.finishEnumeratingWithError(FloppyFileProviderErrorMapper.fileProviderError(for: error))
             }
         }
     }
@@ -62,6 +62,7 @@ final class FloppyFileProviderEnumerator: NSObject, NSFileProviderEnumerator {
                 let cursor = UInt64(syncAnchor.floppyToken ?? "0") ?? 0
                 let response = try await apiClient.syncChanges(cursor: cursor, limit: 500)
                 try await ledger.apply(changes: response.events)
+                try await ledger.record(changeFeed: response)
 
                 let updatedItems = await fileProviderItems(for: response.events.compactMap(\.floppyItemPayload))
                 let deletedIdentifiers = response.events
@@ -77,7 +78,7 @@ final class FloppyFileProviderEnumerator: NSObject, NSFileProviderEnumerator {
                 observer.didDeleteItems(withIdentifiers: deletedIdentifiers)
                 observer.finishEnumeratingChanges(upTo: NSFileProviderSyncAnchor(floppyToken: String(response.nextCursor)), moreComing: response.hasMore)
             } catch {
-                observer.finishEnumeratingWithError(error.asFileProviderError)
+                observer.finishEnumeratingWithError(FloppyFileProviderErrorMapper.fileProviderError(for: error))
             }
         }
     }
@@ -153,38 +154,5 @@ private extension NSFileProviderSyncAnchor {
 
     var floppyToken: String? {
         rawValue.isEmpty ? nil : String(data: rawValue, encoding: .utf8)
-    }
-}
-
-private extension Error {
-    var asFileProviderError: Error {
-        if let fileProviderError = self as? NSFileProviderError {
-            return fileProviderError
-        }
-
-        if let apiError = self as? FloppyAPIError {
-            switch apiError {
-            case .missingToken:
-                return NSFileProviderError(.notAuthenticated)
-            case .httpStatus(let status, _):
-                if status == 404 {
-                    return NSFileProviderError(.noSuchItem)
-                }
-                if status == 409 {
-                    return NSFileProviderError(.cannotSynchronize)
-                }
-                if status == 410 {
-                    return NSFileProviderError(.syncAnchorExpired)
-                }
-                if status >= 500 {
-                    return NSFileProviderError(.serverUnreachable)
-                }
-                return NSFileProviderError(.cannotSynchronize)
-            default:
-                return NSFileProviderError(.cannotSynchronize)
-            }
-        }
-
-        return self
     }
 }

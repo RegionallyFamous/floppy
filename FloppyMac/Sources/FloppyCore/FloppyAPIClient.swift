@@ -476,7 +476,12 @@ public struct FloppyAPIClient: Sendable {
             guard let chunk = try handle.read(upToCount: min(chunkSize, Int(totalSize - offset))), !chunk.isEmpty else {
                 break
             }
-            let response = try await appendUploadChunk(sessionUUID: uploadSession.sessionUUID, chunk: chunk, offset: offset)
+            let response = try await appendUploadChunkWithRetry(
+                sessionUUID: uploadSession.sessionUUID,
+                chunk: chunk,
+                offset: offset,
+                idempotencyKey: "\(uploadSession.sessionUUID)-\(offset)"
+            )
             offset = response.receivedBytes
             progressHandler?(offset, totalSize)
         }
@@ -488,6 +493,43 @@ public struct FloppyAPIClient: Sendable {
         var request = try makeRequest(path: "upload-sessions/\(sessionUUID)/chunk", method: "POST")
         request.setValue("application/octet-stream", forHTTPHeaderField: "Content-Type")
         request.setValue(String(offset), forHTTPHeaderField: "X-Floppy-Offset")
+        request.httpBody = chunk
+        return try await decode(session.data(for: request))
+    }
+
+    private func appendUploadChunkWithRetry(sessionUUID: String, chunk: Data, offset: Int64, idempotencyKey: String, retryPolicy: FloppyTransferRetryPolicy = .default) async throws -> FloppyUploadProgress {
+        var attempt = 0
+        var lastError: Error?
+        while attempt < retryPolicy.maximumAttempts {
+            try Task.checkCancellation()
+            attempt += 1
+            do {
+                return try await appendUploadChunk(sessionUUID: sessionUUID, chunk: chunk, offset: offset, idempotencyKey: idempotencyKey)
+            } catch FloppyAPIError.httpStatus(let status, _) where status == 409 || status == 428 {
+                throw FloppyAPIError.httpStatus(status, "Upload offset requires reconciliation before retrying.")
+            } catch FloppyAPIError.httpStatus(let status, _) where status == 429 || status >= 500 {
+                lastError = FloppyAPIError.httpStatus(status, "Chunk upload retryable server response.")
+            } catch {
+                lastError = error
+            }
+
+            if attempt < retryPolicy.maximumAttempts, retryPolicy.initialDelaySeconds > 0 {
+                let delay = UInt64(retryPolicy.initialDelaySeconds * Double(NSEC_PER_SEC) * pow(2.0, Double(attempt - 1)))
+                try await Task.sleep(nanoseconds: delay)
+            }
+        }
+
+        if let lastError {
+            throw lastError
+        }
+        throw FloppyTransferError.retryLimitExceeded(attempts: attempt)
+    }
+
+    private func appendUploadChunk(sessionUUID: String, chunk: Data, offset: Int64, idempotencyKey: String) async throws -> FloppyUploadProgress {
+        var request = try makeRequest(path: "upload-sessions/\(sessionUUID)/chunk", method: "POST")
+        request.setValue("application/octet-stream", forHTTPHeaderField: "Content-Type")
+        request.setValue(String(offset), forHTTPHeaderField: "X-Floppy-Offset")
+        request.setValue(idempotencyKey, forHTTPHeaderField: "X-Floppy-Idempotency-Key")
         request.httpBody = chunk
         return try await decode(session.data(for: request))
     }
@@ -512,6 +554,19 @@ public struct FloppyAPIClient: Sendable {
 
     public func download(file: FloppyItem, to url: URL) async throws {
         _ = try await downloadValidated(file: file, to: url)
+    }
+
+    public func download(version: FloppyFileVersion, to url: URL) async throws {
+        guard let downloadURL = version.downloadURL else {
+            throw FloppyAPIError.invalidResponse
+        }
+
+        _ = try await downloadRemoteFile(
+            downloadURL: downloadURL,
+            expectedHash: version.contentHash,
+            to: url,
+            retryPolicy: .default
+        )
     }
 
     @discardableResult
@@ -562,6 +617,36 @@ public struct FloppyAPIClient: Sendable {
             throw FloppyAPIError.invalidResponse
         }
 
+        return try await downloadRemoteFile(downloadURL: downloadURL, expectedHash: file.contentHash, to: url, attempt: attempt)
+    }
+
+    private func downloadRemoteFile(
+        downloadURL: URL,
+        expectedHash: String?,
+        to url: URL,
+        retryPolicy: FloppyTransferRetryPolicy
+    ) async throws -> (destination: URL, checksumValidated: Bool) {
+        var attempt = 0
+        var lastError: Error?
+        while attempt < retryPolicy.maximumAttempts {
+            attempt += 1
+            do {
+                return try await downloadRemoteFile(downloadURL: downloadURL, expectedHash: expectedHash, to: url, attempt: attempt)
+            } catch {
+                lastError = error
+                if attempt < retryPolicy.maximumAttempts, retryPolicy.initialDelaySeconds > 0 {
+                    let delay = UInt64(retryPolicy.initialDelaySeconds * Double(NSEC_PER_SEC) * pow(2.0, Double(attempt - 1)))
+                    try await Task.sleep(nanoseconds: delay)
+                }
+            }
+        }
+        if let lastError {
+            throw lastError
+        }
+        throw FloppyTransferError.retryLimitExceeded(attempts: attempt)
+    }
+
+    private func downloadRemoteFile(downloadURL: URL, expectedHash: String?, to url: URL, attempt: Int) async throws -> (destination: URL, checksumValidated: Bool) {
         var request = URLRequest(url: downloadURL)
         if let authorizationHeader {
             request.setValue(authorizationHeader, forHTTPHeaderField: "Authorization")
@@ -573,7 +658,7 @@ public struct FloppyAPIClient: Sendable {
         try policy.validate(response: response)
         try validate(response: response, data: Data())
         let checksumValidated: Bool
-        if let expectedHash = file.contentHash, !expectedHash.isEmpty {
+        if let expectedHash, !expectedHash.isEmpty {
             let actualHash = try Self.sha256HexDigest(for: temporaryURL)
             guard actualHash.caseInsensitiveCompare(expectedHash) == .orderedSame else {
                 let quarantineURL = FloppyPartialFileQuarantine.quarantineURL(for: url, reason: "checksum-\(attempt)")

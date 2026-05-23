@@ -7,9 +7,9 @@ Floppy's Desktop Mode app is the WordPress-native control surface for files, sha
 The Desktop Mode shell records a redacted smoke snapshot in the Release Evidence panel:
 
 - Native window callback registration for `floppy-drive`.
-- Feature detection for native windows, command palette, OS Settings, title bar buttons, file openers, broadcasts, badges, and OS placement settings.
-- Required public hook registrations for file drops, native window lifecycle, dock tiles, desktop icons, and icon context menus.
-- Current support correlation ID, loaded file count, selected count, sync cursor, conflict count, endpoint availability, health, deep health, and repair dry-run status.
+- Feature detection for native windows, command palette, `wp.desktop.openOsSettings()`, `wp.desktop.dragManager.registerDropTarget()`, title bar buttons, file openers, broadcasts, badges, and OS placement settings.
+- Required public hook registrations for native window lifecycle, dock tiles, desktop icons, icon context menus, and file-drop fallbacks when the drag manager is unavailable.
+- Current support correlation ID, loaded file count, selected count, sync cursor, conflict count, request-race count, drag-target mode, endpoint availability, health, deep health, async doctor jobs, and repair dry-run status.
 
 The shell does not read private Desktop Mode storage, scrape host DOM, patch shadow roots, or use legacy hook names.
 
@@ -28,7 +28,7 @@ The shell does not read private Desktop Mode storage, scrape host DOM, patch sha
 
 ## CI Evidence
 
-`node floppy/tests/desktop-mode/audit-hooks.mjs --format=json` statically checks the Desktop Mode script for required public hooks/APIs, required panels, and banned private integration patterns.
+`node floppy/tests/desktop-mode/audit-hooks.mjs --format=json` runs an executable stub harness. It loads the Floppy Desktop Mode script in Node, stubs public `wp.desktop`, `wp.desktop.HOOKS`, and `wp.hooks` APIs, verifies real command/settings/opener/badge/broadcast/drag-target/window registrations, invokes cleanup, and still rejects banned private integration patterns.
 
 `node floppy/tests/release/build-evidence-sidecar.mjs` creates `dist/floppy-release-evidence.json` from attached evidence artifacts. In CI it includes:
 
@@ -41,11 +41,12 @@ The sidecar intentionally records artifact hashes, sizes, summaries, and missing
 
 A public beta tag needs:
 
-- Passing CI-generated release sidecar.
+- Passing CI-generated release sidecar v2.
 - 100k load-budget sidecar attachment.
 - 1M metadata stress evidence before public announcement.
 - Sync torture notes from a live WordPress site.
 - Private-storage probe matrix for the target host.
 - Export/restore drill with checksum verification.
 - Matching WordPress and Mac support correlation IDs.
+- Latest async WordPress doctor job summary.
 - Signing/notarization proof before distributing the Mac app.

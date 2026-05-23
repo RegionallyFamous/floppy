@@ -507,6 +507,48 @@ import Testing
     #expect(storedURL?.path == materializedURL.path)
 }
 
+@Test func sqliteLedgerPersistsResumableUploadSessions() async throws {
+    let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: directory) }
+
+    let account = FloppyAccount(
+        siteURL: URL(string: "https://example.com")!,
+        restURL: URL(string: "https://example.com/wp-json/floppy/v1")!,
+        userHint: "admin",
+        deviceUUID: "device-uuid",
+        scope: "files:read,files:write"
+    )
+    let ledger = LocalLedger(fileURL: directory.appendingPathComponent("ledger.sqlite"))
+    try await ledger.upsert(account: account)
+
+    let transfer = FloppyUploadTransferSession(
+        accountID: account.id,
+        sessionUUID: "session-uuid",
+        operation: "replace",
+        itemUUID: "file-uuid",
+        fileID: 12,
+        localPath: directory.appendingPathComponent("hello.txt").path,
+        totalSize: 1024,
+        offset: 0,
+        idempotencyKey: "session-uuid-0"
+    )
+
+    try await ledger.saveUploadTransferSession(transfer)
+    try await ledger.updateUploadTransferSession(sessionUUID: transfer.sessionUUID, offset: 512, accountID: account.id)
+    let stored = await ledger.uploadTransferSessions(accountID: account.id)
+    try await ledger.removeUploadTransferSession(sessionUUID: transfer.sessionUUID, accountID: account.id)
+    let removed = await ledger.uploadTransferSessions(accountID: account.id)
+    await ledger.close()
+
+    #expect(stored.count == 1)
+    #expect(stored[0].sessionUUID == transfer.sessionUUID)
+    #expect(stored[0].operation == "replace")
+    #expect(stored[0].offset == 512)
+    #expect(stored[0].idempotencyKey == "session-uuid-0")
+    #expect(removed.isEmpty)
+}
+
 @Test func sqliteLedgerReportsIntegrityAndConflictDiagnostics() async throws {
     let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
     try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -729,7 +771,7 @@ import Testing
     #expect(report.summary.warnings == 1)
     #expect(report.summary.skipped == 1)
     #expect(!report.summary.readyForPublicBeta)
-    #expect(json.contains("floppy-mac-release-evidence-v1"))
+    #expect(json.contains("floppy-mac-release-evidence-v2"))
     #expect(!json.contains(FileManager.default.homeDirectoryForCurrentUser.path))
 }
 

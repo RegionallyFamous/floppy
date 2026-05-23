@@ -100,12 +100,19 @@ final class FloppyFileProviderExtension: NSObject, NSFileProviderReplicatedExten
                 let directory = FileManager.default.temporaryDirectory.appendingPathComponent("FloppyFileProvider", isDirectory: true)
                 try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
                 let destination = directory.appendingPathComponent(UUID().uuidString + "-" + item.name)
-                try await apiClient.download(file: item, to: destination)
+                if let requestedContentVersion = requestedVersion?.floppyContentVersion,
+                   !requestedContentVersion.isEmpty,
+                   requestedContentVersion != item.contentVersion,
+                   let version = try await apiClient.listFileVersions(fileID: item.id, limit: 100).versions.first(where: { $0.contentVersion == requestedContentVersion }) {
+                    try await apiClient.download(version: version, to: destination)
+                } else {
+                    try await apiClient.download(file: item, to: destination)
+                }
                 try await ledger.markMaterialized(item: item, localURL: destination)
                 progress.completedUnitCount = 100
                 completionHandler(destination, await fileProviderItem(for: item), nil)
             } catch {
-                completionHandler(nil, nil, error)
+                completionHandler(nil, nil, FloppyFileProviderErrorMapper.fileProviderError(for: error))
             }
         }
 
@@ -152,7 +159,7 @@ final class FloppyFileProviderExtension: NSObject, NSFileProviderReplicatedExten
                 progress.completedUnitCount = 100
                 completionHandler(await fileProviderItem(for: item), [], false, nil)
             } catch {
-                completionHandler(nil, fields, false, error)
+                completionHandler(nil, fields, false, FloppyFileProviderErrorMapper.fileProviderError(for: error))
             }
         }
         progress.cancellationHandler = { task.cancel() }
@@ -230,7 +237,7 @@ final class FloppyFileProviderExtension: NSObject, NSFileProviderReplicatedExten
                 progress.completedUnitCount = 100
                 completionHandler(await fileProviderItem(for: current), [], false, nil)
             } catch {
-                completionHandler(nil, changedFields, false, error)
+                completionHandler(nil, changedFields, false, FloppyFileProviderErrorMapper.fileProviderError(for: error))
             }
         }
 
@@ -289,7 +296,7 @@ final class FloppyFileProviderExtension: NSObject, NSFileProviderReplicatedExten
                 progress.completedUnitCount = 1
                 completionHandler(nil)
             } catch {
-                completionHandler(error)
+                completionHandler(FloppyFileProviderErrorMapper.fileProviderError(for: error))
             }
         }
 

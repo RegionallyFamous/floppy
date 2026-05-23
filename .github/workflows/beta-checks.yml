@@ -6,6 +6,12 @@ on:
       - main
       - "codex/**"
   pull_request:
+  workflow_dispatch:
+    inputs:
+      run_100k_release_gate:
+        description: "Run the 100k release load gate"
+        required: false
+        default: "false"
 
 jobs:
   repository-quality:
@@ -102,3 +108,24 @@ jobs:
         run: swift test --package-path FloppyMac -Xswiftc -warnings-as-errors
       - name: Xcode doctor
         run: FloppyMac/Scripts/xcode-doctor.sh
+
+  release-scale:
+    name: 100k Release Load Gate
+    runs-on: ubuntu-latest
+    if: github.event_name == 'workflow_dispatch' && inputs.run_100k_release_gate == 'true'
+    steps:
+      - uses: actions/checkout@v6
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: "8.1"
+          extensions: pdo_sqlite, sqlite3
+      - name: Run 100k load budget
+        run: |
+          mkdir -p dist/evidence
+          php floppy/tests/load/run-query-budget.php --scenario=100k --format=json | tee dist/evidence/load-100k.json
+      - name: Upload 100k release evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: floppy-load-100k-evidence
+          path: dist/evidence/load-100k.json
+          if-no-files-found: error

@@ -66,6 +66,26 @@ final class Floppy_Rest {
 
 		register_rest_route(
 			self::NAMESPACE,
+			'/maintenance/doctor-jobs',
+			array(
+				'methods'             => WP_REST_Server::READABLE . ',' . WP_REST_Server::CREATABLE,
+				'callback'            => array( __CLASS__, 'maintenance_doctor_jobs' ),
+				'permission_callback' => array( __CLASS__, 'require_admin' ),
+			)
+		);
+
+		register_rest_route(
+			self::NAMESPACE,
+			'/maintenance/doctor-jobs/(?P<uuid>[a-f0-9-]+)',
+			array(
+				'methods'             => WP_REST_Server::READABLE,
+				'callback'            => array( __CLASS__, 'maintenance_doctor_job_status' ),
+				'permission_callback' => array( __CLASS__, 'require_admin' ),
+			)
+		);
+
+		register_rest_route(
+			self::NAMESPACE,
 			'/debug-bundle',
 			array(
 				'methods'             => WP_REST_Server::READABLE,
@@ -502,6 +522,86 @@ final class Floppy_Rest {
 	}
 
 	/**
+	 * Admin-only async doctor job enqueue/list endpoint.
+	 */
+	public static function maintenance_doctor_jobs( WP_REST_Request $request ) {
+		if ( WP_REST_Server::CREATABLE === $request->get_method() ) {
+			$apply = rest_sanitize_boolean( $request->get_param( 'apply' ) );
+			$job = Floppy_Background_Jobs::enqueue(
+				'doctor',
+				array(
+					'apply'      => $apply,
+					'support_id' => Floppy_Diagnostics::correlation_id(),
+				),
+				2
+			);
+			if ( is_wp_error( $job ) ) {
+				return $job;
+			}
+
+			Floppy_Audit::log( $apply ? 'maintenance.doctor_repair_queued' : 'maintenance.doctor_dry_run_queued', 'maintenance', (int) $job['id'], '', array( 'support_id' => Floppy_Diagnostics::correlation_id() ) );
+			return new WP_REST_Response(
+				array(
+					'format'       => 'floppy-doctor-job-v1',
+					'support'      => Floppy_Diagnostics::support_block(),
+					'job_id'       => (int) $job['id'],
+					'job_uuid'     => $job['job_uuid'],
+					'status_url'   => rest_url( self::NAMESPACE . '/maintenance/doctor-jobs/' . $job['job_uuid'] ),
+				),
+				202
+			);
+		}
+
+		return new WP_REST_Response(
+			array(
+				'format'  => 'floppy-doctor-jobs-v1',
+				'support' => Floppy_Diagnostics::support_block(),
+				'jobs'    => array_map( array( __CLASS__, 'serialize_job' ), Floppy_Background_Jobs::latest_jobs( 'doctor', 10 ) ),
+			)
+		);
+	}
+
+	/**
+	 * Admin-only async doctor job status endpoint.
+	 */
+	public static function maintenance_doctor_job_status( WP_REST_Request $request ) {
+		$job = Floppy_Background_Jobs::get_job( sanitize_text_field( (string) $request['uuid'] ) );
+		if ( is_wp_error( $job ) ) {
+			return $job;
+		}
+		if ( 'doctor' !== (string) $job['job_type'] ) {
+			return new WP_Error( 'floppy_job_not_found', __( 'Floppy job not found.', 'floppy' ), array( 'status' => 404 ) );
+		}
+
+		return new WP_REST_Response(
+			array(
+				'format'  => 'floppy-doctor-job-v1',
+				'support' => Floppy_Diagnostics::support_block(),
+				'job'     => self::serialize_job( $job ),
+			)
+		);
+	}
+
+	/**
+	 * Run a queued deep doctor job.
+	 */
+	public static function run_doctor_job( array $payload ): array {
+		$apply = ! empty( $payload['apply'] );
+		$report = Floppy_Schema::repair( $apply );
+		$usage = Floppy_Schema::refresh_usage_counters();
+		Floppy_Audit::log( $apply ? 'maintenance.doctor_repair_ran' : 'maintenance.doctor_dry_run_ran', 'maintenance', 0, '', array( 'support_id' => sanitize_text_field( (string) ( $payload['support_id'] ?? '' ) ) ) );
+
+		return array(
+			'ok'         => true,
+			'format'     => 'floppy-doctor-result-v1',
+			'apply'      => $apply,
+			'report'     => $report,
+			'usage'      => $usage,
+			'completed_at_gmt' => current_time( 'mysql', true ),
+		);
+	}
+
+	/**
 	 * Admin-only redacted debug bundle.
 	 */
 	public static function debug_bundle(): WP_REST_Response {
@@ -685,6 +785,7 @@ final class Floppy_Rest {
 
 		Floppy_Sync::append_event( 'folder.created', 'folder', $row['id'], $row, $user_id );
 		Floppy_Audit::log( 'folder.created', 'folder', $row['id'], $name );
+		Floppy_Schema::refresh_usage_counters();
 
 		return new WP_REST_Response( self::serialize_folder( $row ), 201 );
 	}
@@ -930,6 +1031,7 @@ final class Floppy_Rest {
 
 		Floppy_Sync::append_event( 'file.created', 'file', $row['id'], $row, $user_id );
 		Floppy_Audit::log( 'file.uploaded', 'file', $row['id'], $stored['name'], array( 'size_bytes' => $stored['size_bytes'] ) );
+		Floppy_Schema::refresh_usage_counters();
 
 		return new WP_REST_Response( self::serialize_file( $row ), 201 );
 	}
@@ -1011,13 +1113,18 @@ final class Floppy_Rest {
 				'operation'           => 'replace',
 				'target_file_id'      => $id,
 				'base_content_version' => $known_version,
+				'reserved_bytes'      => $quota_delta,
+				'quota_delta_bytes'   => $quota_delta,
+				'reservation_expires_at_gmt' => gmdate( 'Y-m-d H:i:s', time() + DAY_IN_SECONDS ),
 				'status'              => 'open',
 				'expires_at_gmt'      => gmdate( 'Y-m-d H:i:s', time() + DAY_IN_SECONDS ),
 				'created_at_gmt'      => $now,
 				'updated_at_gmt'      => $now,
 			),
-			array( '%s', '%d', '%d', '%s', '%d', '%d', '%s', '%s', '%s', '%s', '%d', '%s', '%s', '%s', '%s', '%s' )
+			array( '%s', '%d', '%d', '%s', '%d', '%d', '%s', '%s', '%s', '%s', '%d', '%s', '%d', '%d', '%s', '%s', '%s', '%s', '%s' )
 		);
+
+		Floppy_Schema::refresh_usage_counters();
 
 		Floppy_Audit::log( 'upload_session.created', 'file', $id, $row['name'], array( 'operation' => 'replace', 'size_bytes' => $total_size ) );
 
@@ -1108,13 +1215,18 @@ final class Floppy_Rest {
 				'operation'      => 'create',
 				'target_file_id' => 0,
 				'base_content_version' => '',
+				'reserved_bytes' => $total_size,
+				'quota_delta_bytes' => $total_size,
+				'reservation_expires_at_gmt' => gmdate( 'Y-m-d H:i:s', time() + DAY_IN_SECONDS ),
 				'status'         => 'open',
 				'expires_at_gmt' => gmdate( 'Y-m-d H:i:s', time() + DAY_IN_SECONDS ),
 				'created_at_gmt' => $now,
 				'updated_at_gmt' => $now,
 			),
-			array( '%s', '%d', '%d', '%s', '%d', '%d', '%s', '%s', '%s', '%s', '%d', '%s', '%s', '%s', '%s', '%s' )
+			array( '%s', '%d', '%d', '%s', '%d', '%d', '%s', '%s', '%s', '%s', '%d', '%s', '%d', '%d', '%s', '%s', '%s', '%s', '%s' )
 		);
+
+		Floppy_Schema::refresh_usage_counters();
 
 		Floppy_Audit::log( 'upload_session.created', 'upload_session', (int) $wpdb->insert_id, $filename, array( 'size_bytes' => $total_size ) );
 
@@ -1242,7 +1354,7 @@ final class Floppy_Rest {
 			return new WP_Error( 'floppy_upload_hash_mismatch', __( 'Upload hash did not match.', 'floppy' ), array( 'status' => 409 ) );
 		}
 
-		if ( 'replace' !== (string) ( $session['operation'] ?? 'create' ) ) {
+		if ( 'replace' !== (string) ( $session['operation'] ?? 'create' ) && empty( $session['reserved_bytes'] ) ) {
 			$quota = self::check_quota( (int) $session['user_id'], (int) $session['total_size'] );
 			if ( is_wp_error( $quota ) ) {
 				return $quota;
@@ -1294,12 +1406,15 @@ final class Floppy_Rest {
 			Floppy_Schema::table( 'upload_sessions' ),
 			array(
 				'status'         => 'complete',
+				'reserved_bytes' => 0,
 				'updated_at_gmt' => current_time( 'mysql', true ),
 			),
 			array( 'id' => (int) $session['id'] ),
-			array( '%s', '%s' ),
+			array( '%s', '%d', '%s' ),
 			array( '%d' )
 		);
+
+		Floppy_Schema::refresh_usage_counters();
 
 		return new WP_REST_Response( self::serialize_file( $row ), 201 );
 	}
@@ -1340,13 +1455,14 @@ final class Floppy_Rest {
 		}
 
 		$quota_delta = max( 0, (int) $stored['size_bytes'] - (int) $row['size_bytes'] );
-		$quota = self::check_quota( $user_id, $quota_delta );
-		if ( is_wp_error( $quota ) ) {
-			@unlink( $stored['path'] ); // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged
-			return $quota;
+		if ( empty( $session['reserved_bytes'] ) ) {
+			$quota = self::check_quota( $user_id, $quota_delta );
+			if ( is_wp_error( $quota ) ) {
+				@unlink( $stored['path'] ); // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged
+				return $quota;
+			}
 		}
 
-		$version_id = self::record_file_version( $row, $user_id, 'replace_session' );
 		$next_content_version = wp_generate_uuid4();
 		$updated_at = current_time( 'mysql', true );
 		$updated = $wpdb->query(
@@ -1368,6 +1484,8 @@ final class Floppy_Rest {
 			$server = Floppy_Permissions::get_target_row( 'file', $id );
 			return new WP_Error( 'floppy_conflict', __( 'The file contents changed while this replacement was uploading.', 'floppy' ), array( 'status' => 409, 'server' => $server ? self::serialize_file( $server ) : null ) );
 		}
+
+		$version_id = self::record_file_version( $row, $user_id, 'replace_session' );
 
 		if ( ! empty( $row['attachment_id'] ) ) {
 			wp_update_post(
@@ -1397,12 +1515,15 @@ final class Floppy_Rest {
 			Floppy_Schema::table( 'upload_sessions' ),
 			array(
 				'status'         => 'complete',
+				'reserved_bytes' => 0,
 				'updated_at_gmt' => current_time( 'mysql', true ),
 			),
 			array( 'id' => (int) $session['id'] ),
-			array( '%s', '%s' ),
+			array( '%s', '%d', '%s' ),
 			array( '%d' )
 		);
+
+		Floppy_Schema::refresh_usage_counters();
 
 		Floppy_Audit::log( 'file.content_updated', 'file', $id, $row['name'], array( 'operation' => 'replace_session', 'size_bytes' => (int) $stored['size_bytes'] ), $user_id );
 
@@ -1473,7 +1594,6 @@ final class Floppy_Rest {
 			return $scan;
 		}
 
-		$version_id = self::record_file_version( $row, $user_id, 'multipart_replace' );
 		$next_content_version = wp_generate_uuid4();
 		$updated_at = current_time( 'mysql', true );
 		$updated = $wpdb->query(
@@ -1495,6 +1615,8 @@ final class Floppy_Rest {
 			$server = Floppy_Permissions::get_target_row( 'file', $id );
 			return new WP_Error( 'floppy_conflict', __( 'The file contents changed while this replacement was uploading.', 'floppy' ), array( 'status' => 409, 'server' => $server ? self::serialize_file( $server ) : null ) );
 		}
+
+		$version_id = self::record_file_version( $row, $user_id, 'multipart_replace' );
 
 		if ( ! empty( $row['attachment_id'] ) ) {
 			wp_update_post(
@@ -1521,6 +1643,7 @@ final class Floppy_Rest {
 		}
 
 		Floppy_Audit::log( 'file.content_updated', 'file', $id, $row['name'], array( 'size_bytes' => (int) $stored['size_bytes'] ), $user_id );
+		Floppy_Schema::refresh_usage_counters();
 
 		return new WP_REST_Response( self::serialize_file( $next ) + array( 'last_sync_seq' => $seq ) );
 	}
@@ -1680,7 +1803,6 @@ final class Floppy_Rest {
 			return new WP_Error( 'floppy_version_blob_missing', __( 'The retained version blob is missing from private storage.', 'floppy' ), array( 'status' => 500 ) );
 		}
 
-		self::record_file_version( $row, $user_id, 'restore_current', false );
 		$next_content_version = wp_generate_uuid4();
 		$updated_at = current_time( 'mysql', true );
 		$updated = $wpdb->query(
@@ -1701,6 +1823,8 @@ final class Floppy_Rest {
 			return new WP_Error( 'floppy_conflict', __( 'The file contents changed while this version was being restored.', 'floppy' ), array( 'status' => 409, 'server' => $server ? self::serialize_file( $server ) : null ) );
 		}
 
+		self::record_file_version( $row, $user_id, 'restore_current', false );
+
 		if ( ! empty( $row['attachment_id'] ) ) {
 			wp_update_post(
 				array(
@@ -1717,6 +1841,7 @@ final class Floppy_Rest {
 		$seq = Floppy_Sync::append_event( 'file.version_restored', 'file', $id, $next ?: array(), $user_id );
 		$next['last_sync_seq'] = $seq;
 		Floppy_Audit::log( 'file.version_restored', 'file', $id, $row['name'], array( 'version_id' => $version_id ), $user_id );
+		Floppy_Schema::refresh_usage_counters();
 
 		return new WP_REST_Response( self::serialize_file( $next ) + array( 'last_sync_seq' => $seq ) );
 	}
@@ -2641,14 +2766,17 @@ final class Floppy_Rest {
 			$formats[] = is_int( $value ) ? '%d' : '%s';
 		}
 
+		self::begin_transaction();
 		$updated = $wpdb->update( Floppy_Schema::table( 'files' ), $updates, array( 'id' => $id, 'metadata_version' => $known_version ), $formats, array( '%d', '%s' ) );
 		if ( 1 !== $updated ) {
+			self::rollback_transaction();
 			$server = Floppy_Permissions::get_target_row( 'file', $id );
 			return new WP_Error( 'floppy_conflict', __( 'The file changed while this request was being applied.', 'floppy' ), array( 'status' => 409, 'server' => $server ? self::serialize_file( $server ) : null ) );
 		}
 
 		$next = Floppy_Permissions::get_target_row( 'file', $id );
 		if ( ! $next ) {
+			self::rollback_transaction();
 			return new WP_Error( 'floppy_file_not_found', __( 'File not found after updating metadata.', 'floppy' ), array( 'status' => 404 ) );
 		}
 		if ( 'deleted' === $next['status'] ) {
@@ -2656,14 +2784,21 @@ final class Floppy_Rest {
 		} else {
 			$reserved = self::sync_item_name_reservation( 'file', $id, $next );
 			if ( is_wp_error( $reserved ) ) {
+				self::rollback_transaction();
 				return $reserved;
 			}
 		}
 
 		$seq = Floppy_Sync::append_event( $event_type, 'file', $id, array_merge( $next, $audience ) );
+		if ( $seq <= 0 ) {
+			self::rollback_transaction();
+			return new WP_Error( 'floppy_sync_event_failed', __( 'Could not record the Floppy sync event for this change.', 'floppy' ), array( 'status' => 500 ) );
+		}
 		$next['last_sync_seq'] = $seq;
+		self::commit_transaction();
 
 		Floppy_Audit::log( $event_type, 'file', $id );
+		Floppy_Schema::refresh_usage_counters();
 
 		return new WP_REST_Response( self::serialize_file( $next ) + array( 'last_sync_seq' => $seq ) );
 	}
@@ -2712,14 +2847,17 @@ final class Floppy_Rest {
 			$formats[] = is_int( $value ) ? '%d' : '%s';
 		}
 
+		self::begin_transaction();
 		$updated = $wpdb->update( Floppy_Schema::table( 'folders' ), $updates, array( 'id' => $id, 'metadata_version' => $known_version ), $formats, array( '%d', '%s' ) );
 		if ( 1 !== $updated ) {
+			self::rollback_transaction();
 			$server = Floppy_Permissions::get_target_row( 'folder', $id );
 			return new WP_Error( 'floppy_conflict', __( 'The folder changed while this request was being applied.', 'floppy' ), array( 'status' => 409, 'server' => $server ? self::serialize_folder( $server ) : null ) );
 		}
 
 		$next = Floppy_Permissions::get_target_row( 'folder', $id );
 		if ( ! $next ) {
+			self::rollback_transaction();
 			return new WP_Error( 'floppy_folder_not_found', __( 'Folder not found after updating metadata.', 'floppy' ), array( 'status' => 404 ) );
 		}
 		if ( 'deleted' === $next['status'] ) {
@@ -2727,13 +2865,20 @@ final class Floppy_Rest {
 		} else {
 			$reserved = self::sync_item_name_reservation( 'folder', $id, $next );
 			if ( is_wp_error( $reserved ) ) {
+				self::rollback_transaction();
 				return $reserved;
 			}
 		}
 
 		$seq = Floppy_Sync::append_event( $event_type, 'folder', $id, $next ?: array() );
+		if ( $seq <= 0 ) {
+			self::rollback_transaction();
+			return new WP_Error( 'floppy_sync_event_failed', __( 'Could not record the Floppy sync event for this change.', 'floppy' ), array( 'status' => 500 ) );
+		}
 		$next['last_sync_seq'] = $seq;
+		self::commit_transaction();
 		Floppy_Audit::log( $event_type, 'folder', $id );
+		Floppy_Schema::refresh_usage_counters();
 
 		return new WP_REST_Response( self::serialize_folder( $next ) + array( 'last_sync_seq' => $seq ) );
 	}
@@ -2900,6 +3045,7 @@ final class Floppy_Rest {
 
 		$next = Floppy_Permissions::get_target_row( 'folder', $id );
 		Floppy_Audit::log( $event_type, 'folder', $id, '', array( 'folders' => count( $folder_ids ), 'files' => count( $file_ids ) ), $actor_id );
+		Floppy_Schema::refresh_usage_counters();
 
 		return new WP_REST_Response(
 			self::serialize_folder( $next ) + array(
@@ -3046,6 +3192,33 @@ final class Floppy_Rest {
 	}
 
 	/**
+	 * Begin a best-effort SQL transaction for metadata/write-path coherence.
+	 */
+	private static function begin_transaction(): void {
+		global $wpdb;
+
+		$wpdb->query( 'START TRANSACTION' );
+	}
+
+	/**
+	 * Commit a best-effort SQL transaction.
+	 */
+	private static function commit_transaction(): void {
+		global $wpdb;
+
+		$wpdb->query( 'COMMIT' );
+	}
+
+	/**
+	 * Roll back a best-effort SQL transaction.
+	 */
+	private static function rollback_transaction(): void {
+		global $wpdb;
+
+		$wpdb->query( 'ROLLBACK' );
+	}
+
+	/**
 	 * Return a folder tree as folder ids and file ids.
 	 */
 	private static function folder_tree_ids( int $root_folder_id ): array {
@@ -3119,27 +3292,87 @@ final class Floppy_Rest {
 		global $wpdb;
 		$user_quota = (int) Floppy_Settings::get_value( 'user_quota_bytes', 0 );
 		$site_quota = (int) Floppy_Settings::get_value( 'site_quota_bytes', 0 );
+		$counters = self::quota_counter_snapshot();
 
 		if ( $user_quota > 0 ) {
-			$user_used = (int) $wpdb->get_var(
-				$wpdb->prepare(
-					'SELECT COALESCE(SUM(size_bytes),0) FROM ' . Floppy_Schema::table( 'files' ) . " WHERE owner_id = %d AND status != 'deleted'",
-					$user_id
-				)
-			);
+			$user_used = isset( $counters['users'][ $user_id ] )
+				? (int) $counters['users'][ $user_id ]['active_bytes'] + (int) $counters['users'][ $user_id ]['reserved_bytes']
+				: (int) $wpdb->get_var(
+					$wpdb->prepare(
+						'SELECT COALESCE(SUM(size_bytes),0) FROM ' . Floppy_Schema::table( 'files' ) . " WHERE owner_id = %d AND status != 'deleted'",
+						$user_id
+					)
+				);
+			if ( ! isset( $counters['users'][ $user_id ] ) ) {
+				$user_used += self::open_reserved_bytes( $user_id );
+			}
 			if ( $user_used + $incoming_bytes > $user_quota ) {
 				return new WP_Error( 'floppy_user_quota_exceeded', __( 'This upload would exceed your Floppy storage quota.', 'floppy' ), array( 'status' => 507, 'used' => $user_used, 'quota' => $user_quota ) );
 			}
 		}
 
 		if ( $site_quota > 0 ) {
-			$site_used = (int) $wpdb->get_var( 'SELECT COALESCE(SUM(size_bytes),0) FROM ' . Floppy_Schema::table( 'files' ) . " WHERE status != 'deleted'" ); // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared
+			$site_used = isset( $counters['site'] )
+				? (int) $counters['site']['active_bytes'] + (int) $counters['site']['reserved_bytes']
+				: (int) $wpdb->get_var( 'SELECT COALESCE(SUM(size_bytes),0) FROM ' . Floppy_Schema::table( 'files' ) . " WHERE status != 'deleted'" ); // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared
+			if ( ! isset( $counters['site'] ) ) {
+				$site_used += self::open_reserved_bytes( 0 );
+			}
 			if ( $site_used + $incoming_bytes > $site_quota ) {
 				return new WP_Error( 'floppy_site_quota_exceeded', __( 'This upload would exceed the site Floppy storage quota.', 'floppy' ), array( 'status' => 507, 'used' => $site_used, 'quota' => $site_quota ) );
 			}
 		}
 
 		return true;
+	}
+
+	/**
+	 * Load quota counters when schema migrations have created them.
+	 */
+	private static function quota_counter_snapshot(): array {
+		global $wpdb;
+
+		$table = Floppy_Schema::table( 'usage_counters' );
+		if ( ! self::table_exists( $table ) ) {
+			return array();
+		}
+
+		$rows = $wpdb->get_results( "SELECT scope, user_id, active_bytes, reserved_bytes FROM $table", ARRAY_A ); // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared
+		$out = array( 'users' => array() );
+		foreach ( $rows as $row ) {
+			$data = array(
+				'active_bytes'   => (int) $row['active_bytes'],
+				'reserved_bytes' => (int) $row['reserved_bytes'],
+			);
+			if ( 'site' === $row['scope'] ) {
+				$out['site'] = $data;
+			} elseif ( 'user' === $row['scope'] ) {
+				$out['users'][ (int) $row['user_id'] ] = $data;
+			}
+		}
+
+		return $out;
+	}
+
+	/**
+	 * Sum open upload reservations as a fallback for upgraded sites.
+	 */
+	private static function open_reserved_bytes( int $user_id = 0 ): int {
+		global $wpdb;
+
+		$where = '';
+		$args = array( current_time( 'mysql', true ) );
+		if ( $user_id > 0 ) {
+			$where = ' AND user_id = %d';
+			$args[] = $user_id;
+		}
+
+		return (int) $wpdb->get_var(
+			$wpdb->prepare(
+				'SELECT COALESCE(SUM(reserved_bytes),0) FROM ' . Floppy_Schema::table( 'upload_sessions' ) . " WHERE status = 'open' AND expires_at_gmt >= %s $where",
+				$args
+			)
+		); // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared
 	}
 
 	/**

@@ -51,7 +51,7 @@ final class Floppy_Diagnostics {
 	 */
 	public static function deep_health(): array {
 		return array(
-			'format'         => 'floppy-deep-health-v1',
+			'format'         => 'floppy-deep-health-v2',
 			'support'        => self::support_block(),
 			'compatibility'  => Floppy_Compatibility::summary(),
 			'private_storage' => Floppy_Storage::private_storage_probe_matrix(),
@@ -61,7 +61,9 @@ final class Floppy_Diagnostics {
 			),
 			'sync'           => self::sync_summary(),
 			'storage'        => self::storage_summary(),
+			'usage_counters' => Floppy_Schema::usage_counter_summary(),
 			'queues'         => self::job_summary(),
+			'doctor_jobs'    => self::doctor_job_summary(),
 			'conflicts'      => self::conflict_summary(),
 			'versions'       => self::version_summary(),
 			'thumbnails'     => self::thumbnail_summary(),
@@ -80,7 +82,7 @@ final class Floppy_Diagnostics {
 		$audit_counts = $wpdb->get_results( 'SELECT action, COUNT(*) AS total FROM ' . Floppy_Schema::table( 'audit_log' ) . ' GROUP BY action ORDER BY total DESC LIMIT 25', ARRAY_A ); // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared
 
 		return array(
-			'format'         => 'floppy-debug-bundle-v2',
+			'format'         => 'floppy-debug-bundle-v3',
 			'support'        => self::support_block(),
 			'plugin'         => array(
 				'version'    => FLOPPY_VERSION,
@@ -120,8 +122,10 @@ final class Floppy_Diagnostics {
 			),
 			'devices'        => self::device_summary(),
 			'jobs'           => self::job_summary(),
+			'doctor_jobs'    => self::doctor_job_summary(),
 			'sync'           => self::sync_summary(),
 			'storage'        => self::storage_summary(),
+			'usage_counters' => Floppy_Schema::usage_counter_summary(),
 			'conflicts'      => self::conflict_summary(),
 			'versions'       => self::version_summary(),
 			'thumbnails'     => self::thumbnail_summary(),
@@ -135,7 +139,7 @@ final class Floppy_Diagnostics {
 	 */
 	public static function release_evidence(): array {
 		return array(
-			'format'            => 'floppy-beta-evidence-v1',
+			'format'            => 'floppy-beta-evidence-v2',
 			'support'           => self::support_block(),
 			'plugin'            => array(
 				'version'    => FLOPPY_VERSION,
@@ -153,6 +157,9 @@ final class Floppy_Diagnostics {
 				'repair'  => Floppy_Schema::repair( false ),
 			),
 			'conflicts'         => self::conflict_summary(),
+			'doctor_jobs'       => self::doctor_job_summary(),
+			'usage_counters'    => Floppy_Schema::usage_counter_summary(),
+			'private_storage'   => Floppy_Storage::private_storage_probe_matrix(),
 			'versions'          => self::version_summary(),
 			'thumbnails'        => self::thumbnail_summary(),
 			'release_gates'     => array(
@@ -243,6 +250,7 @@ final class Floppy_Diagnostics {
 			'max_seq' => $max,
 			'total'   => $total,
 			'gaps'    => $min && $max ? max( 0, ( $max - $min + 1 ) - $total ) : 0,
+			'audience_strategy' => 'principal-index-with-permission-fallback',
 		);
 	}
 
@@ -263,6 +271,36 @@ final class Floppy_Diagnostics {
 			'files_by_status'   => self::keyed_counts( $file_counts, 'status' ),
 			'folders_by_status' => self::keyed_counts( $folder_counts, 'status' ),
 			'file_bytes'        => $bytes,
+			'adapter'           => array(
+				'name'              => 'local',
+				'encryption_state'  => 'none',
+				'future_ready_meta' => true,
+			),
+		);
+	}
+
+	/**
+	 * Summarize async doctor jobs without exposing private paths.
+	 */
+	private static function doctor_job_summary(): array {
+		$jobs = Floppy_Background_Jobs::latest_jobs( 'doctor', 5 );
+		$out = array();
+		foreach ( $jobs as $job ) {
+			$result = json_decode( (string) ( $job['result_json'] ?? '' ), true );
+			$out[] = array(
+				'job_uuid'       => (string) $job['job_uuid'],
+				'status'         => (string) $job['status'],
+				'attempts'       => (int) $job['attempts'],
+				'created_at_gmt' => (string) $job['created_at_gmt'],
+				'updated_at_gmt' => (string) $job['updated_at_gmt'],
+				'result_format'  => is_array( $result ) ? (string) ( $result['format'] ?? '' ) : '',
+				'ok'             => is_array( $result ) ? ! empty( $result['ok'] ) : null,
+			);
+		}
+
+		return array(
+			'latest' => $out,
+			'async'  => true,
 		);
 	}
 
@@ -304,10 +342,11 @@ final class Floppy_Diagnostics {
 		$missing_schema = Floppy_Schema::validate();
 
 		return array(
-			'format'               => 'floppy-beta-evidence-summary-v1',
+			'format'               => 'floppy-beta-evidence-summary-v2',
 			'schema_ready'         => empty( $missing_schema ),
 			'missing_schema_items' => count( $missing_schema ),
 			'no_external_services' => true,
+			'doctor_jobs_async'    => true,
 			'required_manual_gates' => array( 'developer_id_notarization', 'load_100k', 'load_1m_stress' ),
 		);
 	}

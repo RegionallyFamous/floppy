@@ -94,7 +94,7 @@ fi
 if [[ -n "$NOTARY_PROFILE" || ( -n "$APPLE_ID" && -n "$APPLE_PASSWORD" && -n "$NOTARY_TEAM_ID" ) ]]; then
     add_check "notarization-credentials" "pass" "Notarization credentials are configured for this run." "configured"
 else
-    add_check "notarization-credentials" "warn" "Notarization credentials were not provided; archive script will skip submission." "set NOTARY_PROFILE or Apple ID credentials"
+    add_check "notarization-credentials" "fail" "Notarization credentials are required for public beta release evidence." "set NOTARY_PROFILE or Apple ID credentials"
 fi
 
 if [[ -n "$APP_PATH" ]]; then
@@ -109,6 +109,11 @@ fi
 
 if [[ -n "$APP_PATH" && -d "$APP_PATH/Contents/PlugIns/FloppyFileProviderExtension.appex" ]]; then
     add_check "embedded-extension-artifact" "pass" "Exported app contains the File Provider extension bundle." "$(redact_path "$APP_PATH")"
+    if codesign --verify --strict --verbose=2 "$APP_PATH/Contents/PlugIns/FloppyFileProviderExtension.appex" >/dev/null 2>&1; then
+        add_check "nested-extension-signature" "pass" "Embedded File Provider extension passes codesign verification." "FloppyFileProviderExtension.appex"
+    else
+        add_check "nested-extension-signature" "fail" "Embedded File Provider extension failed codesign verification." "FloppyFileProviderExtension.appex"
+    fi
 elif [[ -n "$APP_PATH" ]]; then
     add_check "embedded-extension-artifact" "fail" "Exported app does not contain FloppyFileProviderExtension.appex." "$(redact_path "$APP_PATH")"
 else
@@ -142,7 +147,7 @@ fi
 mkdir -p "$(dirname "$OUTPUT_PATH")"
 {
     printf '{\n'
-    printf '  "format": "floppy-mac-release-evidence-v1",\n'
+    printf '  "format": "floppy-mac-release-evidence-v2",\n'
     printf '  "generated_at": "%s",\n' "$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
     printf '  "project_path": "%s",\n' "$(json_escape "$(redact_path "$ROOT")")"
     printf '  "app_path": "%s",\n' "$(json_escape "$(redact_path "$APP_PATH")")"

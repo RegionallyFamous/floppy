@@ -4,6 +4,8 @@
 
 - Storage is private by default.
 - Direct-access probes run on activation and scheduled health checks.
+- Private-storage probes are staleness-aware and fail closed unless an explicit loopback development allowance is active.
+- Storage keys are validated before path resolution and must remain inside the local Floppy private root.
 - Files, previews, exports, and thumbnails must be served through authenticated endpoints.
 - File responses send `X-Content-Type-Options: nosniff`, private no-store cache headers, and byte-range support.
 - Dangerous server-executable extensions are blocked.
@@ -18,7 +20,19 @@
 - Metadata writes use compare-and-swap through `metadata_version`.
 - Content replacement uses compare-and-swap through `content_version`.
 - Replacement sessions keep large Finder edits resumable and still enforce MIME validation, malware-scan hooks, quota delta checks, and old-blob cleanup on completion.
+- Upload sessions reserve quota while open. Production quota checks use hot usage counters plus open reservations so two concurrent large uploads cannot both believe they own the same remaining space.
+- Sync uses an append-only event log plus a principal audience index. Clients keep the same cursor API, but servers can over-fetch visible events without starving users behind invisible global events.
 - Delete and trash events preserve tombstones so delayed clients can catch up within the retention window.
+
+## Doctor Jobs
+
+Deep repair and integrity checks should run as resumable background doctor jobs instead of hashing or scanning large storage inline during a support request. Admin-only health, debug, and release-evidence endpoints report the latest redacted doctor summaries.
+
+Doctor jobs cover name reservations, stale upload sessions, attachment drift, tombstones, storage-key validation, blob integrity samples, sync-event continuity, sync audience coverage, quota counters, and orphaned blobs.
+
+## Future Encryption Seam
+
+This round does not add user-facing end-to-end encryption. The storage adapter records local/plain blob metadata fields such as adapter, blob format, hash algorithm, encryption state, key id, and nonce so a future encryption design can be added deliberately without changing every write path.
 
 ## Conflict Policy
 

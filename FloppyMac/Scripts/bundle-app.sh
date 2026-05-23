@@ -9,6 +9,9 @@ ZIP_PATH="$ROOT/.build/Floppy.zip"
 
 swift build --package-path "$ROOT" -c "$CONFIGURATION"
 
+echo "Creating a SwiftPM development-only app bundle."
+echo "Use Scripts/archive-notarize.sh from the Xcode project for signed/notarized Finder builds."
+
 APP_DIR="$ROOT/.build/$APP_NAME"
 CONTENTS_DIR="$APP_DIR/Contents"
 MACOS_DIR="$CONTENTS_DIR/MacOS"

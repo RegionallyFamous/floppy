@@ -17,6 +17,7 @@ NOTARY_PROFILE="${NOTARY_PROFILE:-}"
 APPLE_ID="${APPLE_ID:-}"
 APPLE_PASSWORD="${APPLE_PASSWORD:-}"
 NOTARY_TEAM_ID="${NOTARY_TEAM_ID:-$DEVELOPMENT_TEAM}"
+ALLOW_NOTARIZATION_SKIP="${ALLOW_NOTARIZATION_SKIP:-0}"
 
 if [[ ! -x "$XCODE_DEVELOPER_DIR/usr/bin/xcodebuild" ]]; then
     echo "Xcode not found at $XCODE_DEVELOPER_DIR" >&2
@@ -100,7 +101,26 @@ if [[ -z "$APP_PATH" ]]; then
 fi
 
 codesign --verify --deep --strict --verbose=2 "$APP_PATH"
-spctl --assess --type execute --verbose "$APP_PATH" || true
+if ! codesign -d --verbose=4 "$APP_PATH" 2>&1 | grep -q "Runtime"; then
+    echo "Exported app is not using the hardened runtime." >&2
+    exit 4
+fi
+
+EXTENSION_PATH="$APP_PATH/Contents/PlugIns/FloppyFileProviderExtension.appex"
+if [[ ! -d "$EXTENSION_PATH" ]]; then
+    echo "Exported app is missing FloppyFileProviderExtension.appex." >&2
+    exit 4
+fi
+codesign --verify --strict --verbose=2 "$EXTENSION_PATH"
+if ! codesign -d --entitlements :- "$APP_PATH" 2>/dev/null | grep -q "com.apple.security.application-groups"; then
+    echo "Exported app is missing App Group entitlements." >&2
+    exit 4
+fi
+if ! codesign -d --entitlements :- "$EXTENSION_PATH" 2>/dev/null | grep -q "com.apple.security.application-groups"; then
+    echo "File Provider extension is missing App Group entitlements." >&2
+    exit 4
+fi
+spctl --assess --type execute --verbose "$APP_PATH"
 
 ditto -c -k --sequesterRsrc --keepParent "$APP_PATH" "$ZIP_PATH"
 echo "Created notarization ZIP: $ZIP_PATH"
@@ -114,14 +134,20 @@ elif [[ -n "$APPLE_ID" && -n "$APPLE_PASSWORD" && -n "$NOTARY_TEAM_ID" ]]; then
         --team-id "$NOTARY_TEAM_ID" \
         --wait
 else
-    echo "Notarization skipped. Set NOTARY_PROFILE, or APPLE_ID + APPLE_PASSWORD + NOTARY_TEAM_ID."
-    echo "$APP_PATH"
-    exit 0
+    if [[ "$ALLOW_NOTARIZATION_SKIP" == "1" ]]; then
+        echo "Notarization skipped for local development only. Set NOTARY_PROFILE, or APPLE_ID + APPLE_PASSWORD + NOTARY_TEAM_ID for release builds."
+        echo "$APP_PATH"
+        exit 0
+    fi
+    echo "Notarization credentials are required for signed release builds." >&2
+    echo "Set NOTARY_PROFILE, or APPLE_ID + APPLE_PASSWORD + NOTARY_TEAM_ID. Use ALLOW_NOTARIZATION_SKIP=1 only for local development." >&2
+    exit 4
 fi
 
 xcrun stapler staple "$APP_PATH"
 codesign --verify --deep --strict --verbose=2 "$APP_PATH"
-spctl --assess --type execute --verbose "$APP_PATH" || true
+codesign --verify --strict --verbose=2 "$EXTENSION_PATH"
+spctl --assess --type execute --verbose "$APP_PATH"
 
 rm -f "$ZIP_PATH"
 ditto -c -k --sequesterRsrc --keepParent "$APP_PATH" "$ZIP_PATH"

@@ -103,6 +103,10 @@ enum FileProviderDomainController {
         let record = FloppyDomainRegistry.record(for: account)
         let readiness = readiness()
         let registeredInLocalRegistry = (try? FloppyDomainRegistry.load(domainIdentifier: record.domainIdentifier)) != nil
+        let registeredInSystem = NSFileProviderManager(for: NSFileProviderDomain(
+            identifier: NSFileProviderDomainIdentifier(record.domainIdentifier),
+            displayName: record.displayName
+        )) != nil
         let domainLedger = LocalLedger(appGroupIdentifier: FloppyDomainRegistry.appGroupIdentifier, domainIdentifier: record.domainIdentifier)
         let integrity = await domainLedger.integrityReport(accountID: account.id)
         let activeEnumeratorIdentifiers = await domainLedger.activeEnumeratorIdentifiers()
@@ -120,6 +124,9 @@ enum FileProviderDomainController {
         } else if !registeredInLocalRegistry {
             state = .registryMissing
             message = "The File Provider domain is not present in Floppy's local registry."
+        } else if !registeredInSystem {
+            state = .domainUnavailable
+            message = "macOS does not currently expose the registered Floppy File Provider domain."
         } else if !integrity.ok {
             state = .needsLedgerRepair
             message = "The File Provider ledger needs repair before it can be trusted."

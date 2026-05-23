@@ -20,7 +20,7 @@ final class Floppy_Sync {
 		$actor_id = $actor_id ?: get_current_user_id();
 		$payload  = self::normalize_payload( $payload );
 
-		$wpdb->insert(
+		$inserted = $wpdb->insert(
 			Floppy_Schema::table( 'sync_events' ),
 			array(
 				'event_uuid'       => wp_generate_uuid4(),
@@ -37,7 +37,14 @@ final class Floppy_Sync {
 			array( '%s', '%d', '%s', '%d', '%s', '%d', '%s', '%s', '%s', '%s' )
 		);
 
-		return (int) $wpdb->insert_id;
+		if ( ! $inserted ) {
+			return 0;
+		}
+
+		$seq = (int) $wpdb->insert_id;
+		self::index_event_audience( $seq, (string) $wpdb->get_var( $wpdb->prepare( 'SELECT event_uuid FROM ' . Floppy_Schema::table( 'sync_events' ) . ' WHERE seq = %d', $seq ) ), $payload, $actor_id );
+
+		return $seq;
 	}
 
 	/**
@@ -61,14 +68,7 @@ final class Floppy_Sync {
 			);
 		}
 
-		$rows = $wpdb->get_results(
-			$wpdb->prepare(
-				'SELECT * FROM ' . Floppy_Schema::table( 'sync_events' ) . ' WHERE seq > %d ORDER BY seq ASC LIMIT %d',
-				$cursor,
-				$limit + 1
-			),
-			ARRAY_A
-		);
+		$rows = self::query_candidate_events( $cursor, $limit + 1, $user_id );
 
 		$has_more = count( $rows ) > $limit;
 		if ( $has_more ) {
@@ -105,8 +105,107 @@ final class Floppy_Sync {
 			'cursor'      => $cursor,
 			'next_cursor' => $next_cursor,
 			'has_more'    => $has_more,
+			'audience'    => array(
+				'strategy' => 'principal-index-with-permission-fallback',
+			),
 			'events'      => $events,
 		);
+	}
+
+	/**
+	 * Query candidate events with audience overfetch so visible changes are not starved.
+	 */
+	private static function query_candidate_events( int $cursor, int $limit, int $user_id ): array {
+		global $wpdb;
+
+		$user = get_userdata( $user_id );
+		$roles = $user ? array_values( (array) $user->roles ) : array();
+		$audience_table = Floppy_Schema::table( 'sync_audience' );
+		$audience_exists = $wpdb->get_var( $wpdb->prepare( 'SHOW TABLES LIKE %s', $audience_table ) ) === $audience_table;
+
+		if ( ! $audience_exists || user_can( $user_id, 'manage_options' ) ) {
+			return $wpdb->get_results(
+				$wpdb->prepare(
+					'SELECT * FROM ' . Floppy_Schema::table( 'sync_events' ) . ' WHERE seq > %d ORDER BY seq ASC LIMIT %d',
+					$cursor,
+					$limit
+				),
+				ARRAY_A
+			);
+		}
+
+		$clauses = array( '(a.principal_type = %s AND a.principal_ref = %s)' );
+		$values = array( 'user', (string) $user_id );
+		foreach ( $roles as $role ) {
+			$clauses[] = '(a.principal_type = %s AND a.principal_ref = %s)';
+			$values[] = 'role';
+			$values[] = (string) $role;
+		}
+
+		$audience_sql = implode( ' OR ', $clauses );
+		$sql = $wpdb->prepare(
+			'SELECT DISTINCT e.* FROM ' . Floppy_Schema::table( 'sync_events' ) . ' e LEFT JOIN ' . $audience_table . " a ON a.seq = e.seq WHERE e.seq > %d AND (e.actor_id = %d OR $audience_sql OR a.id IS NULL) ORDER BY e.seq ASC LIMIT %d",
+			array_merge( array( $cursor, $user_id ), $values, array( max( $limit, min( 500, $limit * 3 ) ) ) )
+		); // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared
+
+		return $wpdb->get_results( $sql, ARRAY_A );
+	}
+
+	/**
+	 * Store supportable sync audience snapshots for fast cursor feeds.
+	 */
+	private static function index_event_audience( int $seq, string $event_uuid, array $payload, int $actor_id ): void {
+		global $wpdb;
+
+		$table = Floppy_Schema::table( 'sync_audience' );
+		if ( $wpdb->get_var( $wpdb->prepare( 'SHOW TABLES LIKE %s', $table ) ) !== $table ) {
+			return;
+		}
+
+		$principals = array();
+		if ( $actor_id > 0 ) {
+			$principals[] = array( 'user', (string) $actor_id );
+		}
+		if ( ! empty( $payload['owner_id'] ) ) {
+			$principals[] = array( 'user', (string) absint( $payload['owner_id'] ) );
+		}
+		foreach ( array_map( 'absint', (array) ( $payload['audience_user_ids'] ?? array() ) ) as $user_id ) {
+			if ( $user_id > 0 ) {
+				$principals[] = array( 'user', (string) $user_id );
+			}
+		}
+		foreach ( array_map( 'sanitize_key', (array) ( $payload['audience_roles'] ?? array() ) ) as $role ) {
+			if ( '' !== $role ) {
+				$principals[] = array( 'role', $role );
+			}
+		}
+		if ( ! empty( $payload['principal_type'] ) && ! empty( $payload['principal_ref'] ) ) {
+			$principals[] = array( sanitize_key( (string) $payload['principal_type'] ), sanitize_text_field( (string) $payload['principal_ref'] ) );
+		}
+
+		$now = current_time( 'mysql', true );
+		$seen = array();
+		foreach ( $principals as $principal ) {
+			if ( ! in_array( $principal[0], array( 'user', 'role' ), true ) || '' === $principal[1] ) {
+				continue;
+			}
+			$key = $principal[0] . ':' . $principal[1];
+			if ( isset( $seen[ $key ] ) ) {
+				continue;
+			}
+			$seen[ $key ] = true;
+			$wpdb->replace(
+				$table,
+				array(
+					'seq'            => $seq,
+					'event_uuid'     => $event_uuid,
+					'principal_type' => $principal[0],
+					'principal_ref'  => $principal[1],
+					'created_at_gmt' => $now,
+				),
+				array( '%d', '%s', '%s', '%s', '%s' )
+			);
+		}
 	}
 
 	/**

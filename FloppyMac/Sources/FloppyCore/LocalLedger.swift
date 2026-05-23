@@ -29,6 +29,45 @@ public struct FloppyPendingOperation: Codable, Equatable, Identifiable, Sendable
     }
 }
 
+public struct FloppyUploadTransferSession: Codable, Equatable, Identifiable, Sendable {
+    public var id: String { sessionUUID }
+
+    public let accountID: String
+    public let sessionUUID: String
+    public let operation: String
+    public let itemUUID: String?
+    public let fileID: Int64?
+    public let localPath: String
+    public let totalSize: Int64
+    public let offset: Int64
+    public let idempotencyKey: String
+    public let updatedAt: Date
+
+    public init(
+        accountID: String,
+        sessionUUID: String,
+        operation: String,
+        itemUUID: String? = nil,
+        fileID: Int64? = nil,
+        localPath: String,
+        totalSize: Int64,
+        offset: Int64,
+        idempotencyKey: String,
+        updatedAt: Date = Date()
+    ) {
+        self.accountID = accountID
+        self.sessionUUID = sessionUUID
+        self.operation = operation
+        self.itemUUID = itemUUID
+        self.fileID = fileID
+        self.localPath = localPath
+        self.totalSize = totalSize
+        self.offset = offset
+        self.idempotencyKey = idempotencyKey
+        self.updatedAt = updatedAt
+    }
+}
+
 public struct FloppyConflict: Codable, Equatable, Identifiable, Sendable {
     public let id: UUID
     public let accountID: String
@@ -439,6 +478,27 @@ public actor LocalLedger {
         }
     }
 
+    public func saveUploadTransferSession(_ session: FloppyUploadTransferSession) throws {
+        try store.upsert(uploadTransferSession: session)
+    }
+
+    public func updateUploadTransferSession(sessionUUID: String, offset: Int64, accountID: String? = nil) throws {
+        try store.updateUploadTransferSession(sessionUUID: sessionUUID, offset: offset, accountID: try defaultAccountID(accountID))
+    }
+
+    public func removeUploadTransferSession(sessionUUID: String, accountID: String? = nil) throws {
+        try store.removeUploadTransferSession(sessionUUID: sessionUUID, accountID: try defaultAccountID(accountID))
+    }
+
+    public func uploadTransferSessions(accountID: String? = nil) -> [FloppyUploadTransferSession] {
+        do {
+            return try store.uploadTransferSessions(accountID: try defaultAccountID(accountID))
+        } catch {
+            FloppyDiagnostics.ledger.error("Failed loading resumable upload sessions: \(error.localizedDescription, privacy: .public)")
+            return []
+        }
+    }
+
     public func recordActiveEnumerator(_ identifier: String) {
         do {
             try store.recordActiveEnumerator(identifier)
@@ -488,8 +548,8 @@ public actor LocalLedger {
         }
     }
 
-    public func record(changeFeed: FloppyChangeFeed, accountID: String) throws {
-        try store.updateAccountSync(accountID: accountID, lastCursor: changeFeed.nextCursor, lastSyncAt: Date())
+    public func record(changeFeed: FloppyChangeFeed, accountID: String? = nil) throws {
+        try store.updateAccountSync(accountID: try defaultAccountID(accountID), lastCursor: changeFeed.nextCursor, lastSyncAt: Date())
     }
 
     private func defaultAccountID(_ accountID: String?) throws -> String {
@@ -673,6 +733,7 @@ private final class SQLiteLedgerStore {
             try execute("DELETE FROM accounts WHERE id = ?", .text(id))
             try execute("DELETE FROM items WHERE account_id = ?", .text(id))
             try execute("DELETE FROM pending_operations WHERE account_id = ?", .text(id))
+            try execute("DELETE FROM upload_transfer_sessions WHERE account_id = ?", .text(id))
             try execute("DELETE FROM conflicts WHERE account_id = ?", .text(id))
         }
     }
@@ -1015,6 +1076,74 @@ private final class SQLiteLedgerStore {
         return Int(sqlite3_column_int64(statement, 0))
     }
 
+    func upsert(uploadTransferSession session: FloppyUploadTransferSession) throws {
+        let statement = try prepare("""
+            INSERT OR REPLACE INTO upload_transfer_sessions (session_uuid, account_id, operation, item_uuid, file_id, local_path, total_size, offset, idempotency_key, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """)
+        defer { sqlite3_finalize(statement) }
+
+        bind(session.sessionUUID, to: statement, at: 1)
+        bind(session.accountID, to: statement, at: 2)
+        bind(session.operation, to: statement, at: 3)
+        bind(session.itemUUID, to: statement, at: 4)
+        if let fileID = session.fileID {
+            sqlite3_bind_int64(statement, 5, fileID)
+        } else {
+            sqlite3_bind_null(statement, 5)
+        }
+        bind(session.localPath, to: statement, at: 6)
+        sqlite3_bind_int64(statement, 7, session.totalSize)
+        sqlite3_bind_int64(statement, 8, session.offset)
+        bind(session.idempotencyKey, to: statement, at: 9)
+        sqlite3_bind_double(statement, 10, session.updatedAt.timeIntervalSinceReferenceDate)
+        try finish(statement)
+    }
+
+    func updateUploadTransferSession(sessionUUID: String, offset: Int64, accountID: String) throws {
+        try execute(
+            "UPDATE upload_transfer_sessions SET offset = ?, updated_at = ? WHERE session_uuid = ? AND account_id = ?",
+            .int(offset),
+            .double(Date().timeIntervalSinceReferenceDate),
+            .text(sessionUUID),
+            .text(accountID)
+        )
+    }
+
+    func removeUploadTransferSession(sessionUUID: String, accountID: String) throws {
+        try execute("DELETE FROM upload_transfer_sessions WHERE session_uuid = ? AND account_id = ?", .text(sessionUUID), .text(accountID))
+    }
+
+    func uploadTransferSessions(accountID: String) throws -> [FloppyUploadTransferSession] {
+        let statement = try prepare("""
+            SELECT session_uuid, account_id, operation, item_uuid, file_id, local_path, total_size, offset, idempotency_key, updated_at
+            FROM upload_transfer_sessions
+            WHERE account_id = ?
+            ORDER BY updated_at DESC
+            """)
+        defer { sqlite3_finalize(statement) }
+
+        bind(accountID, to: statement, at: 1)
+        var sessions: [FloppyUploadTransferSession] = []
+        while try step(statement) == SQLITE_ROW {
+            let fileID: Int64? = sqlite3_column_type(statement, 4) == SQLITE_NULL ? nil : sqlite3_column_int64(statement, 4)
+            sessions.append(FloppyUploadTransferSession(
+                accountID: columnText(statement, 1),
+                sessionUUID: columnText(statement, 0),
+                operation: columnText(statement, 2),
+                itemUUID: columnText(statement, 3).isEmpty ? nil : columnText(statement, 3),
+                fileID: fileID,
+                localPath: columnText(statement, 5),
+                totalSize: sqlite3_column_int64(statement, 6),
+                offset: sqlite3_column_int64(statement, 7),
+                idempotencyKey: columnText(statement, 8),
+                updatedAt: Date(timeIntervalSinceReferenceDate: sqlite3_column_double(statement, 9))
+            ))
+        }
+
+        return sessions
+    }
+
     func updateAccountSync(accountID: String, lastCursor: UInt64, lastSyncAt: Date) throws {
         let statement = try prepare("""
             UPDATE accounts
@@ -1084,6 +1213,21 @@ private final class SQLiteLedgerStore {
                 created_at REAL NOT NULL
             )
             """)
+        try execute("""
+            CREATE TABLE IF NOT EXISTS upload_transfer_sessions (
+                session_uuid TEXT PRIMARY KEY,
+                account_id TEXT NOT NULL,
+                operation TEXT NOT NULL,
+                item_uuid TEXT,
+                file_id INTEGER,
+                local_path TEXT NOT NULL,
+                total_size INTEGER NOT NULL,
+                offset INTEGER NOT NULL,
+                idempotency_key TEXT NOT NULL,
+                updated_at REAL NOT NULL
+            )
+            """)
+        try execute("CREATE INDEX IF NOT EXISTS upload_transfer_sessions_account ON upload_transfer_sessions (account_id, updated_at)")
         try execute("""
             CREATE TABLE IF NOT EXISTS conflicts (
                 id TEXT PRIMARY KEY,
@@ -1330,6 +1474,14 @@ private final class SQLiteLedgerStore {
         sqlite3_bind_text(statement, index, value, -1, sqliteTransient)
     }
 
+    private func bind(_ value: String?, to statement: OpaquePointer?, at index: Int32) {
+        if let value {
+            bind(value, to: statement, at: index)
+        } else {
+            sqlite3_bind_null(statement, index)
+        }
+    }
+
     private func bind(_ value: Data, to statement: OpaquePointer?, at index: Int32) {
         _ = value.withUnsafeBytes { buffer in
             sqlite3_bind_blob(statement, index, buffer.baseAddress, Int32(value.count), sqliteTransient)
@@ -1350,6 +1502,8 @@ private final class SQLiteLedgerStore {
             bind(value, to: statement, at: index)
         case .double(let value):
             sqlite3_bind_double(statement, index, value)
+        case .int(let value):
+            sqlite3_bind_int64(statement, index, value)
         }
     }
 
@@ -1390,6 +1544,7 @@ private final class SQLiteLedgerStore {
 private enum SQLiteBinding {
     case text(String)
     case double(Double)
+    case int(Int64)
 }
 
 private let sqliteTransient = unsafeBitCast(-1, to: sqlite3_destructor_type.self)

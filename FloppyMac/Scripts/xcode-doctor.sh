@@ -4,6 +4,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 XCODE_DEVELOPER_DIR="${DEVELOPER_DIR:-/Applications/Xcode.app/Contents/Developer}"
 ACTIVE_DEVELOPER_DIR="$(xcode-select -p 2>/dev/null || true)"
+SWIFT_SCRATCH_PATH="${SWIFT_SCRATCH_PATH:-${TMPDIR:-/tmp}/floppy-xcode-doctor-build}"
 
 echo "Floppy Xcode Doctor"
 echo
@@ -56,12 +57,13 @@ fi
 echo
 
 echo "Swift package:"
-run_xcode_command swift build --package-path "$ROOT"
-run_xcode_command swift test --package-path "$ROOT"
+rm -rf "$SWIFT_SCRATCH_PATH"
+run_xcode_command swift build --package-path "$ROOT" --scratch-path "$SWIFT_SCRATCH_PATH"
+run_xcode_command swift test --package-path "$ROOT" --scratch-path "$SWIFT_SCRATCH_PATH"
 echo
 
 echo "File Provider source target:"
-run_xcode_command swift build --package-path "$ROOT" --target FloppyFileProvider
+run_xcode_command swift build --package-path "$ROOT" --scratch-path "$SWIFT_SCRATCH_PATH" --target FloppyFileProvider
 echo
 
 echo "Signing-ready assets:"
