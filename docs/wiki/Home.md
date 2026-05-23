@@ -21,7 +21,7 @@ The root README stays focused on the story: own your data, get rid of the SaaS, 
 - Mac target: macOS 26.0+ with Swift tools 6.2 and a signing-ready File Provider extension lane.
 - Desktop Mode integration must use public `wp.desktop`, `wp.desktop.HOOKS`, and `wp.hooks` APIs only.
 - No hosted data service is part of Floppy. File bytes, metadata, diagnostics, audit logs, device state, and sync state belong to the user's WordPress site and Mac.
-- CI gates include Composer validation/audit, safe dependency freshness checks, PHP linting, WordPress PHPUnit/MySQL tests, plugin ZIP shape validation, strict WordPress Plugin Check, 10k load evidence, executable Desktop Mode hook auditing, Swift build/tests, and Xcode doctor checks.
+- CI gates include Composer validation/audit, safe dependency freshness checks, PHP linting, WordPress PHPUnit/MySQL tests, plugin ZIP shape validation, WordPress Plugin Check, 10k load evidence, executable Desktop Mode hook auditing, Swift build/tests, and Xcode doctor checks.
 
 ## How To Read This Wiki
 

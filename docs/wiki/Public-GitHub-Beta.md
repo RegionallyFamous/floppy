@@ -46,7 +46,7 @@ Floppy does not use a hosted file, telemetry, diagnostics, or sync service. GitH
 - WordPress debug bundles and Mac diagnostics bundles share a support correlation ID and remain redacted.
 - The Desktop Mode Release Evidence panel can download a redacted evidence JSON sidecar, and CI creates `dist/floppy-release-evidence.json`.
 - The Desktop Mode hook audit passes with public `wp.desktop`, `wp.desktop.HOOKS`, and `wp.hooks` integration only.
-- Strict WordPress Plugin Check passes against the built GitHub release ZIP contents.
+- WordPress Plugin Check passes against the built GitHub release ZIP contents, with documented ignores for Floppy's custom-table and private-blob streaming paths.
 - Composer dependency freshness passes through the safe compatibility lane. PHPUnit remains on the WordPress-compatible 9.6 line until the WordPress test harness no longer depends on APIs removed in newer PHPUnit majors.
 - Swift build/tests pass on the current macOS runner, and Xcode doctor verifies the local release setup before shipping Mac artifacts.
 

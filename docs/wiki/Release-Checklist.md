@@ -12,7 +12,7 @@
 - Run `node floppy/tests/desktop-mode/audit-hooks.mjs --format=json` and keep the hook-audit report with the release notes.
 - Run `node floppy/tests/release/build-evidence-sidecar.mjs --load-report=dist/evidence/load-10k.json --hook-audit=dist/evidence/desktop-mode-hook-audit.json --output=dist/floppy-release-evidence.json`.
 - Validate `.distignore` release ZIP shape so Composer, PHPUnit, GitHub, and test artifacts stay out of the plugin ZIP.
-- Run WordPress Plugin Check against the built release ZIP contents with strict mode enabled.
+- Run WordPress Plugin Check against the built release ZIP contents. Keep documented ignores limited to Floppy's custom-table and private-blob streaming architecture.
 - Verify activation, deactivation, reinstall, and uninstall behavior.
 - Verify HTTPS, REST API, upload limits, cron health, private storage, and DB table/index diagnostics.
 - Download a repair dry run and debug bundle from the admin screen and confirm they do not leak `storage_key` or private paths.

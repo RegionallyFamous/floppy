@@ -1,7 +1,7 @@
 <?php
 /**
  * Plugin Name: Floppy
- * Plugin URI: https://example.com/floppy
+ * Plugin URI: https://github.com/RegionallyFamous/floppy
  * Description: Private, WordPress-owned file storage for Desktop Mode and Finder-native sync.
  * Version: 0.1.1
  * Requires at least: 7.0
@@ -30,7 +30,6 @@ register_deactivation_hook( __FILE__, array( 'Floppy_Plugin', 'deactivate' ) );
 add_action(
 	'plugins_loaded',
 	static function () {
-		load_plugin_textdomain( 'floppy', false, dirname( plugin_basename( __FILE__ ) ) . '/languages' );
 		Floppy_Plugin::instance()->init();
 	}
 );

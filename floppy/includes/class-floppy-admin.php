@@ -124,6 +124,7 @@ final class Floppy_Admin {
 						<div class="floppy-admin-metric">
 							<span><?php esc_html_e( 'Readiness', 'floppy' ); ?></span>
 							<strong><?php echo ! empty( $summary['ok'] ) ? esc_html__( 'Ready', 'floppy' ) : esc_html__( 'Review', 'floppy' ); ?></strong>
+							<?php /* translators: %d: number of failed readiness checks. */ ?>
 							<small><?php echo esc_html( sprintf( _n( '%d failed check', '%d failed checks', $failed_checks, 'floppy' ), $failed_checks ) ); ?></small>
 						</div>
 						<div class="floppy-admin-metric">
@@ -134,6 +135,7 @@ final class Floppy_Admin {
 						<div class="floppy-admin-metric">
 							<span><?php esc_html_e( 'Approved Macs', 'floppy' ); ?></span>
 							<strong><?php echo esc_html( (string) $active_devices ); ?></strong>
+							<?php /* translators: %d: number of revoked device tokens. */ ?>
 							<small><?php echo esc_html( sprintf( _n( '%d revoked token', '%d revoked tokens', $revoked_devices, 'floppy' ), $revoked_devices ) ); ?></small>
 						</div>
 						<div class="floppy-admin-metric">
@@ -281,10 +283,12 @@ final class Floppy_Admin {
 							</tr>
 							<tr>
 								<td><?php esc_html_e( 'Sync Retention', 'floppy' ); ?></td>
+								<?php /* translators: %d: number of days sync events are retained. */ ?>
 								<td><?php echo esc_html( sprintf( _n( '%d day', '%d days', (int) ( $settings['sync_retention_days'] ?? 45 ), 'floppy' ), (int) ( $settings['sync_retention_days'] ?? 45 ) ) ); ?></td>
 							</tr>
 							<tr>
 								<td><?php esc_html_e( 'Tombstone Retention', 'floppy' ); ?></td>
+								<?php /* translators: %d: number of days tombstones are retained. */ ?>
 								<td><?php echo esc_html( sprintf( _n( '%d day', '%d days', (int) ( $settings['tombstone_retention_days'] ?? 90 ), 'floppy' ), (int) ( $settings['tombstone_retention_days'] ?? 90 ) ) ); ?></td>
 							</tr>
 						</tbody>
