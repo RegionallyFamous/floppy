@@ -13,11 +13,14 @@ XCODE_PROJECT="${XCODE_PROJECT:-}"
 XCODE_WORKSPACE="${XCODE_WORKSPACE:-}"
 EXPORT_OPTIONS_PLIST="${EXPORT_OPTIONS_PLIST:-}"
 DEVELOPMENT_TEAM="${DEVELOPMENT_TEAM:-}"
+ARCHIVE_DESTINATION="${ARCHIVE_DESTINATION:-generic/platform=macOS}"
 NOTARY_PROFILE="${NOTARY_PROFILE:-}"
 APPLE_ID="${APPLE_ID:-}"
 APPLE_PASSWORD="${APPLE_PASSWORD:-}"
 NOTARY_TEAM_ID="${NOTARY_TEAM_ID:-$DEVELOPMENT_TEAM}"
 ALLOW_NOTARIZATION_SKIP="${ALLOW_NOTARIZATION_SKIP:-0}"
+ALLOW_PROVISIONING_UPDATES="${ALLOW_PROVISIONING_UPDATES:-0}"
+ALLOW_PROVISIONING_DEVICE_REGISTRATION="${ALLOW_PROVISIONING_DEVICE_REGISTRATION:-0}"
 
 if [[ ! -x "$XCODE_DEVELOPER_DIR/usr/bin/xcodebuild" ]]; then
     echo "Xcode not found at $XCODE_DEVELOPER_DIR" >&2
@@ -53,7 +56,7 @@ mkdir -p "$(dirname "$ARCHIVE_PATH")" "$EXPORT_PATH"
 rm -rf "$ARCHIVE_PATH" "$EXPORT_PATH" "$ZIP_PATH"
 
 if [[ -z "$EXPORT_OPTIONS_PLIST" ]]; then
-    EXPORT_OPTIONS_PLIST="$(mktemp "$ROOT/.build/export-options.XXXXXX.plist")"
+    EXPORT_OPTIONS_PLIST="$(mktemp "$ROOT/.build/export-options.plist.XXXXXX")"
     TEAM_XML=""
     if [[ -n "$DEVELOPMENT_TEAM" ]]; then
         TEAM_XML="  <key>teamID</key>
@@ -79,20 +82,36 @@ ARCHIVE_ARGS=(
     -scheme "$SCHEME"
     -configuration "$CONFIGURATION"
     -archivePath "$ARCHIVE_PATH"
-    -destination "generic/platform=macOS"
+    -destination "$ARCHIVE_DESTINATION"
     SKIP_INSTALL=NO
 )
 
 if [[ -n "$DEVELOPMENT_TEAM" ]]; then
     ARCHIVE_ARGS+=(DEVELOPMENT_TEAM="$DEVELOPMENT_TEAM")
 fi
+if [[ "$ALLOW_PROVISIONING_UPDATES" == "1" ]]; then
+    ARCHIVE_ARGS+=(-allowProvisioningUpdates)
+fi
+if [[ "$ALLOW_PROVISIONING_DEVICE_REGISTRATION" == "1" ]]; then
+    ARCHIVE_ARGS+=(-allowProvisioningDeviceRegistration)
+fi
 
 DEVELOPER_DIR="$XCODE_DEVELOPER_DIR" xcodebuild archive "${ARCHIVE_ARGS[@]}"
 
-DEVELOPER_DIR="$XCODE_DEVELOPER_DIR" xcodebuild -exportArchive \
-    -archivePath "$ARCHIVE_PATH" \
-    -exportPath "$EXPORT_PATH" \
+EXPORT_ARGS=(
+    -exportArchive
+    -archivePath "$ARCHIVE_PATH"
+    -exportPath "$EXPORT_PATH"
     -exportOptionsPlist "$EXPORT_OPTIONS_PLIST"
+)
+if [[ "$ALLOW_PROVISIONING_UPDATES" == "1" ]]; then
+    EXPORT_ARGS+=(-allowProvisioningUpdates)
+fi
+if [[ "$ALLOW_PROVISIONING_DEVICE_REGISTRATION" == "1" ]]; then
+    EXPORT_ARGS+=(-allowProvisioningDeviceRegistration)
+fi
+
+DEVELOPER_DIR="$XCODE_DEVELOPER_DIR" xcodebuild "${EXPORT_ARGS[@]}"
 
 APP_PATH="$(find "$EXPORT_PATH" -maxdepth 2 -name '*.app' -type d -print -quit)"
 if [[ -z "$APP_PATH" ]]; then
