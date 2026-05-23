@@ -589,12 +589,25 @@
 
 		function renderConflictCard( conflict ) {
 			var reason = conflict.reason || conflict.event_type || __( 'Conflict', 'floppy' );
-			var name = conflict.name || conflict.target_name || conflict.item_name || '';
-			var target = conflict.target_type ? conflict.target_type + ' #' + String( conflict.target_id || 0 ) : '';
+			var name = conflict.local_name || conflict.name || conflict.target_name || conflict.item_name || '';
+			var status = conflict.state || conflict.status || 'open';
+			var uuid = conflict.conflict_uuid || conflict.uuid || '';
+			var target = conflict.target_type ? conflict.target_type + ' #' + String( conflict.target_id || 0 ) : ( conflict.file_id ? 'file #' + String( conflict.file_id ) : '' );
+			var actions = uuid && status === 'open' ? '<div class="floppy-card-actions">' +
+				renderConflictActionButton( uuid, 'retry_upload', __( 'Retry', 'floppy' ), '' ) +
+				renderConflictActionButton( uuid, 'keep_both', __( 'Keep Both', 'floppy' ), '' ) +
+				renderConflictActionButton( uuid, 'mark_resolved', __( 'Resolve', 'floppy' ), 'button-primary' ) +
+				renderConflictActionButton( uuid, 'discard_local_copy', __( 'Discard', 'floppy' ), 'button-link-delete' ) +
+			'</div>' : '';
 			return '<article class="floppy-card is-warning">' +
-				'<div><span class="dashicons dashicons-warning" aria-hidden="true"></span><div><strong>' + escapeHtml( reason ) + '</strong><small>' + escapeHtml( [ target, name, formatDate( conflict.created_at_gmt || conflict.updated_at_gmt ) ].filter( Boolean ).join( ' · ' ) ) + '</small></div></div>' +
+				'<div><span class="dashicons dashicons-warning" aria-hidden="true"></span><div><strong>' + escapeHtml( reason ) + '</strong><small>' + escapeHtml( [ target, name, status, formatDate( conflict.created_at_gmt || conflict.updated_at_gmt ) ].filter( Boolean ).join( ' · ' ) ) + '</small></div></div>' +
 				'<p>' + escapeHtml( conflict.message || __( 'The server kept the canonical item and Floppy preserved the user edit as a separate conflict copy.', 'floppy' ) ) + '</p>' +
+				actions +
 			'</article>';
+		}
+
+		function renderConflictActionButton( uuid, actionName, label, className ) {
+			return '<button type="button" class="button ' + escapeHtml( className || '' ) + '" data-action="conflict-action" data-conflict-uuid="' + escapeHtml( uuid ) + '" data-conflict-action="' + escapeHtml( actionName ) + '">' + escapeHtml( label ) + '</button>';
 		}
 
 		function renderVersions() {
@@ -629,8 +642,14 @@
 		}
 
 		function renderVersionRow( version ) {
+			var versionId = version.id || '';
+			var actions = versionId ? '<div class="floppy-card-actions">' +
+				'<button type="button" class="button" data-action="version-download" data-version-id="' + escapeHtml( String( versionId ) ) + '">' + escapeHtml( __( 'Download', 'floppy' ) ) + '</button>' +
+				'<button type="button" class="button button-primary" data-action="version-restore" data-version-id="' + escapeHtml( String( versionId ) ) + '">' + escapeHtml( __( 'Restore', 'floppy' ) ) + '</button>' +
+			'</div>' : '';
 			return '<article class="floppy-card">' +
 				'<div><span class="dashicons dashicons-backup" aria-hidden="true"></span><div><strong>' + escapeHtml( version.label || version.content_version || __( 'Version', 'floppy' ) ) + '</strong><small>' + escapeHtml( [ formatBytes( version.size_bytes ), version.content_hash ? version.content_hash.slice( 0, 12 ) : '', formatDate( version.created_at_gmt || version.updated_at_gmt ) ].filter( Boolean ).join( ' · ' ) ) + '</small></div></div>' +
+				actions +
 			'</article>';
 		}
 
@@ -1192,6 +1211,74 @@
 			} ).catch( showError );
 		}
 
+		function applyConflictAction( uuid, actionName ) {
+			if ( ! uuid || ! actionName ) {
+				return;
+			}
+			return apiRequest( 'conflicts/' + encodeURIComponent( uuid ) + '/actions', {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify( { action: actionName } )
+			} ).catch( function ( error ) {
+				var status = errorStatus( error );
+				if ( status !== 404 && status !== 405 ) {
+					throw error;
+				}
+				return apiRequest( 'conflicts/' + encodeURIComponent( uuid ) + '/resolve', {
+					method: 'POST',
+					headers: { 'Content-Type': 'application/json' },
+					body: JSON.stringify( { action: legacyConflictAction( actionName ) } )
+				} );
+			} ).then( function () {
+				notify( __( 'Conflict updated.', 'floppy' ), 'success' );
+				if ( desktop && typeof desktop.broadcast === 'function' ) {
+					desktop.broadcast( 'floppy.conflicts.changed', { conflict: uuid } );
+				}
+				return loadConflicts();
+			} ).catch( showError );
+		}
+
+		function legacyConflictAction( actionName ) {
+			var map = {
+				mark_resolved: 'resolve',
+				discard_local_copy: 'discard',
+				keep_both: 'keep',
+				retry_upload: 'retry'
+			};
+			return map[ actionName ] || actionName;
+		}
+
+		function downloadVersion( versionId ) {
+			var target = currentVersionTarget();
+			if ( ! target || ! versionId ) {
+				return;
+			}
+			var version = versionById( versionId );
+			var url = version && version.download_url ? version.download_url : config.restUrl + 'files/' + encodeURIComponent( target.id ) + '/versions/' + encodeURIComponent( versionId ) + '/download';
+			window.open( url, '_blank', 'noopener' );
+		}
+
+		function restoreVersion( versionId ) {
+			var target = currentVersionTarget();
+			if ( ! target || ! versionId || ! target.content_version ) {
+				return;
+			}
+			if ( ! window.confirm( __( 'Restore this retained version? Floppy will keep the current file as a new version before restoring.', 'floppy' ) ) ) {
+				return;
+			}
+			return apiRequest( 'files/' + encodeURIComponent( target.id ) + '/versions/' + encodeURIComponent( versionId ) + '/restore', {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify( { content_version: target.content_version } )
+			} ).then( function () {
+				notify( __( 'Version restored.', 'floppy' ), 'success' );
+				if ( desktop && typeof desktop.broadcast === 'function' ) {
+					desktop.broadcast( 'floppy.files.changed', { parentId: target.parent_id || 0 } );
+				}
+				return loadVersions();
+			} ).catch( showError );
+		}
+
 		function openItem( id, kind ) {
 			var item = state.items.filter( function ( candidate ) {
 				return Number( candidate.id ) === Number( id ) && candidate.kind === kind;
@@ -1389,6 +1476,13 @@
 				return data.items;
 			}
 			return [];
+		}
+
+		function versionById( versionId ) {
+			versionId = String( versionId || '' );
+			return state.versions.filter( function ( version ) {
+				return String( version.id || '' ) === versionId;
+			} )[0] || null;
 		}
 
 		function countObjectValues( object ) {
@@ -1600,8 +1694,14 @@
 				switchPanel( 'sync' );
 			} else if ( name === 'conflict-refresh' ) {
 				loadConflicts();
+			} else if ( name === 'conflict-action' ) {
+				applyConflictAction( action.getAttribute( 'data-conflict-uuid' ), action.getAttribute( 'data-conflict-action' ) );
 			} else if ( name === 'version-refresh' ) {
 				loadVersions();
+			} else if ( name === 'version-download' ) {
+				downloadVersion( action.getAttribute( 'data-version-id' ) );
+			} else if ( name === 'version-restore' ) {
+				restoreVersion( action.getAttribute( 'data-version-id' ) );
 			} else if ( name === 'sync-reset' ) {
 				state.syncCursor = 0;
 				state.syncEvents = [];

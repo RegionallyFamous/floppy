@@ -9,6 +9,21 @@ public enum FloppyConflictCenterAction: String, Codable, CaseIterable, Sendable 
     case keepBoth = "keep_both"
     case discardLocalCopy = "discard_local_copy"
     case markResolved = "mark_resolved"
+
+    public var legacyServerAction: String {
+        switch self {
+        case .discardLocalCopy:
+            "discard"
+        case .keepBoth:
+            "keep"
+        case .retryUpload:
+            "retry"
+        case .markResolved:
+            "resolve"
+        default:
+            rawValue
+        }
+    }
 }
 
 public struct FloppyConflictCenterItem: Codable, Equatable, Identifiable, Sendable {
@@ -154,12 +169,51 @@ public struct FloppyServerConflict: Codable, Equatable, Identifiable, Sendable {
 
     enum CodingKeys: String, CodingKey {
         case id
+        case conflictUUID = "conflict_uuid"
         case item
+        case serverFile = "server_file"
         case localItemUUID = "local_item_uuid"
         case reason
         case state
+        case status
         case createdAtGMT = "created_at_gmt"
         case updatedAtGMT = "updated_at_gmt"
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let conflictUUID = try container.decodeIfPresent(String.self, forKey: .conflictUUID)
+        if let conflictUUID, !conflictUUID.isEmpty {
+            id = conflictUUID
+        } else if let stringID = try? container.decode(String.self, forKey: .id) {
+            id = stringID
+        } else if let numericID = try? container.decode(Int64.self, forKey: .id) {
+            id = String(numericID)
+        } else {
+            id = ""
+        }
+        let decodedItem = try container.decodeIfPresent(FloppyItem.self, forKey: .item)
+        let decodedServerFile = try container.decodeIfPresent(FloppyItem.self, forKey: .serverFile)
+        item = decodedItem ?? decodedServerFile
+        localItemUUID = try container.decodeIfPresent(String.self, forKey: .localItemUUID)
+        let decodedReason = try container.decodeIfPresent(String.self, forKey: .reason)
+        let decodedState = try container.decodeIfPresent(String.self, forKey: .state)
+        let decodedStatus = try container.decodeIfPresent(String.self, forKey: .status)
+        reason = decodedReason ?? "conflict"
+        state = decodedState ?? decodedStatus ?? "open"
+        createdAtGMT = try container.decodeIfPresent(String.self, forKey: .createdAtGMT)
+        updatedAtGMT = try container.decodeIfPresent(String.self, forKey: .updatedAtGMT)
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(id, forKey: .id)
+        try container.encodeIfPresent(item, forKey: .item)
+        try container.encodeIfPresent(localItemUUID, forKey: .localItemUUID)
+        try container.encode(reason, forKey: .reason)
+        try container.encode(state, forKey: .state)
+        try container.encodeIfPresent(createdAtGMT, forKey: .createdAtGMT)
+        try container.encodeIfPresent(updatedAtGMT, forKey: .updatedAtGMT)
     }
 }
 
@@ -179,6 +233,26 @@ public struct FloppyServerConflictListResponse: Codable, Equatable, Sendable {
         case nextCursor = "next_cursor"
         case hasMore = "has_more"
     }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        conflicts = try container.decodeIfPresent([FloppyServerConflict].self, forKey: .conflicts) ?? []
+        if let stringCursor = try? container.decodeIfPresent(String.self, forKey: .nextCursor) {
+            nextCursor = stringCursor
+        } else if let numericCursor = try? container.decodeIfPresent(Int64.self, forKey: .nextCursor) {
+            nextCursor = numericCursor > 0 ? String(numericCursor) : nil
+        } else {
+            nextCursor = nil
+        }
+        hasMore = try container.decodeIfPresent(Bool.self, forKey: .hasMore) ?? false
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(conflicts, forKey: .conflicts)
+        try container.encodeIfPresent(nextCursor, forKey: .nextCursor)
+        try container.encode(hasMore, forKey: .hasMore)
+    }
 }
 
 public struct FloppyConflictActionResponse: Codable, Equatable, Sendable {
@@ -193,6 +267,26 @@ public struct FloppyConflictActionResponse: Codable, Equatable, Sendable {
     enum CodingKeys: String, CodingKey {
         case conflict
         case canonicalItem = "canonical_item"
+    }
+
+    public init(from decoder: Decoder) throws {
+        if let container = try? decoder.container(keyedBy: CodingKeys.self) {
+            if let conflict = try container.decodeIfPresent(FloppyServerConflict.self, forKey: .conflict) {
+                self.conflict = conflict
+                self.canonicalItem = try container.decodeIfPresent(FloppyItem.self, forKey: .canonicalItem)
+                return
+            }
+        }
+
+        let conflict = try FloppyServerConflict(from: decoder)
+        self.conflict = conflict
+        self.canonicalItem = conflict.item
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(conflict, forKey: .conflict)
+        try container.encodeIfPresent(canonicalItem, forKey: .canonicalItem)
     }
 }
 

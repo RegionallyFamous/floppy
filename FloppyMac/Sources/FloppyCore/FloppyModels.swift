@@ -291,6 +291,52 @@ public struct FloppyListResponse: Codable, Equatable, Sendable {
     }
 }
 
+public struct FloppyFileVersion: Codable, Equatable, Identifiable, Sendable {
+    public let id: Int64
+    public let versionUUID: String
+    public let fileID: Int64
+    public let fileUUID: String
+    public let name: String
+    public let mimeType: String
+    public let sizeBytes: Int64
+    public let contentHash: String
+    public let contentVersion: String
+    public let metadataVersion: String
+    public let reason: String
+    public let createdBy: Int64
+    public let createdAtGMT: String
+    public let downloadURL: URL?
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case versionUUID = "version_uuid"
+        case fileID = "file_id"
+        case fileUUID = "file_uuid"
+        case name
+        case mimeType = "mime_type"
+        case sizeBytes = "size_bytes"
+        case contentHash = "content_hash"
+        case contentVersion = "content_version"
+        case metadataVersion = "metadata_version"
+        case reason
+        case createdBy = "created_by"
+        case createdAtGMT = "created_at_gmt"
+        case downloadURL = "download_url"
+    }
+}
+
+public struct FloppyFileVersionListResponse: Codable, Equatable, Sendable {
+    public let versions: [FloppyFileVersion]
+    public let nextCursor: Int64?
+    public let hasMore: Bool
+
+    enum CodingKeys: String, CodingKey {
+        case versions
+        case nextCursor = "next_cursor"
+        case hasMore = "has_more"
+    }
+}
+
 public struct FloppyChangeFeed: Codable, Equatable, Sendable {
     public let cursor: UInt64
     public let nextCursor: UInt64

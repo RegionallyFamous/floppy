@@ -118,7 +118,20 @@ public struct FloppyAPIClient: Sendable {
     }
 
     public func applyConflictAction(conflictID: String, request actionRequest: FloppyConflictActionRequest) async throws -> FloppyConflictActionResponse {
-        try await request(path: "conflicts/\(conflictID)/actions", method: "POST", body: actionRequest)
+        do {
+            return try await request(path: "conflicts/\(conflictID)/actions", method: "POST", body: actionRequest)
+        } catch FloppyAPIError.httpStatus(let status, _) where status == 404 || status == 405 {
+            struct LegacyBody: Encodable {
+                let action: String
+            }
+
+            let legacy: FloppyServerConflict = try await request(
+                path: "conflicts/\(conflictID)/resolve",
+                method: "POST",
+                body: LegacyBody(action: actionRequest.action.legacyServerAction)
+            )
+            return FloppyConflictActionResponse(conflict: legacy, canonicalItem: legacy.item)
+        }
     }
 
     public func revokeDevice(deviceUUID: String) async throws {
@@ -308,6 +321,31 @@ public struct FloppyAPIClient: Sendable {
         }
 
         let _: EmptyResponse = try await request(path: "folders/\(id)", method: "DELETE", body: Body(metadataVersion: metadataVersion))
+    }
+
+    public func listFileVersions(fileID: Int64, afterID: Int64 = 0, limit: Int = 50) async throws -> FloppyFileVersionListResponse {
+        var components = URLComponents()
+        components.queryItems = [URLQueryItem(name: "limit", value: String(limit))]
+        if afterID > 0 {
+            components.queryItems?.append(URLQueryItem(name: "after_id", value: String(afterID)))
+        }
+        return try await request(path: "files/\(fileID)/versions?\(components.percentEncodedQuery ?? "")")
+    }
+
+    public func restoreFileVersion(fileID: Int64, versionID: Int64, contentVersion: String) async throws -> FloppyItem {
+        struct Body: Encodable {
+            let contentVersion: String
+
+            enum CodingKeys: String, CodingKey {
+                case contentVersion = "content_version"
+            }
+        }
+
+        return try await request(
+            path: "files/\(fileID)/versions/\(versionID)/restore",
+            method: "POST",
+            body: Body(contentVersion: contentVersion)
+        )
     }
 
     public func upload(data: Data, filename: String, parentID: Int64 = 0, mimeType: String = "application/octet-stream") async throws -> FloppyItem {

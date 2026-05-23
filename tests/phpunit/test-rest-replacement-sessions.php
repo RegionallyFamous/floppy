@@ -104,6 +104,8 @@ final class Floppy_REST_Replacement_Sessions_Test extends WP_UnitTestCase {
 		$this->assertCount( 1, $versions );
 		$this->assertSame( 'hello', file_get_contents( Floppy_Storage::path_for_key( $file['storage_key'] ) ) );
 		$this->assertArrayNotHasKey( 'storage_key', $versions[0] );
+		$this->assertArrayHasKey( 'download_url', $versions[0] );
+		$this->assertStringContainsString( '/versions/' . $versions[0]['id'] . '/download', $versions[0]['download_url'] );
 
 		$restore = new WP_REST_Request( 'POST', '/floppy/v1/files/' . $file['id'] . '/versions/' . $versions[0]['id'] . '/restore' );
 		$restore->set_param( 'id', $file['id'] );
@@ -185,6 +187,29 @@ final class Floppy_REST_Replacement_Sessions_Test extends WP_UnitTestCase {
 		$resolve->set_param( 'action', 'resolve' );
 		$resolved = Floppy_Rest::resolve_conflict( $resolve )->get_data();
 		$this->assertSame( 'resolved', $resolved['status'] );
+	}
+
+	public function test_conflict_actions_endpoint_accepts_mac_action_names(): void {
+		$file = $this->insert_private_file( 'hello' );
+		$request = new WP_REST_Request( 'POST', '/floppy/v1/conflicts' );
+		$request->set_param( 'file_id', $file['id'] );
+		$request->set_param( 'reason', 'stale_content' );
+		$request->set_param( 'local_name', 'hello (Floppy conflict).txt' );
+		$request->set_param( 'local_content_hash', hash( 'sha256', 'local edit' ) );
+
+		$created = Floppy_Rest::record_conflict( $request )->get_data();
+		$action = new WP_REST_Request( 'POST', '/floppy/v1/conflicts/' . $created['conflict_uuid'] . '/actions' );
+		$action->set_param( 'uuid', $created['conflict_uuid'] );
+		$action->set_param( 'action', 'mark_resolved' );
+		$response = Floppy_Rest::conflict_action( $action );
+		$data = $response->get_data();
+		$json = wp_json_encode( $data );
+
+		$this->assertArrayHasKey( 'conflict', $data );
+		$this->assertSame( 'resolved', $data['conflict']['status'] );
+		$this->assertSame( 'resolved', $data['conflict']['state'] );
+		$this->assertArrayHasKey( 'canonical_item', $data );
+		$this->assertStringNotContainsString( $file['storage_key'], $json );
 	}
 
 	public function test_thumbnail_for_non_image_is_rejected_privately(): void {

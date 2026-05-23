@@ -17,8 +17,8 @@ The shell does not read private Desktop Mode storage, scrape host DOM, patch sha
 
 - **My Drive**: list-first private file browser with search, filters, sorting, keyboard selection, bounded large-list rendering, upload, folder creation, sharing, rename, download, and trash actions.
 - **Shared**: exact user/role grants and recent share activity.
-- **Conflicts**: conflict center using the optional conflicts endpoint when present, with sync-feed fallback for current beta sites.
-- **Versions**: version-history shell using the optional versions endpoint when present, with current content and metadata versions as fallback evidence.
+- **Conflicts**: conflict center using the conflicts endpoint when present, with sync-feed fallback for current beta sites, plus retry, keep-both, resolve, and discard lifecycle actions.
+- **Versions**: version-history shell using the versions endpoint when present, with authenticated retained-version downloads and compare-and-swap restore actions.
 - **Sync**: cursor, event feed, conflict count, latest/load-more controls.
 - **Devices**: approved Mac devices and revoke actions.
 - **Diagnostics**: compatibility and health checks.

@@ -22,6 +22,7 @@ The Mac app connects a WordPress site to Finder.
 - Finder edits use resumable replacement sessions instead of whole-file multipart uploads.
 - The client computes SHA-256, creates an upload or replacement session, sends bounded chunks, and completes the session.
 - Downloads are constrained to the connected site/rest origin and reject unsafe redirects.
+- File version listing and restore use authenticated Floppy REST endpoints; retained-version downloads never use public Media Library URLs.
 - The legacy multipart replacement endpoint remains only for compatibility with older clients.
 
 ## Finder Signaling
@@ -33,6 +34,7 @@ After sync, conflict creation, upload completion, delete, move, and rename, the 
 - Stale Finder writes that receive `409` or `428` keep the user-edited bytes locally.
 - The File Provider creates a Finder-visible local item named `Original Name (Floppy conflict YYYY-MM-DD HH.mm.ss).ext`.
 - Local conflict item identifiers use `local-conflict-{uuid}` and are stored in SQLite with materialized file paths and original content versions.
+- Server conflict action calls prefer `/conflicts/{uuid}/actions` and fall back to `/conflicts/{uuid}/resolve` for older beta plugins.
 - Conflict copies are local-only in this beta; syncing conflict files back to WordPress as server items is a future phase.
 
 ## Diagnostics

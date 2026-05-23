@@ -270,6 +270,20 @@ final class Floppy_Rest {
 
 		register_rest_route(
 			self::NAMESPACE,
+			'/files/(?P<id>[\d]+)/versions/(?P<version_id>[\d]+)/download',
+			array(
+				'methods'             => WP_REST_Server::READABLE,
+				'callback'            => array( __CLASS__, 'download_file_version' ),
+				'permission_callback' => array( __CLASS__, 'require_read' ),
+				'args'                => array(
+					'id'         => array( 'sanitize_callback' => 'absint' ),
+					'version_id' => array( 'sanitize_callback' => 'absint' ),
+				),
+			)
+		);
+
+		register_rest_route(
+			self::NAMESPACE,
 			'/conflicts',
 			array(
 				array(
@@ -282,6 +296,16 @@ final class Floppy_Rest {
 					'callback'            => array( __CLASS__, 'record_conflict' ),
 					'permission_callback' => array( __CLASS__, 'require_write' ),
 				),
+			)
+		);
+
+		register_rest_route(
+			self::NAMESPACE,
+			'/conflicts/(?P<uuid>[a-f0-9-]+)/actions',
+			array(
+				'methods'             => WP_REST_Server::CREATABLE,
+				'callback'            => array( __CLASS__, 'conflict_action' ),
+				'permission_callback' => array( __CLASS__, 'require_write' ),
 			)
 		);
 
@@ -1569,6 +1593,13 @@ final class Floppy_Rest {
 	}
 
 	/**
+	 * Download a retained file version through authenticated private storage.
+	 */
+	public static function download_file_version( WP_REST_Request $request ) {
+		return self::stream_file_version( absint( $request['id'] ), absint( $request['version_id'] ) );
+	}
+
+	/**
 	 * List retained content versions for a file.
 	 */
 	public static function list_file_versions( WP_REST_Request $request ): WP_REST_Response {
@@ -1699,7 +1730,7 @@ final class Floppy_Rest {
 		$user_id = get_current_user_id();
 		$status = sanitize_key( (string) ( $request->get_param( 'status' ) ?: 'open' ) );
 		$limit = max( 1, min( 100, absint( $request->get_param( 'limit' ) ?: 50 ) ) );
-		$after_id = absint( $request->get_param( 'after_id' ) );
+		$after_id = absint( $request->get_param( 'after_id' ) ?: $request->get_param( 'cursor' ) );
 		$after_sql = $after_id ? $wpdb->prepare( ' AND id > %d', $after_id ) : '';
 		$status_sql = 'all' === $status ? '' : $wpdb->prepare( ' AND status = %s', $status );
 		$rows = $wpdb->get_results(
@@ -1782,10 +1813,41 @@ final class Floppy_Rest {
 	 * Resolve a conflict lifecycle record.
 	 */
 	public static function resolve_conflict( WP_REST_Request $request ) {
+		$result = self::apply_conflict_action(
+			sanitize_text_field( (string) $request['uuid'] ),
+			sanitize_key( (string) $request->get_param( 'action' ) )
+		);
+
+		if ( is_wp_error( $result ) ) {
+			return $result;
+		}
+
+		return new WP_REST_Response( $result['conflict'] );
+	}
+
+	/**
+	 * Future-compatible conflict action endpoint used by Mac and Desktop Mode clients.
+	 */
+	public static function conflict_action( WP_REST_Request $request ) {
+		$result = self::apply_conflict_action(
+			sanitize_text_field( (string) $request['uuid'] ),
+			sanitize_key( (string) $request->get_param( 'action' ) )
+		);
+
+		if ( is_wp_error( $result ) ) {
+			return $result;
+		}
+
+		return new WP_REST_Response( $result );
+	}
+
+	/**
+	 * Apply a normalized conflict action and return a redacted action response.
+	 */
+	private static function apply_conflict_action( string $uuid, string $action ) {
 		global $wpdb;
 
-		$uuid = sanitize_text_field( (string) $request['uuid'] );
-		$action = sanitize_key( (string) $request->get_param( 'action' ) );
+		$action = self::normalize_conflict_action( $action );
 		$status_map = array(
 			'discard' => 'discarded',
 			'keep'    => 'kept',
@@ -1819,10 +1881,28 @@ final class Floppy_Rest {
 		);
 
 		$next = $wpdb->get_row( $wpdb->prepare( 'SELECT * FROM ' . Floppy_Schema::table( 'conflicts' ) . ' WHERE id = %d', (int) $row['id'] ), ARRAY_A );
-		Floppy_Sync::append_event( 'conflict.' . $action, 'conflict', (int) $row['id'], self::serialize_conflict( $next ), get_current_user_id() );
+		$serialized = self::serialize_conflict( $next );
+		Floppy_Sync::append_event( 'conflict.' . $action, 'conflict', (int) $row['id'], $serialized, get_current_user_id() );
 		Floppy_Audit::log( 'conflict.' . $action, 'conflict', (int) $row['id'], (string) $row['local_name'], array( 'status' => $next_status ) );
 
-		return new WP_REST_Response( self::serialize_conflict( $next ) );
+		return array(
+			'conflict'       => $serialized,
+			'canonical_item' => $serialized['server_file'],
+		);
+	}
+
+	/**
+	 * Normalize Mac/Desktop conflict action names to server lifecycle verbs.
+	 */
+	private static function normalize_conflict_action( string $action ): string {
+		$aliases = array(
+			'mark_resolved'      => 'resolve',
+			'discard_local_copy' => 'discard',
+			'keep_both'          => 'keep',
+			'retry_upload'       => 'retry',
+		);
+
+		return $aliases[ $action ] ?? $action;
 	}
 
 	/**
@@ -1963,6 +2043,56 @@ final class Floppy_Rest {
 		header( 'Accept-Ranges: bytes' );
 		header( 'Content-Type: ' . ( $row['mime_type'] ?: 'application/octet-stream' ) );
 		header( 'Content-Disposition: ' . ( $inline ? 'inline' : 'attachment' ) . '; filename="' . str_replace( '"', '', $row['name'] ) . '"' );
+
+		self::stream_path_with_range_support( $path );
+		exit;
+	}
+
+	/**
+	 * Stream a retained version without exposing private storage keys.
+	 */
+	private static function stream_file_version( int $id, int $version_id ) {
+		global $wpdb;
+
+		if ( ! Floppy_Permissions::can_read( 'file', $id ) ) {
+			return self::not_found_or_forbidden( 'file', $id, 'read' );
+		}
+
+		$rate = Floppy_Rate_Limiter::check( 'download', 600, HOUR_IN_SECONDS );
+		if ( is_wp_error( $rate ) ) {
+			return $rate;
+		}
+
+		$file = Floppy_Permissions::get_target_row( 'file', $id );
+		if ( ! $file || 'active' !== $file['status'] ) {
+			return new WP_Error( 'floppy_file_not_found', __( 'File not found.', 'floppy' ), array( 'status' => 404 ) );
+		}
+
+		$version = $wpdb->get_row(
+			$wpdb->prepare(
+				'SELECT * FROM ' . Floppy_Schema::table( 'file_versions' ) . ' WHERE id = %d AND file_id = %d LIMIT 1',
+				$version_id,
+				$id
+			),
+			ARRAY_A
+		);
+		if ( ! $version ) {
+			return new WP_Error( 'floppy_version_not_found', __( 'File version not found.', 'floppy' ), array( 'status' => 404 ) );
+		}
+
+		$path = Floppy_Storage::path_for_key( (string) $version['storage_key'] );
+		if ( ! is_readable( $path ) ) {
+			return new WP_Error( 'floppy_version_blob_missing', __( 'The retained version blob is missing from private storage.', 'floppy' ), array( 'status' => 500 ) );
+		}
+
+		Floppy_Audit::log( 'file.version_downloaded', 'file', $id, (string) $version['name'], array( 'version_id' => $version_id ) );
+
+		nocache_headers();
+		header( 'Cache-Control: private, no-store, max-age=0' );
+		header( 'X-Content-Type-Options: nosniff' );
+		header( 'Accept-Ranges: bytes' );
+		header( 'Content-Type: ' . ( $version['mime_type'] ?: 'application/octet-stream' ) );
+		header( 'Content-Disposition: attachment; filename="' . str_replace( '"', '', (string) $version['name'] ) . '"' );
 
 		self::stream_path_with_range_support( $path );
 		exit;
@@ -3534,6 +3664,7 @@ final class Floppy_Rest {
 			'reason'           => (string) $row['reason'],
 			'created_by'       => (int) $row['created_by'],
 			'created_at_gmt'   => (string) $row['created_at_gmt'],
+			'download_url'      => rest_url( self::NAMESPACE . '/files/' . (int) $row['file_id'] . '/versions/' . (int) $row['id'] . '/download' ),
 		);
 	}
 
@@ -3551,8 +3682,10 @@ final class Floppy_Rest {
 		return array(
 			'id'                     => (int) $row['id'],
 			'conflict_uuid'          => (string) $row['conflict_uuid'],
+			'state'                  => (string) $row['status'],
 			'file_id'                => $file_id,
 			'file_uuid'              => (string) $row['file_uuid'],
+			'local_item_uuid'        => '',
 			'parent_id'              => (int) $row['parent_id'],
 			'status'                 => (string) $row['status'],
 			'reason'                 => (string) $row['reason'],
@@ -3564,6 +3697,7 @@ final class Floppy_Rest {
 			'resolved_at_gmt'        => (string) $row['resolved_at_gmt'],
 			'created_at_gmt'         => (string) $row['created_at_gmt'],
 			'updated_at_gmt'         => (string) $row['updated_at_gmt'],
+			'item'                   => $file,
 			'server_file'            => $file,
 		);
 	}

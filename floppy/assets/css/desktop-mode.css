@@ -858,6 +858,18 @@
 	color: #50575e;
 }
 
+.floppy-card-actions {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 8px;
+	align-items: center;
+	justify-content: flex-end;
+}
+
+.floppy-card-actions .button {
+	min-height: 32px;
+}
+
 .floppy-card strong,
 .floppy-gate strong,
 .floppy-card small,

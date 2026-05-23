@@ -56,6 +56,8 @@ Local loopback Studio sites may show a warning instead of a hard failure so uplo
 - Large edited files use `POST /floppy/v1/files/{id}/replace-sessions` with `content_version`, `total_size`, optional `content_hash`, and optional `mime_type`.
 - Replacement sessions reuse the chunk and complete routes, complete through `content_version` CAS, emit `file.updated`, update Media Library attachment pointers, and clean up the old private blob.
 - Upload-session DTOs include `operation` so clients can distinguish `create` and `replace` flows.
+- Retained versions are listed through `/files/{id}/versions`, restored through `/files/{id}/versions/{version_id}/restore`, and downloaded through `/files/{id}/versions/{version_id}/download`; responses include authenticated URLs only and never expose `storage_key`.
+- Conflict lifecycle updates support both `/conflicts/{uuid}/actions` with Mac action names and the older `/conflicts/{uuid}/resolve` route with server lifecycle verbs.
 - Sync clients should treat `410 floppy_sync_anchor_expired` as a required full re-enumeration.
 - Export creation returns `202` with a `job_uuid`, `status_url`, and eventual `download_url`.
 

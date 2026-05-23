@@ -636,6 +636,80 @@ import Testing
     #expect(requested.contains { $0.method == "POST" && $0.path.hasSuffix("/conflicts/conflict-1/actions") && $0.body.contains("mark_resolved") })
 }
 
+@Test func conflictApiHelpersDecodeCurrentWordPressShapeAndFallbackRoute() async throws {
+    var requested: [(method: String, path: String, body: String)] = []
+    let serverItem = sampleItemJSON(id: 12, uuid: "file-uuid", name: "hello.txt", size: 5)
+    CurrentConflictURLProtocolStub.handler = { request in
+        requested.append((
+            method: request.httpMethod ?? "",
+            path: request.url?.path ?? "",
+            body: String(data: requestBodyData(request), encoding: .utf8) ?? ""
+        ))
+        if request.url?.path.hasSuffix("/conflicts") == true {
+            return httpJSON(request, body: """
+            {"conflicts":[{"id":7,"conflict_uuid":"conflict-uuid","status":"open","reason":"stale_content","server_file":\(serverItem)}],"next_cursor":0,"has_more":false}
+            """)
+        }
+        if request.url?.path.hasSuffix("/conflicts/conflict-uuid/actions") == true {
+            return httpJSON(request, status: 404, body: "{}")
+        }
+        if request.url?.path.hasSuffix("/conflicts/conflict-uuid/resolve") == true {
+            return httpJSON(request, body: """
+            {"id":7,"conflict_uuid":"conflict-uuid","status":"resolved","reason":"stale_content","server_file":\(serverItem)}
+            """)
+        }
+        return httpJSON(request, status: 404, body: "{}")
+    }
+    defer { CurrentConflictURLProtocolStub.handler = nil }
+
+    let configuration = URLSessionConfiguration.ephemeral
+    configuration.protocolClasses = [CurrentConflictURLProtocolStub.self]
+    let client = FloppyAPIClient(siteURL: URL(string: "https://example.com")!, token: "secret", session: URLSession(configuration: configuration))
+
+    let conflicts = try await client.listConflicts(limit: 20)
+    let response = try await client.applyConflictAction(conflictID: "conflict-uuid", request: FloppyConflictActionRequest(action: .markResolved))
+
+    #expect(conflicts.conflicts.first?.id == "conflict-uuid")
+    #expect(conflicts.conflicts.first?.state == "open")
+    #expect(conflicts.conflicts.first?.item?.uuid == "file-uuid")
+    #expect(response.conflict.state == "resolved")
+    #expect(requested.contains { $0.method == "POST" && $0.path.hasSuffix("/conflicts/conflict-uuid/resolve") && $0.body.contains("resolve") })
+}
+
+@Test func versionApiHelpersListAndRestoreAuthenticatedVersions() async throws {
+    var requested: [(method: String, path: String, body: String)] = []
+    VersionURLProtocolStub.handler = { request in
+        requested.append((
+            method: request.httpMethod ?? "",
+            path: request.url?.path ?? "",
+            body: String(data: requestBodyData(request), encoding: .utf8) ?? ""
+        ))
+        if request.url?.path.hasSuffix("/files/12/versions") == true {
+            return httpJSON(request, body: """
+            {"versions":[{"id":2,"version_uuid":"version-uuid","file_id":12,"file_uuid":"file-uuid","name":"hello.txt","mime_type":"text/plain","size_bytes":5,"content_hash":"abc","content_version":"old-cv","metadata_version":"old-mv","reason":"replace_session","created_by":1,"created_at_gmt":"2026-05-22 00:00:00","download_url":"https://example.com/wp-json/floppy/v1/files/12/versions/2/download"}],"next_cursor":0,"has_more":false}
+            """)
+        }
+        if request.url?.path.hasSuffix("/files/12/versions/2/restore") == true {
+            return httpJSON(request, body: sampleItemJSON(id: 12, uuid: "file-uuid", name: "hello.txt", size: 5))
+        }
+        return httpJSON(request, status: 404, body: "{}")
+    }
+    defer { VersionURLProtocolStub.handler = nil }
+
+    let configuration = URLSessionConfiguration.ephemeral
+    configuration.protocolClasses = [VersionURLProtocolStub.self]
+    let client = FloppyAPIClient(siteURL: URL(string: "https://example.com")!, token: "secret", session: URLSession(configuration: configuration))
+
+    let versions = try await client.listFileVersions(fileID: 12, limit: 10)
+    let restored = try await client.restoreFileVersion(fileID: 12, versionID: 2, contentVersion: "cv2")
+
+    #expect(versions.versions.first?.downloadURL?.path.hasSuffix("/files/12/versions/2/download") == true)
+    #expect(versions.versions.first?.contentVersion == "old-cv")
+    #expect(restored.id == 12)
+    #expect(requested.contains { $0.method == "GET" && $0.path.hasSuffix("/files/12/versions") })
+    #expect(requested.contains { $0.method == "POST" && $0.path.hasSuffix("/files/12/versions/2/restore") && $0.body.contains("cv2") })
+}
+
 @Test func releaseEvidenceSummaryAndReportRedactLocalPaths() throws {
     let checks = [
         FloppyReleaseEvidenceCheck(id: "xcodebuild", status: .pass, message: "ok"),
@@ -818,6 +892,62 @@ private final class URLProtocolStub: URLProtocol {
 }
 
 private final class ConflictURLProtocolStub: URLProtocol {
+    nonisolated(unsafe) static var handler: ((URLRequest) throws -> (HTTPURLResponse, Data))?
+
+    override class func canInit(with request: URLRequest) -> Bool {
+        true
+    }
+
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest {
+        request
+    }
+
+    override func startLoading() {
+        do {
+            guard let handler = Self.handler else {
+                throw FloppyAPIError.invalidResponse
+            }
+            let (response, data) = try handler(request)
+            client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+            client?.urlProtocol(self, didLoad: data)
+            client?.urlProtocolDidFinishLoading(self)
+        } catch {
+            client?.urlProtocol(self, didFailWithError: error)
+        }
+    }
+
+    override func stopLoading() {}
+}
+
+private final class CurrentConflictURLProtocolStub: URLProtocol {
+    nonisolated(unsafe) static var handler: ((URLRequest) throws -> (HTTPURLResponse, Data))?
+
+    override class func canInit(with request: URLRequest) -> Bool {
+        true
+    }
+
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest {
+        request
+    }
+
+    override func startLoading() {
+        do {
+            guard let handler = Self.handler else {
+                throw FloppyAPIError.invalidResponse
+            }
+            let (response, data) = try handler(request)
+            client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+            client?.urlProtocol(self, didLoad: data)
+            client?.urlProtocolDidFinishLoading(self)
+        } catch {
+            client?.urlProtocol(self, didFailWithError: error)
+        }
+    }
+
+    override func stopLoading() {}
+}
+
+private final class VersionURLProtocolStub: URLProtocol {
     nonisolated(unsafe) static var handler: ((URLRequest) throws -> (HTTPURLResponse, Data))?
 
     override class func canInit(with request: URLRequest) -> Bool {
