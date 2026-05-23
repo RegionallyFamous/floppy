@@ -212,6 +212,56 @@ final class Floppy_REST_Replacement_Sessions_Test extends WP_UnitTestCase {
 		$this->assertStringNotContainsString( $file['storage_key'], $json );
 	}
 
+	public function test_recovery_center_surfaces_restore_state_without_private_storage_leaks(): void {
+		global $wpdb;
+
+		$file = $this->insert_private_file( 'hello' );
+		$active = $this->insert_private_file( 'recent' );
+		$session = $this->create_replace_session_row( $file, 'updated' );
+		$complete = new WP_REST_Request( 'POST', '/floppy/v1/upload-sessions/' . $session['session_uuid'] . '/complete' );
+		$complete->set_param( 'uuid', $session['session_uuid'] );
+		Floppy_Rest::complete_upload_session( $complete );
+
+		$conflict = new WP_REST_Request( 'POST', '/floppy/v1/conflicts' );
+		$conflict->set_param( 'file_id', $file['id'] );
+		$conflict->set_param( 'reason', 'stale_content' );
+		$conflict->set_param( 'local_name', 'hello (Floppy conflict).txt' );
+		$conflict->set_param( 'local_content_hash', hash( 'sha256', 'local edit' ) );
+		Floppy_Rest::record_conflict( $conflict );
+		Floppy_Rest::enqueue_export();
+
+		$wpdb->update(
+			Floppy_Schema::table( 'files' ),
+			array(
+				'status'         => 'trashed',
+				'deleted_at_gmt' => current_time( 'mysql', true ),
+				'updated_at_gmt' => current_time( 'mysql', true ),
+			),
+			array( 'id' => $file['id'] ),
+			array( '%s', '%s', '%s' ),
+			array( '%d' )
+		);
+
+		$request = new WP_REST_Request( 'GET', '/floppy/v1/recovery' );
+		$response = Floppy_Rest::recovery_center( $request );
+		$data = $response->get_data();
+		$json = wp_json_encode( $data );
+
+		$this->assertSame( 'floppy-recovery-center-v1', $data['format'] );
+		$this->assertFalse( $data['scope']['public_share_links'] );
+		$this->assertTrue( $data['trust']['trash_restore_available'] );
+		$this->assertSame( 1, $data['trash']['counts']['files'] );
+		$this->assertSame( 'hello.txt', $data['trash']['items'][0]['name'] );
+		$this->assertSame( $active['id'], $data['recents']['items'][0]['id'] );
+		$this->assertNotEmpty( $data['versions']['items'] );
+		$this->assertNotEmpty( $data['conflicts']['items'] );
+		$this->assertNotEmpty( $data['exports']['latest'] );
+		$this->assertStringNotContainsString( 'storage_key', $json );
+		$this->assertStringNotContainsString( $file['storage_key'], $json );
+		$this->assertStringNotContainsString( Floppy_Storage::path_for_key( $file['storage_key'] ), $json );
+		$this->assertStringNotContainsString( 'export_key', $json );
+	}
+
 	public function test_unshare_normalizes_user_principal_like_share(): void {
 		global $wpdb;
 

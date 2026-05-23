@@ -106,6 +106,25 @@ final class Floppy_Rest {
 
 		register_rest_route(
 			self::NAMESPACE,
+			'/recovery',
+			array(
+				'methods'             => WP_REST_Server::READABLE,
+				'callback'            => array( __CLASS__, 'recovery_center' ),
+				'permission_callback' => array( __CLASS__, 'require_read' ),
+				'args'                => array(
+					'limit' => array(
+						'type'              => 'integer',
+						'default'           => 50,
+						'minimum'           => 1,
+						'maximum'           => 100,
+						'sanitize_callback' => 'absint',
+					),
+				),
+			)
+		);
+
+		register_rest_route(
+			self::NAMESPACE,
 			'/files',
 			array(
 				'methods'             => WP_REST_Server::READABLE,
@@ -617,6 +636,82 @@ final class Floppy_Rest {
 		Floppy_Audit::log( 'release_evidence.downloaded', 'maintenance', 0 );
 
 		return new WP_REST_Response( Floppy_Diagnostics::release_evidence() );
+	}
+
+	/**
+	 * Authenticated recovery center for restore, conflict, version, and export state.
+	 */
+	public static function recovery_center( WP_REST_Request $request ): WP_REST_Response {
+		global $wpdb;
+
+		$user_id = get_current_user_id();
+		$limit   = max( 1, min( 100, absint( $request->get_param( 'limit' ) ?: 50 ) ) );
+
+		$trash_items = self::query_recovery_items( 'trashed', $limit, $user_id );
+		$recent_items = self::query_recent_items( $limit, $user_id );
+		$version_rows = $wpdb->get_results(
+			$wpdb->prepare(
+				'SELECT * FROM ' . Floppy_Schema::table( 'file_versions' ) . ' WHERE owner_id = %d ORDER BY id DESC LIMIT %d',
+				$user_id,
+				$limit
+			),
+			ARRAY_A
+		);
+		$conflict_rows = $wpdb->get_results(
+			$wpdb->prepare(
+				'SELECT * FROM ' . Floppy_Schema::table( 'conflicts' ) . " WHERE owner_id = %d AND status = 'open' ORDER BY id ASC LIMIT %d",
+				$user_id,
+				$limit
+			),
+			ARRAY_A
+		);
+		$activity_rows = self::query_recovery_activity( $limit, $user_id );
+		$export_jobs = self::query_current_user_export_jobs( $limit, $user_id );
+
+		$response = array(
+			'format'       => 'floppy-recovery-center-v1',
+			'support'      => Floppy_Diagnostics::support_block(),
+			'scope'        => array(
+				'user_id'            => $user_id,
+				'visibility'         => 'current-user-owned',
+				'public_share_links' => false,
+				'private_storage'    => 'mandatory-for-sync',
+			),
+			'recents'      => array(
+				'items' => array_map( array( __CLASS__, 'serialize_recovery_item' ), $recent_items ),
+			),
+			'trash'        => array(
+				'items'  => array_map( array( __CLASS__, 'serialize_recovery_item' ), $trash_items ),
+				'counts' => self::trash_counts_for_user( $user_id ),
+			),
+			'versions'     => array(
+				'items'   => array_map( array( __CLASS__, 'serialize_version' ), $version_rows ),
+				'summary' => Floppy_Diagnostics::version_recovery_summary(),
+			),
+			'conflicts'    => array(
+				'items'   => array_map( array( __CLASS__, 'serialize_conflict' ), $conflict_rows ),
+				'summary' => array(
+					'open' => count( $conflict_rows ),
+				),
+			),
+			'activity'     => array(
+				'events' => array_map( array( __CLASS__, 'serialize_recovery_activity' ), $activity_rows ),
+			),
+			'exports'      => array(
+				'latest' => array_map( array( __CLASS__, 'serialize_job' ), $export_jobs ),
+			),
+			'trust'        => array(
+				'no_external_services'        => true,
+				'preserve_local_bytes_first'  => true,
+				'public_links_in_milestone'   => false,
+				'version_restore_available'   => true,
+				'trash_restore_available'     => true,
+				'conflict_records_available'  => true,
+				'export_restore_status_ready' => true,
+			),
+		);
+
+		return new WP_REST_Response( $response );
 	}
 
 	/**
@@ -2747,6 +2842,105 @@ final class Floppy_Rest {
 	}
 
 	/**
+	 * Query a restore-ready set of owned file/folder rows.
+	 */
+	private static function query_recovery_items( string $status, int $limit, int $user_id ): array {
+		global $wpdb;
+
+		if ( ! in_array( $status, array( 'active', 'trashed', 'deleted' ), true ) ) {
+			$status = 'trashed';
+		}
+
+		$sql = $wpdb->prepare(
+			"SELECT 'folder' AS kind, 0 AS kind_order, id, uuid, 0 AS attachment_id, owner_id, parent_id, name, normalized_name, '' AS mime_type, 0 AS size_bytes, '' AS content_hash, '' AS storage_key, '' AS content_version, metadata_version, status, 'private' AS visibility, created_at_gmt, updated_at_gmt, deleted_at_gmt FROM " . Floppy_Schema::table( 'folders' ) . " WHERE owner_id = %d AND status = %s
+			UNION ALL
+			SELECT 'file' AS kind, 1 AS kind_order, id, uuid, attachment_id, owner_id, parent_id, name, normalized_name, mime_type, size_bytes, content_hash, storage_key, content_version, metadata_version, status, visibility, created_at_gmt, updated_at_gmt, deleted_at_gmt FROM " . Floppy_Schema::table( 'files' ) . " WHERE owner_id = %d AND status = %s
+			ORDER BY deleted_at_gmt DESC, updated_at_gmt DESC, kind_order ASC, id DESC LIMIT %d",
+			$user_id,
+			$status,
+			$user_id,
+			$status,
+			$limit
+		); // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared
+
+		return $wpdb->get_results( $sql, ARRAY_A );
+	}
+
+	/**
+	 * Query recently touched owned active rows for the Recents control-center panel.
+	 */
+	private static function query_recent_items( int $limit, int $user_id ): array {
+		global $wpdb;
+
+		$sql = $wpdb->prepare(
+			"SELECT 'folder' AS kind, 0 AS kind_order, id, uuid, 0 AS attachment_id, owner_id, parent_id, name, normalized_name, '' AS mime_type, 0 AS size_bytes, '' AS content_hash, '' AS storage_key, '' AS content_version, metadata_version, status, 'private' AS visibility, created_at_gmt, updated_at_gmt, deleted_at_gmt FROM " . Floppy_Schema::table( 'folders' ) . " WHERE owner_id = %d AND status = 'active'
+			UNION ALL
+			SELECT 'file' AS kind, 1 AS kind_order, id, uuid, attachment_id, owner_id, parent_id, name, normalized_name, mime_type, size_bytes, content_hash, storage_key, content_version, metadata_version, status, visibility, created_at_gmt, updated_at_gmt, deleted_at_gmt FROM " . Floppy_Schema::table( 'files' ) . " WHERE owner_id = %d AND status = 'active'
+			ORDER BY updated_at_gmt DESC, kind_order ASC, id DESC LIMIT %d",
+			$user_id,
+			$user_id,
+			$limit
+		); // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared
+
+		return $wpdb->get_results( $sql, ARRAY_A );
+	}
+
+	/**
+	 * Query recovery-related audit events without leaking metadata payloads.
+	 */
+	private static function query_recovery_activity( int $limit, int $user_id ): array {
+		global $wpdb;
+
+		$actions = "'file.trashed','file.restored','folder.trashed','folder.restored','file.version_restored','conflict.created','conflict.retry_upload','conflict.keep_both','conflict.mark_resolved','conflict.discard_local_copy','export.enqueued','export.downloaded'";
+
+		return $wpdb->get_results(
+			$wpdb->prepare(
+				'SELECT action, target_type, target_id, created_at_gmt FROM ' . Floppy_Schema::table( 'audit_log' ) . " WHERE actor_id = %d AND action IN ($actions) ORDER BY id DESC LIMIT %d", // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared
+				$user_id,
+				$limit
+			),
+			ARRAY_A
+		);
+	}
+
+	/**
+	 * Return export jobs created by the current user only.
+	 */
+	private static function query_current_user_export_jobs( int $limit, int $user_id ): array {
+		global $wpdb;
+
+		$rows = $wpdb->get_results(
+			'SELECT * FROM ' . Floppy_Schema::table( 'jobs' ) . " WHERE job_type = 'export' ORDER BY id DESC LIMIT 100",
+			ARRAY_A
+		); // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared
+
+		$out = array();
+		foreach ( $rows as $row ) {
+			$payload = json_decode( (string) ( $row['payload_json'] ?? '' ), true );
+			if ( is_array( $payload ) && (int) ( $payload['user_id'] ?? 0 ) === $user_id ) {
+				$out[] = $row;
+			}
+			if ( count( $out ) >= $limit ) {
+				break;
+			}
+		}
+
+		return $out;
+	}
+
+	/**
+	 * Count owned trash rows by kind.
+	 */
+	private static function trash_counts_for_user( int $user_id ): array {
+		global $wpdb;
+
+		return array(
+			'files'   => (int) $wpdb->get_var( $wpdb->prepare( 'SELECT COUNT(*) FROM ' . Floppy_Schema::table( 'files' ) . " WHERE owner_id = %d AND status = 'trashed'", $user_id ) ),
+			'folders' => (int) $wpdb->get_var( $wpdb->prepare( 'SELECT COUNT(*) FROM ' . Floppy_Schema::table( 'folders' ) . " WHERE owner_id = %d AND status = 'trashed'", $user_id ) ),
+		);
+	}
+
+	/**
 	 * Query a stable, folder-first children page without PHP sorting.
 	 */
 	private static function query_children_page( int $parent_id, string $cursor, int $after_id, int $limit, int $user_id ): array {
@@ -3968,6 +4162,29 @@ final class Floppy_Rest {
 			'created_by'       => (int) $row['created_by'],
 			'created_at_gmt'   => (string) $row['created_at_gmt'],
 			'download_url'      => rest_url( self::NAMESPACE . '/files/' . (int) $row['file_id'] . '/versions/' . (int) $row['id'] . '/download' ),
+		);
+	}
+
+	/**
+	 * Serialize a recovery-center file/folder row.
+	 */
+	private static function serialize_recovery_item( array $row ): array {
+		if ( 'folder' === (string) $row['kind'] ) {
+			return self::serialize_folder( $row );
+		}
+
+		return self::serialize_file( $row );
+	}
+
+	/**
+	 * Serialize recovery activity without message/meta payloads.
+	 */
+	private static function serialize_recovery_activity( array $row ): array {
+		return array(
+			'action'         => (string) $row['action'],
+			'target_type'    => (string) $row['target_type'],
+			'target_id'      => (int) $row['target_id'],
+			'created_at_gmt' => (string) $row['created_at_gmt'],
 		);
 	}
 

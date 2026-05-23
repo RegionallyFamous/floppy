@@ -36,6 +36,9 @@ final class FloppyFileProviderItem: NSObject, NSFileProviderItem {
     }
 
     var capabilities: NSFileProviderItemCapabilities {
+        if item.storagePolicy == .excluded {
+            return []
+        }
         var capabilities: NSFileProviderItemCapabilities = [.allowsReading]
         if item.isLocalConflict {
             capabilities.insert(.allowsDeleting)

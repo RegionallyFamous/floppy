@@ -74,6 +74,51 @@ public struct FloppyUploadTransferSession: Codable, Equatable, Identifiable, Sen
     }
 }
 
+public struct FloppyStoragePolicySummary: Codable, Equatable, Sendable {
+    public let accountFingerprint: String
+    public let onlineOnly: Int
+    public let availableOffline: Int
+    public let excluded: Int
+    public let materializedBytes: Int64
+    public let missingAvailableOffline: Int
+
+    public init(
+        accountFingerprint: String,
+        onlineOnly: Int,
+        availableOffline: Int,
+        excluded: Int,
+        materializedBytes: Int64,
+        missingAvailableOffline: Int
+    ) {
+        self.accountFingerprint = accountFingerprint
+        self.onlineOnly = onlineOnly
+        self.availableOffline = availableOffline
+        self.excluded = excluded
+        self.materializedBytes = materializedBytes
+        self.missingAvailableOffline = missingAvailableOffline
+    }
+
+    public static func empty(accountID: String? = nil) -> FloppyStoragePolicySummary {
+        FloppyStoragePolicySummary(
+            accountFingerprint: FloppyDiagnostics.redactedFingerprint(accountID),
+            onlineOnly: 0,
+            availableOffline: 0,
+            excluded: 0,
+            materializedBytes: 0,
+            missingAvailableOffline: 0
+        )
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case accountFingerprint = "account_fingerprint"
+        case onlineOnly = "online_only"
+        case availableOffline = "available_offline"
+        case excluded
+        case materializedBytes = "materialized_bytes"
+        case missingAvailableOffline = "missing_available_offline"
+    }
+}
+
 public struct FloppyConflict: Codable, Equatable, Identifiable, Sendable {
     public let id: UUID
     public let accountID: String
@@ -384,6 +429,34 @@ public actor LocalLedger {
 
     public func markMaterialized(item: FloppyItem, localURL: URL) throws {
         try store.markMaterialized(item: item, accountID: try defaultAccountID(nil), localURL: localURL)
+    }
+
+    public func setStoragePolicy(itemUUID: String, policy: FloppyLocalStoragePolicy, accountID: String? = nil, removeMaterializedCopy: Bool = true) throws {
+        try store.setStoragePolicy(
+            uuid: itemUUID,
+            accountID: try defaultAccountID(accountID),
+            policy: policy,
+            removeMaterializedCopy: removeMaterializedCopy
+        )
+    }
+
+    public func storagePolicy(for itemUUID: String, accountID: String? = nil) -> FloppyLocalStoragePolicy {
+        do {
+            return try store.storagePolicy(uuid: itemUUID, accountID: try defaultAccountID(accountID))
+        } catch {
+            FloppyDiagnostics.ledger.error("Failed loading storage policy: \(error.localizedDescription, privacy: .public)")
+            return .onlineOnly
+        }
+    }
+
+    public func storagePolicySummary(accountID: String? = nil) -> FloppyStoragePolicySummary {
+        do {
+            let resolvedAccountID = try defaultAccountID(accountID)
+            return try store.storagePolicySummary(accountID: resolvedAccountID)
+        } catch {
+            FloppyDiagnostics.ledger.error("Failed loading storage policy summary: \(error.localizedDescription, privacy: .public)")
+            return .empty(accountID: accountID)
+        }
     }
 
     public func materializedURL(for item: FloppyItem, accountID: String? = nil) -> URL? {
@@ -760,8 +833,8 @@ private final class SQLiteLedgerStore {
     func upsert(item: FloppyItem, accountID: String) throws {
         let data = try JSONEncoder.floppy.encode(item)
         let statement = try prepare("""
-            INSERT INTO items (account_id, uuid, stable_id, parent_id, kind, name, json, materialized_url, materialized_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, COALESCE((SELECT materialized_url FROM items WHERE account_id = ? AND uuid = ?), NULL), COALESCE((SELECT materialized_at FROM items WHERE account_id = ? AND uuid = ?), NULL))
+            INSERT INTO items (account_id, uuid, stable_id, parent_id, kind, name, json, local_storage_policy, materialized_url, materialized_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, COALESCE((SELECT local_storage_policy FROM items WHERE account_id = ? AND uuid = ?), ?), COALESCE((SELECT materialized_url FROM items WHERE account_id = ? AND uuid = ?), NULL), COALESCE((SELECT materialized_at FROM items WHERE account_id = ? AND uuid = ?), NULL))
             ON CONFLICT(account_id, uuid) DO UPDATE SET
                 stable_id = excluded.stable_id,
                 parent_id = excluded.parent_id,
@@ -780,8 +853,11 @@ private final class SQLiteLedgerStore {
         bind(data, to: statement, at: 7)
         bind(accountID, to: statement, at: 8)
         bind(item.uuid, to: statement, at: 9)
-        bind(accountID, to: statement, at: 10)
-        bind(item.uuid, to: statement, at: 11)
+        bind(item.storagePolicy?.rawValue ?? FloppyLocalStoragePolicy.onlineOnly.rawValue, to: statement, at: 10)
+        bind(accountID, to: statement, at: 11)
+        bind(item.uuid, to: statement, at: 12)
+        bind(accountID, to: statement, at: 13)
+        bind(item.uuid, to: statement, at: 14)
         try finish(statement)
     }
 
@@ -842,16 +918,84 @@ private final class SQLiteLedgerStore {
         try upsert(item: item, accountID: accountID)
         let statement = try prepare("""
             UPDATE items
-            SET materialized_url = ?, materialized_at = ?
+            SET materialized_url = ?, materialized_at = ?, local_storage_policy = ?
             WHERE account_id = ? AND uuid = ?
             """)
         defer { sqlite3_finalize(statement) }
 
         bind(localURL.path, to: statement, at: 1)
         sqlite3_bind_double(statement, 2, Date().timeIntervalSinceReferenceDate)
-        bind(accountID, to: statement, at: 3)
-        bind(item.uuid, to: statement, at: 4)
+        bind(FloppyLocalStoragePolicy.availableOffline.rawValue, to: statement, at: 3)
+        bind(accountID, to: statement, at: 4)
+        bind(item.uuid, to: statement, at: 5)
         try finish(statement)
+    }
+
+    func setStoragePolicy(uuid: String, accountID: String, policy: FloppyLocalStoragePolicy, removeMaterializedCopy: Bool) throws {
+        var existingMaterializedPath: String?
+        if policy != .availableOffline {
+            existingMaterializedPath = try materializedPath(uuid: uuid, accountID: accountID)
+        }
+
+        if removeMaterializedCopy, let existingMaterializedPath, !existingMaterializedPath.isEmpty {
+            try? FileManager.default.removeItem(atPath: existingMaterializedPath)
+        }
+
+        let statement = try prepare("""
+            UPDATE items
+            SET local_storage_policy = ?,
+                materialized_url = CASE WHEN ? THEN NULL ELSE materialized_url END,
+                materialized_at = CASE WHEN ? THEN NULL ELSE materialized_at END
+            WHERE account_id = ? AND uuid = ?
+            """)
+        defer { sqlite3_finalize(statement) }
+
+        let clearMaterialized = policy != .availableOffline
+        bind(policy.rawValue, to: statement, at: 1)
+        sqlite3_bind_int(statement, 2, clearMaterialized ? 1 : 0)
+        sqlite3_bind_int(statement, 3, clearMaterialized ? 1 : 0)
+        bind(accountID, to: statement, at: 4)
+        bind(uuid, to: statement, at: 5)
+        try finish(statement)
+    }
+
+    func storagePolicy(uuid: String, accountID: String) throws -> FloppyLocalStoragePolicy {
+        let statement = try prepare("SELECT local_storage_policy FROM items WHERE account_id = ? AND uuid = ? LIMIT 1")
+        defer { sqlite3_finalize(statement) }
+
+        bind(accountID, to: statement, at: 1)
+        bind(uuid, to: statement, at: 2)
+        guard try step(statement) == SQLITE_ROW else {
+            return .onlineOnly
+        }
+        return FloppyLocalStoragePolicy(rawValue: columnText(statement, 0)) ?? .onlineOnly
+    }
+
+    func storagePolicySummary(accountID: String) throws -> FloppyStoragePolicySummary {
+        let counts = try countRowsByStoragePolicy(accountID: accountID)
+        let materializedRows = try materializedPolicyRows(accountID: accountID)
+        var materializedBytes: Int64 = 0
+        var missingAvailableOffline = 0
+        for row in materializedRows {
+            guard row.policy == .availableOffline else {
+                continue
+            }
+            guard !row.path.isEmpty, FileManager.default.fileExists(atPath: row.path) else {
+                missingAvailableOffline += 1
+                continue
+            }
+            let size = (try? FileManager.default.attributesOfItem(atPath: row.path)[.size] as? NSNumber)?.int64Value ?? 0
+            materializedBytes += size
+        }
+
+        return FloppyStoragePolicySummary(
+            accountFingerprint: FloppyDiagnostics.redactedFingerprint(accountID),
+            onlineOnly: counts[.onlineOnly, default: 0],
+            availableOffline: counts[.availableOffline, default: 0],
+            excluded: counts[.excluded, default: 0],
+            materializedBytes: materializedBytes,
+            missingAvailableOffline: missingAvailableOffline
+        )
     }
 
     func materializedURL(uuid: String, accountID: String) throws -> URL? {
@@ -864,6 +1008,19 @@ private final class SQLiteLedgerStore {
             return nil
         }
         return URL(fileURLWithPath: columnText(statement, 0))
+    }
+
+    private func materializedPath(uuid: String, accountID: String) throws -> String? {
+        let statement = try prepare("SELECT materialized_url FROM items WHERE account_id = ? AND uuid = ? LIMIT 1")
+        defer { sqlite3_finalize(statement) }
+
+        bind(accountID, to: statement, at: 1)
+        bind(uuid, to: statement, at: 2)
+        guard try step(statement) == SQLITE_ROW, sqlite3_column_type(statement, 0) != SQLITE_NULL else {
+            return nil
+        }
+        let path = columnText(statement, 0)
+        return path.isEmpty ? nil : path
     }
 
     func recordActiveEnumerator(_ identifier: String) throws {
@@ -1208,13 +1365,16 @@ private final class SQLiteLedgerStore {
                 kind TEXT NOT NULL,
                 name TEXT NOT NULL,
                 json BLOB NOT NULL,
+                local_storage_policy TEXT NOT NULL DEFAULT 'online_only',
                 materialized_url TEXT,
                 materialized_at REAL,
                 PRIMARY KEY (account_id, uuid)
             )
             """)
+        try addColumnIfMissing(table: "items", column: "local_storage_policy", definition: "local_storage_policy TEXT NOT NULL DEFAULT 'online_only'")
         try execute("CREATE INDEX IF NOT EXISTS items_account_stable_id ON items (account_id, stable_id)")
         try execute("CREATE INDEX IF NOT EXISTS items_account_parent_id ON items (account_id, parent_id)")
+        try execute("CREATE INDEX IF NOT EXISTS items_account_storage_policy ON items (account_id, local_storage_policy)")
         try execute("""
             CREATE TABLE IF NOT EXISTS pending_operations (
                 id TEXT PRIMARY KEY,
@@ -1445,6 +1605,43 @@ private final class SQLiteLedgerStore {
             ))
         }
         return reasons
+    }
+
+    private func countRowsByStoragePolicy(accountID: String) throws -> [FloppyLocalStoragePolicy: Int] {
+        let statement = try prepare("""
+            SELECT local_storage_policy, COUNT(*)
+            FROM items
+            WHERE account_id = ?
+            GROUP BY local_storage_policy
+            """)
+        defer { sqlite3_finalize(statement) }
+
+        bind(accountID, to: statement, at: 1)
+        var counts: [FloppyLocalStoragePolicy: Int] = [:]
+        while try step(statement) == SQLITE_ROW {
+            let policy = FloppyLocalStoragePolicy(rawValue: columnText(statement, 0)) ?? .onlineOnly
+            counts[policy] = Int(sqlite3_column_int64(statement, 1))
+        }
+        return counts
+    }
+
+    private func materializedPolicyRows(accountID: String) throws -> [(policy: FloppyLocalStoragePolicy, path: String)] {
+        let statement = try prepare("""
+            SELECT local_storage_policy, COALESCE(materialized_url, '')
+            FROM items
+            WHERE account_id = ?
+            """)
+        defer { sqlite3_finalize(statement) }
+
+        bind(accountID, to: statement, at: 1)
+        var rows: [(policy: FloppyLocalStoragePolicy, path: String)] = []
+        while try step(statement) == SQLITE_ROW {
+            rows.append((
+                policy: FloppyLocalStoragePolicy(rawValue: columnText(statement, 0)) ?? .onlineOnly,
+                path: columnText(statement, 1)
+            ))
+        }
+        return rows
     }
 
     private func prepare(_ sql: String) throws -> OpaquePointer {

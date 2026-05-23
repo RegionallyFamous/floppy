@@ -62,6 +62,8 @@ const hookNames = {
 
 const requiredCommands = [
 	'floppy/open',
+	'floppy/recents',
+	'floppy/trash',
 	'floppy/shared',
 	'floppy/conflicts',
 	'floppy/versions',
@@ -76,6 +78,8 @@ const requiredCommands = [
 
 const requiredPanels = [
 	'files',
+	'recents',
+	'trash',
 	'shared',
 	'conflicts',
 	'versions',

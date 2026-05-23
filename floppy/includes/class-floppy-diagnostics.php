@@ -66,6 +66,7 @@ final class Floppy_Diagnostics {
 			'doctor_jobs'    => self::doctor_job_summary(),
 			'conflicts'      => self::conflict_summary(),
 			'versions'       => self::version_summary(),
+			'recovery'       => self::recovery_summary(),
 			'thumbnails'     => self::thumbnail_summary(),
 			'release_evidence' => self::release_evidence_summary(),
 			'rate_limits'    => Floppy_Rate_Limiter::diagnostics(),
@@ -128,6 +129,7 @@ final class Floppy_Diagnostics {
 			'usage_counters' => Floppy_Schema::usage_counter_summary(),
 			'conflicts'      => self::conflict_summary(),
 			'versions'       => self::version_summary(),
+			'recovery'       => self::recovery_summary(),
 			'thumbnails'     => self::thumbnail_summary(),
 			'release_evidence' => self::release_evidence_summary(),
 			'audit_actions'  => self::keyed_counts( $audit_counts, 'action' ),
@@ -161,6 +163,7 @@ final class Floppy_Diagnostics {
 			'usage_counters'    => Floppy_Schema::usage_counter_summary(),
 			'private_storage'   => Floppy_Storage::private_storage_probe_matrix(),
 			'versions'          => self::version_summary(),
+			'recovery'          => self::recovery_summary(),
 			'thumbnails'        => self::thumbnail_summary(),
 			'release_gates'     => array(
 				'php_lint'                  => 'ci-required',
@@ -176,6 +179,13 @@ final class Floppy_Diagnostics {
 				'redaction_checks'          => 'ci-required',
 			),
 		);
+	}
+
+	/**
+	 * Public, redacted version state for user-facing recovery APIs.
+	 */
+	public static function version_recovery_summary(): array {
+		return self::version_summary();
 	}
 
 	/**
@@ -332,6 +342,32 @@ final class Floppy_Diagnostics {
 	private static function thumbnail_summary(): array {
 		return array(
 			'by_status' => self::count_rows_by_status( Floppy_Schema::table( 'thumbnails' ) ),
+		);
+	}
+
+	/**
+	 * Summarize Dropbox-like recovery state without private paths or keys.
+	 */
+	private static function recovery_summary(): array {
+		global $wpdb;
+
+		$restore_actions = "'file.restored','folder.restored','file.version_restored'";
+		$export_actions = "'export.enqueued','export.downloaded'";
+
+		return array(
+			'format'                  => 'floppy-recovery-summary-v1',
+			'trash_counts'            => array(
+				'files'   => (int) $wpdb->get_var( 'SELECT COUNT(*) FROM ' . Floppy_Schema::table( 'files' ) . " WHERE status = 'trashed'" ), // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared
+				'folders' => (int) $wpdb->get_var( 'SELECT COUNT(*) FROM ' . Floppy_Schema::table( 'folders' ) . " WHERE status = 'trashed'" ), // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared
+			),
+			'open_conflicts'          => (int) $wpdb->get_var( 'SELECT COUNT(*) FROM ' . Floppy_Schema::table( 'conflicts' ) . " WHERE status = 'open'" ), // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared
+			'retained_versions'       => self::version_summary(),
+			'recent_restore_actions'  => (int) $wpdb->get_var( "SELECT COUNT(*) FROM " . Floppy_Schema::table( 'audit_log' ) . " WHERE action IN ($restore_actions)" ), // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared
+			'recent_export_actions'   => (int) $wpdb->get_var( "SELECT COUNT(*) FROM " . Floppy_Schema::table( 'audit_log' ) . " WHERE action IN ($export_actions)" ), // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared
+			'public_links_enabled'    => false,
+			'backup_product_lane'     => 'future',
+			'private_storage_fresh'   => ! empty( Floppy_Storage::private_storage_status()['checked_at_gmt'] ),
+			'preserve_local_bytes'    => true,
 		);
 	}
 

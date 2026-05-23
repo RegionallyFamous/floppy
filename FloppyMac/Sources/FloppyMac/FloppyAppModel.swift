@@ -904,16 +904,22 @@ final class FloppyAppModel: ObservableObject {
         let integrity: FloppyLedgerIntegrityReport
         let conflictCenterItems: [FloppyConflictCenterItem]
         let pendingOperations: Int
+        let transferSessions: [FloppyUploadTransferSession]
+        let storagePolicySummary: FloppyStoragePolicySummary
         if let accountID {
             conflictDiagnostics = await ledger?.conflictDiagnostics(accountID: accountID) ?? .empty(accountID: accountID)
             integrity = await ledger?.integrityReport(accountID: accountID) ?? .empty(accountID: accountID)
             conflictCenterItems = await ledger?.conflictCenterItems(accountID: accountID, limit: 10) ?? []
             pendingOperations = await ledger?.pendingOperationCount(accountID: accountID) ?? 0
+            transferSessions = await ledger?.uploadTransferSessions(accountID: accountID) ?? []
+            storagePolicySummary = await ledger?.storagePolicySummary(accountID: accountID) ?? .empty(accountID: accountID)
         } else {
             conflictDiagnostics = .empty()
             integrity = .empty()
             conflictCenterItems = []
             pendingOperations = 0
+            transferSessions = []
+            storagePolicySummary = .empty()
         }
         let domainIdentifier = account.map { FloppyDomainRegistry.domainIdentifier(for: $0) }
         let fileProviderDiagnostic = await FileProviderDomainController.lifecycleDiagnostic(account: account, keychainAvailable: keychainAvailable)
@@ -929,7 +935,8 @@ final class FloppyAppModel: ObservableObject {
             materializationIssueCount: integrity.counts.missingMaterializedItems + conflictDiagnostics.missingMaterializedOpenCount,
             lastError: FloppyDiagnostics.redactedStatus(lastSyncError.isEmpty ? status : lastSyncError)
         ))
-        let bundle = FloppyMacDiagnosticsBundleV3(
+        let authState = recoveryDecision.state == .authNeeded
+        let bundle = FloppyMacDiagnosticsBundleV4(
             createdAt: formatter.string(from: Date()),
             support: FloppyDiagnostics.supportCorrelation(account: account, domainIdentifier: domainIdentifier),
             app: FloppyMacDiagnosticsAppInfo(
@@ -970,6 +977,14 @@ final class FloppyAppModel: ObservableObject {
                 activeEnumerators: activeEnumerators.count,
                 lastCursor: account.map { String($0.lastCursor) } ?? "0",
                 lastSyncAt: account?.lastSyncAt.map { formatter.string(from: $0) } ?? ""
+            ),
+            storagePolicy: FloppyMacDiagnosticsStoragePolicyInfo(summary: storagePolicySummary),
+            transferQueue: FloppyMacDiagnosticsTransferQueueInfo(pendingOperations: pendingOperations, sessions: transferSessions),
+            reauth: FloppyMacDiagnosticsReauthInfo(
+                required: authState,
+                reason: authState ? recoveryDecision.message : "",
+                keychainTokenAvailable: keychainAvailable,
+                lastAuthError: isAuthOrServerFailure(lastSyncError) ? lastSyncError : ""
             ),
             conflictCenter: FloppyMacDiagnosticsConflictCenterInfo(
                 summary: FloppyConflictCenterSummary(

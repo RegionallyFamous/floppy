@@ -138,6 +138,103 @@ public struct FloppyMacDiagnosticsBundleV3: Codable, Equatable, Sendable {
     }
 }
 
+public struct FloppyMacDiagnosticsBundleV4: Codable, Equatable, Sendable {
+    public let format: String
+    public let createdAt: String
+    public let support: FloppySupportCorrelation
+    public let app: FloppyMacDiagnosticsAppInfo
+    public let selectedAccount: FloppyMacDiagnosticsSelectedAccount
+    public let ledger: FloppyMacDiagnosticsLedgerInfo
+    public let domains: [[String: String]]
+    public let keychain: FloppyMacDiagnosticsKeychainInfo
+    public let onboarding: FloppyMacDiagnosticsOnboardingInfo
+    public let fileProvider: FloppyFileProviderLifecycleDiagnostic
+    public let finderSync: FloppyMacDiagnosticsFinderSyncInfo
+    public let storagePolicy: FloppyMacDiagnosticsStoragePolicyInfo
+    public let transferQueue: FloppyMacDiagnosticsTransferQueueInfo
+    public let reauth: FloppyMacDiagnosticsReauthInfo
+    public let conflictCenter: FloppyMacDiagnosticsConflictCenterInfo
+    public let materialization: FloppyMacDiagnosticsMaterializationInfo
+    public let versionRestores: FloppyMacDiagnosticsVersionRestoreInfo
+    public let releaseBuild: FloppyReleaseBuildIdentity
+    public let releaseEvidence: FloppyReleaseEvidenceSummary
+    public let serverHealth: FloppyMacDiagnosticsServerHealthInfo
+    public let nativeRuntime: FloppyMacDiagnosticsNativeRuntimeInfo
+    public let lastStatus: String
+
+    public init(
+        createdAt: String,
+        support: FloppySupportCorrelation,
+        app: FloppyMacDiagnosticsAppInfo,
+        selectedAccount: FloppyMacDiagnosticsSelectedAccount,
+        ledger: FloppyMacDiagnosticsLedgerInfo,
+        domains: [[String: String]],
+        keychain: FloppyMacDiagnosticsKeychainInfo,
+        onboarding: FloppyMacDiagnosticsOnboardingInfo,
+        fileProvider: FloppyFileProviderLifecycleDiagnostic,
+        finderSync: FloppyMacDiagnosticsFinderSyncInfo,
+        storagePolicy: FloppyMacDiagnosticsStoragePolicyInfo,
+        transferQueue: FloppyMacDiagnosticsTransferQueueInfo,
+        reauth: FloppyMacDiagnosticsReauthInfo,
+        conflictCenter: FloppyMacDiagnosticsConflictCenterInfo,
+        materialization: FloppyMacDiagnosticsMaterializationInfo,
+        versionRestores: FloppyMacDiagnosticsVersionRestoreInfo,
+        releaseBuild: FloppyReleaseBuildIdentity,
+        releaseEvidence: FloppyReleaseEvidenceSummary,
+        serverHealth: FloppyMacDiagnosticsServerHealthInfo = .empty,
+        nativeRuntime: FloppyMacDiagnosticsNativeRuntimeInfo = .empty,
+        lastStatus: String
+    ) {
+        self.format = "floppy-mac-diagnostics-v4"
+        self.createdAt = createdAt
+        self.support = support
+        self.app = app
+        self.selectedAccount = selectedAccount
+        self.ledger = ledger
+        self.domains = domains
+        self.keychain = keychain
+        self.onboarding = onboarding
+        self.fileProvider = fileProvider
+        self.finderSync = finderSync
+        self.storagePolicy = storagePolicy
+        self.transferQueue = transferQueue
+        self.reauth = reauth
+        self.conflictCenter = conflictCenter
+        self.materialization = materialization
+        self.versionRestores = versionRestores
+        self.releaseBuild = releaseBuild
+        self.releaseEvidence = releaseEvidence
+        self.serverHealth = serverHealth
+        self.nativeRuntime = nativeRuntime
+        self.lastStatus = FloppyDiagnostics.redactedStatus(lastStatus)
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case format
+        case createdAt = "created_at"
+        case support
+        case app
+        case selectedAccount = "selected_account"
+        case ledger
+        case domains
+        case keychain
+        case onboarding
+        case fileProvider = "file_provider"
+        case finderSync = "finder_sync"
+        case storagePolicy = "storage_policy"
+        case transferQueue = "transfer_queue"
+        case reauth
+        case conflictCenter = "conflict_center"
+        case materialization
+        case versionRestores = "version_restores"
+        case releaseBuild = "release_build"
+        case releaseEvidence = "release_evidence"
+        case serverHealth = "server_health"
+        case nativeRuntime = "native_runtime"
+        case lastStatus = "last_status"
+    }
+}
+
 public struct FloppyMacDiagnosticsFinderSyncInfo: Codable, Equatable, Sendable {
     public let state: FloppyFinderSyncState
     public let message: String
@@ -175,6 +272,88 @@ public struct FloppyMacDiagnosticsFinderSyncInfo: Codable, Equatable, Sendable {
         case activeEnumerators = "active_enumerators"
         case lastCursor = "last_cursor"
         case lastSyncAt = "last_sync_at"
+    }
+}
+
+public struct FloppyMacDiagnosticsStoragePolicyInfo: Codable, Equatable, Sendable {
+    public let summary: FloppyStoragePolicySummary
+    public let defaultPolicy: FloppyLocalStoragePolicy
+    public let supportedPolicies: [FloppyLocalStoragePolicy]
+    public let finderActions: [FloppyFileProviderRecoveryAction]
+
+    public init(
+        summary: FloppyStoragePolicySummary,
+        defaultPolicy: FloppyLocalStoragePolicy = .onlineOnly,
+        supportedPolicies: [FloppyLocalStoragePolicy] = FloppyLocalStoragePolicy.allCases,
+        finderActions: [FloppyFileProviderRecoveryAction] = [.makeAvailableOffline, .makeOnlineOnly, .freeStorage, .excludeFromThisMac, .includeOnThisMac]
+    ) {
+        self.summary = summary
+        self.defaultPolicy = defaultPolicy
+        self.supportedPolicies = supportedPolicies
+        self.finderActions = finderActions
+    }
+
+    public static var empty: FloppyMacDiagnosticsStoragePolicyInfo {
+        FloppyMacDiagnosticsStoragePolicyInfo(summary: .empty())
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case summary
+        case defaultPolicy = "default_policy"
+        case supportedPolicies = "supported_policies"
+        case finderActions = "finder_actions"
+    }
+}
+
+public struct FloppyMacDiagnosticsTransferQueueInfo: Codable, Equatable, Sendable {
+    public let pendingOperations: Int
+    public let resumableSessions: Int
+    public let uploadSessions: Int
+    public let replacementSessions: Int
+    public let hasInterruptedWork: Bool
+
+    public init(pendingOperations: Int, sessions: [FloppyUploadTransferSession]) {
+        self.pendingOperations = pendingOperations
+        self.resumableSessions = sessions.count
+        self.uploadSessions = sessions.filter { $0.operation == "upload" || $0.operation == "create" }.count
+        self.replacementSessions = sessions.filter { $0.operation == "replace" }.count
+        self.hasInterruptedWork = pendingOperations > 0 || !sessions.isEmpty
+    }
+
+    public static let empty = FloppyMacDiagnosticsTransferQueueInfo(pendingOperations: 0, sessions: [])
+
+    enum CodingKeys: String, CodingKey {
+        case pendingOperations = "pending_operations"
+        case resumableSessions = "resumable_sessions"
+        case uploadSessions = "upload_sessions"
+        case replacementSessions = "replacement_sessions"
+        case hasInterruptedWork = "has_interrupted_work"
+    }
+}
+
+public struct FloppyMacDiagnosticsReauthInfo: Codable, Equatable, Sendable {
+    public let required: Bool
+    public let reason: String
+    public let keychainTokenAvailable: Bool
+    public let reconnectOnlyWhenRevokedOrMissing: Bool
+    public let lastAuthError: String
+
+    public init(required: Bool, reason: String, keychainTokenAvailable: Bool, lastAuthError: String = "") {
+        self.required = required
+        self.reason = FloppyDiagnostics.redactedStatus(reason)
+        self.keychainTokenAvailable = keychainTokenAvailable
+        self.reconnectOnlyWhenRevokedOrMissing = true
+        self.lastAuthError = FloppyDiagnostics.redactedStatus(lastAuthError)
+    }
+
+    public static let empty = FloppyMacDiagnosticsReauthInfo(required: false, reason: "", keychainTokenAvailable: false)
+
+    enum CodingKeys: String, CodingKey {
+        case required
+        case reason
+        case keychainTokenAvailable = "keychain_token_available"
+        case reconnectOnlyWhenRevokedOrMissing = "reconnect_only_when_revoked_or_missing"
+        case lastAuthError = "last_auth_error"
     }
 }
 

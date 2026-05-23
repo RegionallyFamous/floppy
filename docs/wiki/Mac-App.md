@@ -32,6 +32,7 @@ Local scratch builds are useful for development, but public beta artifacts shoul
 - Each File Provider domain gets its own App Group ledger.
 - Connected accounts are seeded into both the app ledger and the domain ledger before domain registration.
 - The ledger stores accounts, items, materialized files, pending operations, conflicts, active enumerators, and sync anchors.
+- Each item also has a per-device storage policy: `online_only`, `available_offline`, or `excluded`. Online-only is the default for new rows, materialization promotes an item to available-offline, and excluded items are hidden from Finder enumeration on that Mac.
 
 ## Transfers
 
@@ -45,6 +46,12 @@ Local scratch builds are useful for development, but public beta artifacts shoul
 ## Finder Signaling
 
 After sync, conflict creation, upload completion, delete, move, and rename, the app signals the File Provider working set plus active folder enumerators from the ledger so Finder can refresh without user action.
+
+## Finder Storage States
+
+- Floppy models Finder-visible states for online-only, available-offline, queued, syncing, current, conflict, offline, auth-needed, repair-needed, and storage-blocked.
+- Diagnostics v4 reports storage-policy counts, materialized bytes, missing available-offline materializations, resumable transfer-session counts, reauth reason, and the release build identity.
+- The app treats Keychain token absence/revocation as the only reason to reauth. Keychain reads are non-interactive so a healthy connected account should not repeatedly ask for a WordPress password.
 
 ## Local Conflict Copies
 

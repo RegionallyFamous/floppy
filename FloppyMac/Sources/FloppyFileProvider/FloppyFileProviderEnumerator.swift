@@ -123,6 +123,9 @@ final class FloppyFileProviderEnumerator: NSObject, NSFileProviderEnumerator, @u
         var providerItems: [FloppyFileProviderItem] = []
         providerItems.reserveCapacity(items.count)
         for item in items {
+            guard await ledger.storagePolicy(for: item.uuid).isFinderVisible else {
+                continue
+            }
             providerItems.append(FloppyFileProviderItem(item: item, parentItemIdentifier: await parentIdentifier(for: item)))
         }
         return providerItems

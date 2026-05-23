@@ -443,6 +443,106 @@ import Testing
     #expect(!json.contains(FileManager.default.homeDirectoryForCurrentUser.path))
 }
 
+@Test func diagnosticsBundleV4IncludesStoragePolicyTransferQueueAndReauthFields() throws {
+    let account = FloppyAccount(
+        siteURL: URL(string: "https://user:password@example.com/wp?token=secret#fragment")!,
+        restURL: URL(string: "https://example.com/wp-json/floppy/v1?token=secret")!,
+        userHint: "admin@example.com",
+        deviceUUID: "device-secret-uuid",
+        scope: "files:read,files:write",
+        lastCursor: 42
+    )
+    let decision = FloppyRecoveryDecision(state: .current, message: "Current", actions: [.retrySync])
+    let transfer = FloppyUploadTransferSession(
+        accountID: account.id,
+        sessionUUID: "replace-session",
+        operation: "replace",
+        itemUUID: "file-uuid",
+        fileID: 12,
+        localPath: "/Users/example/private-file.txt",
+        totalSize: 2048,
+        offset: 1024,
+        chunkSize: 512,
+        expiresAtGMT: "2026-05-23 00:00:00",
+        idempotencyKey: "replace-session-1024"
+    )
+    let storageSummary = FloppyStoragePolicySummary(
+        accountFingerprint: FloppyDiagnostics.redactedFingerprint(account.id),
+        onlineOnly: 2,
+        availableOffline: 1,
+        excluded: 1,
+        materializedBytes: 2048,
+        missingAvailableOffline: 0
+    )
+    let bundle = FloppyMacDiagnosticsBundleV4(
+        createdAt: "2026-05-23T00:00:00Z",
+        support: FloppyDiagnostics.supportCorrelation(account: account, domainIdentifier: "floppy-device-secret-uuid"),
+        app: FloppyMacDiagnosticsAppInfo(version: "dev", bundleID: "com.floppy.mac"),
+        selectedAccount: FloppyMacDiagnosticsSelectedAccount(account: account, lastSyncAt: "2026-05-23T01:00:00Z"),
+        ledger: FloppyMacDiagnosticsLedgerInfo(
+            path: FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support/FloppyMac/ledger.sqlite").path,
+            accounts: 1,
+            items: 4,
+            pendingOperations: 2,
+            conflicts: 0,
+            activeEnumerators: ["floppy:item:root"],
+            conflictDiagnostics: .empty(accountID: account.id),
+            integrity: .empty(accountID: account.id)
+        ),
+        domains: [],
+        keychain: FloppyMacDiagnosticsKeychainInfo(
+            availableForSelectedAccount: true,
+            accessGroupConfigured: true,
+            dataProtectionKeychain: true,
+            interactivePromptsDisabled: true
+        ),
+        onboarding: FloppyMacDiagnosticsOnboardingInfo(step: "idle", hasPendingState: false, pluginMainFile: "floppy/floppy.php"),
+        fileProvider: FloppyFileProviderLifecycleDiagnostic(
+            state: .configured,
+            message: "ready",
+            domainIdentifierFingerprint: FloppyDiagnostics.redactedFingerprint("floppy-device-secret-uuid"),
+            displayName: "Floppy - example.com",
+            readinessStatus: "ready",
+            registeredInLocalRegistry: true,
+            keychainTokenAvailable: true,
+            ledgerOK: true,
+            activeEnumeratorCount: 1
+        ),
+        finderSync: FloppyMacDiagnosticsFinderSyncInfo(
+            decision: decision,
+            pendingOperations: 2,
+            openConflicts: 0,
+            activeEnumerators: 1,
+            lastCursor: "42",
+            lastSyncAt: "2026-05-23T01:00:00Z"
+        ),
+        storagePolicy: FloppyMacDiagnosticsStoragePolicyInfo(summary: storageSummary),
+        transferQueue: FloppyMacDiagnosticsTransferQueueInfo(pendingOperations: 2, sessions: [transfer]),
+        reauth: FloppyMacDiagnosticsReauthInfo(required: false, reason: "token healthy", keychainTokenAvailable: true, lastAuthError: "token=secret"),
+        conflictCenter: .empty,
+        materialization: FloppyMacDiagnosticsMaterializationInfo(),
+        versionRestores: FloppyMacDiagnosticsVersionRestoreInfo(),
+        releaseBuild: FloppyReleaseBuildIdentity(version: "0.1.0", build: "1", bundleID: "com.floppy.mac", appGroupIdentifier: "group.com.floppy.mac", executablePath: FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Floppy.app/Contents/MacOS/Floppy").path, isSwiftPMBundle: false),
+        releaseEvidence: .empty,
+        lastStatus: "Ready"
+    )
+
+    let data = try JSONEncoder.floppy.encode(bundle)
+    let json = String(data: data, encoding: .utf8) ?? ""
+
+    #expect(json.contains("\"format\":\"floppy-mac-diagnostics-v4\""))
+    #expect(json.contains("storage_policy"))
+    #expect(json.contains("available_offline"))
+    #expect(json.contains("transfer_queue"))
+    #expect(json.contains("replacement_sessions"))
+    #expect(json.contains("reauth"))
+    #expect(json.contains("reconnect_only_when_revoked_or_missing"))
+    #expect(!json.contains("device-secret-uuid"))
+    #expect(!json.contains("password"))
+    #expect(!json.contains("token=secret"))
+    #expect(!json.contains(FileManager.default.homeDirectoryForCurrentUser.path))
+}
+
 @Test func recoveryPlannerMapsDeterministicStatesToActions() throws {
     let noAccount = FloppyRecoveryPlanner.decision(for: FloppyRecoveryContext(
         lifecycleState: .unconfigured,
@@ -596,6 +696,47 @@ import Testing
     #expect(conflictCount == 1)
     #expect(activeEnumerators == ["floppy:item:folder-uuid"])
     #expect(storedURL?.path == materializedURL.path)
+}
+
+@Test func sqliteLedgerPersistsLocalStoragePoliciesAndSummaries() async throws {
+    let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: directory) }
+
+    let account = FloppyAccount(
+        siteURL: URL(string: "https://example.com")!,
+        restURL: URL(string: "https://example.com/wp-json/floppy/v1")!,
+        userHint: "admin",
+        deviceUUID: "device-uuid",
+        scope: "files:read,files:write"
+    )
+    let ledger = LocalLedger(fileURL: directory.appendingPathComponent("ledger.sqlite"))
+    try await ledger.upsert(account: account)
+
+    let item = sampleItem(uuid: "file-uuid", id: 12, name: "hello.txt")
+    try await ledger.upsert(item: item, accountID: account.id)
+    #expect(await ledger.storagePolicy(for: item.uuid, accountID: account.id) == .onlineOnly)
+
+    let materializedURL = directory.appendingPathComponent("hello.txt")
+    try "available".data(using: .utf8)!.write(to: materializedURL)
+    try await ledger.markMaterialized(item: item, localURL: materializedURL)
+    let offlineSummary = await ledger.storagePolicySummary(accountID: account.id)
+    #expect(await ledger.storagePolicy(for: item.uuid, accountID: account.id) == .availableOffline)
+    #expect(offlineSummary.availableOffline == 1)
+    #expect(offlineSummary.materializedBytes == 9)
+    #expect(offlineSummary.missingAvailableOffline == 0)
+
+    try await ledger.setStoragePolicy(itemUUID: item.uuid, policy: .onlineOnly, accountID: account.id)
+    let onlineSummary = await ledger.storagePolicySummary(accountID: account.id)
+    #expect(await ledger.storagePolicy(for: item.uuid, accountID: account.id) == .onlineOnly)
+    #expect(onlineSummary.onlineOnly == 1)
+    #expect(!FileManager.default.fileExists(atPath: materializedURL.path))
+
+    try await ledger.setStoragePolicy(itemUUID: item.uuid, policy: .excluded, accountID: account.id)
+    let excludedSummary = await ledger.storagePolicySummary(accountID: account.id)
+    await ledger.close()
+
+    #expect(excludedSummary.excluded == 1)
 }
 
 @Test func sqliteLedgerPersistsResumableUploadSessions() async throws {

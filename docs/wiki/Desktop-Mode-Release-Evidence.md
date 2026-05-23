@@ -1,6 +1,6 @@
 # Desktop Mode And Release Evidence
 
-Floppy's Desktop Mode app is the WordPress-native control surface for files, shares, conflicts, versions, sync, devices, jobs, diagnostics, and beta release evidence. It must use public Desktop Mode APIs only: `wp.desktop`, `wp.desktop.HOOKS`, and `wp.hooks`.
+Floppy's Desktop Mode app is the WordPress-native control surface for files, recents, trash, shares, conflicts, versions, sync, devices, jobs, diagnostics, and beta release evidence. It must use public Desktop Mode APIs only: `wp.desktop`, `wp.desktop.HOOKS`, and `wp.hooks`.
 
 ## Desktop Mode Smoke Evidence
 
@@ -16,6 +16,8 @@ The shell does not read private Desktop Mode storage, scrape host DOM, patch sha
 ## Panels
 
 - **My Drive**: list-first private file browser with search, filters, sorting, keyboard selection, bounded large-list rendering, upload, folder creation, sharing, rename, download, and trash actions.
+- **Recents**: recovery-center backed list of recently updated private files/folders.
+- **Trash**: recovery-center backed list of trashed files/folders with restore actions.
 - **Shared**: exact user/role grants and recent share activity.
 - **Conflicts**: conflict center using the conflicts endpoint when present, with sync-feed fallback for current beta sites, plus retry, keep-both, resolve, and discard lifecycle actions.
 - **Versions**: version-history shell using the versions endpoint when present, with authenticated retained-version downloads and compare-and-swap restore actions.

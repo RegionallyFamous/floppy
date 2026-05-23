@@ -55,6 +55,7 @@ final class Floppy_REST_Maintenance_Test extends WP_UnitTestCase {
 		$this->assertArrayHasKey( 'storage', $data );
 		$this->assertArrayHasKey( 'conflicts', $data );
 		$this->assertArrayHasKey( 'versions', $data );
+		$this->assertArrayHasKey( 'recovery', $data );
 		$this->assertArrayHasKey( 'thumbnails', $data );
 		$this->assertArrayHasKey( 'release_evidence', $data );
 		$this->assertTrue( $data['privacy']['no_external_services'] );
@@ -72,6 +73,7 @@ final class Floppy_REST_Maintenance_Test extends WP_UnitTestCase {
 		$this->assertTrue( $data['privacy']['no_external_services'] );
 		$this->assertSame( 'ci-required', $data['release_gates']['phpunit_wordpress'] );
 		$this->assertArrayHasKey( 'developer_id_notarization', $data['release_gates'] );
+		$this->assertArrayHasKey( 'recovery', $data );
 		$this->assertStringNotContainsString( $file['storage_key'], $json );
 		$this->assertStringNotContainsString( Floppy_Storage::path_for_key( $file['storage_key'] ), $json );
 	}

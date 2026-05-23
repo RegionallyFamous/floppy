@@ -52,6 +52,8 @@
 	};
 	var PANEL_LABELS = {
 		files: __( 'My Drive', 'floppy' ),
+		recents: __( 'Recents', 'floppy' ),
+		trash: __( 'Trash', 'floppy' ),
 		shared: __( 'Shared', 'floppy' ),
 		conflicts: __( 'Conflicts', 'floppy' ),
 		versions: __( 'Versions', 'floppy' ),
@@ -64,6 +66,8 @@
 	};
 	var PANEL_ICONS = {
 		files: 'media-default',
+		recents: 'clock',
+		trash: 'trash',
 		shared: 'groups',
 		conflicts: 'warning',
 		versions: 'backup',
@@ -301,10 +305,13 @@
 			devices: [],
 			deviceError: null,
 			sync: null,
-			syncEvents: [],
-			sharedEvents: [],
-			conflicts: [],
-			conflictError: null,
+				syncEvents: [],
+				sharedEvents: [],
+				recovery: null,
+				recents: [],
+				trashItems: [],
+				conflicts: [],
+				conflictError: null,
 			conflictEndpointAvailable: null,
 			versionTarget: null,
 			versions: [],
@@ -342,6 +349,8 @@
 				'<aside class="floppy-sidebar" aria-label="' + escapeHtml( __( 'Floppy navigation', 'floppy' ) ) + '">',
 					'<div class="floppy-brand"><span class="dashicons dashicons-archive" aria-hidden="true"></span><div><strong>Floppy</strong><span data-floppy-status aria-live="polite" aria-atomic="true">Ready</span></div></div>',
 					renderNavButton( 'files', true ),
+					renderNavButton( 'recents' ),
+					renderNavButton( 'trash' ),
 					renderNavButton( 'shared' ),
 					renderNavButton( 'conflicts' ),
 					renderNavButton( 'versions' ),
@@ -625,6 +634,73 @@
 					'<div class="floppy-form-actions"><button type="submit" class="button button-primary">' + escapeHtml( __( 'Share', 'floppy' ) ) + '</button><button type="button" class="button" data-action="unshare">' + escapeHtml( __( 'Revoke Exact Grant', 'floppy' ) ) + '</button></div>',
 				'</form>'
 			].join( '' );
+		}
+
+		function renderRecents() {
+			updateChrome();
+			setCurrentItemsReference( container, state.recents );
+			panelRoot.innerHTML = [
+				'<div class="floppy-panel-grid">',
+					'<section class="floppy-stat"><span class="dashicons dashicons-clock"></span><strong>' + escapeHtml( String( state.recents.length ) ) + '</strong><small>' + escapeHtml( __( 'Recent items', 'floppy' ) ) + '</small></section>',
+					'<section class="floppy-stat"><span class="dashicons dashicons-shield"></span><strong>' + escapeHtml( __( 'Private', 'floppy' ) ) + '</strong><small>' + escapeHtml( __( 'Authenticated access', 'floppy' ) ) + '</small></section>',
+					'<section class="floppy-panel floppy-panel--wide">',
+						'<div class="floppy-surface-head"><div><h2>' + escapeHtml( __( 'Recents', 'floppy' ) ) + '</h2><p>' + escapeHtml( __( 'Recently updated WordPress-owned files and folders.', 'floppy' ) ) + '</p></div><button type="button" class="button button-primary" data-action="recents-refresh">' + escapeHtml( __( 'Refresh', 'floppy' ) ) + '</button></div>',
+						renderRecoveryTable( state.recents, 'recents' ),
+					'</section>',
+				'</div>'
+			].join( '' );
+		}
+
+		function renderTrash() {
+			updateChrome();
+			setCurrentItemsReference( container, state.trashItems );
+			var counts = state.recovery && state.recovery.trash && state.recovery.trash.counts ? state.recovery.trash.counts : {};
+			panelRoot.innerHTML = [
+				'<div class="floppy-panel-grid">',
+					'<section class="floppy-stat"><span class="dashicons dashicons-media-default"></span><strong>' + escapeHtml( String( counts.files || 0 ) ) + '</strong><small>' + escapeHtml( __( 'Trashed files', 'floppy' ) ) + '</small></section>',
+					'<section class="floppy-stat"><span class="dashicons dashicons-category"></span><strong>' + escapeHtml( String( counts.folders || 0 ) ) + '</strong><small>' + escapeHtml( __( 'Trashed folders', 'floppy' ) ) + '</small></section>',
+					'<section class="floppy-panel floppy-panel--wide">',
+						'<div class="floppy-surface-head"><div><h2>' + escapeHtml( __( 'Trash', 'floppy' ) ) + '</h2><p>' + escapeHtml( __( 'Restore deleted items before they leave the retention window.', 'floppy' ) ) + '</p></div><button type="button" class="button button-primary" data-action="trash-refresh">' + escapeHtml( __( 'Refresh', 'floppy' ) ) + '</button></div>',
+						renderRecoveryTable( state.trashItems, 'trash' ),
+					'</section>',
+				'</div>'
+			].join( '' );
+		}
+
+		function renderRecoveryTable( items, mode ) {
+			if ( ! items.length ) {
+				var emptyTitle = mode === 'trash' ? __( 'Trash is empty.', 'floppy' ) : __( 'No recent items yet.', 'floppy' );
+				var emptyText = mode === 'trash' ? __( 'Trashed files and folders will appear here with restore actions.', 'floppy' ) : __( 'Updates from your private drive will appear here.', 'floppy' );
+				return '<div class="floppy-empty"><strong>' + escapeHtml( emptyTitle ) + '</strong><span>' + escapeHtml( emptyText ) + '</span></div>';
+			}
+
+			return [
+				'<div class="floppy-table-wrap">',
+					'<table class="floppy-file-table" aria-label="' + escapeHtml( mode === 'trash' ? __( 'Trash', 'floppy' ) : __( 'Recents', 'floppy' ) ) + '">',
+						'<colgroup><col class="floppy-col-name" /><col class="floppy-col-type" /><col class="floppy-col-size" /><col class="floppy-col-modified" /><col class="floppy-col-actions" /></colgroup>',
+						'<thead><tr><th scope="col">' + escapeHtml( __( 'Name', 'floppy' ) ) + '</th><th scope="col">' + escapeHtml( __( 'Type', 'floppy' ) ) + '</th><th scope="col" class="is-number">' + escapeHtml( __( 'Size', 'floppy' ) ) + '</th><th scope="col">' + escapeHtml( __( 'Modified', 'floppy' ) ) + '</th><th scope="col"><span class="screen-reader-text">' + escapeHtml( __( 'Actions', 'floppy' ) ) + '</span></th></tr></thead>',
+						'<tbody>' + items.map( function ( item ) { return renderRecoveryRow( item, mode ); } ).join( '' ) + '</tbody>',
+					'</table>',
+				'</div>'
+			].join( '' );
+		}
+
+		function renderRecoveryRow( item, mode ) {
+			var key = targetKey( item );
+			var icon = item.kind === 'folder' ? 'category' : fileIcon( item.mime_type );
+			var size = item.kind === 'file' ? formatBytes( item.size_bytes ) : __( 'Folder', 'floppy' );
+			var updated = item.updated_at_gmt ? formatDate( item.updated_at_gmt ) : '';
+			var actions = mode === 'trash'
+				? '<button type="button" class="button button-primary" data-action="restore-item" data-row-key="' + escapeHtml( key ) + '">' + escapeHtml( __( 'Restore', 'floppy' ) ) + '</button>'
+				: '<button type="button" class="button" data-action="open-recovery-item" data-row-key="' + escapeHtml( key ) + '">' + escapeHtml( __( 'Open', 'floppy' ) ) + '</button>';
+
+			return '<tr class="floppy-file-row" tabindex="0" data-row-key="' + escapeHtml( key ) + '" data-kind="' + escapeHtml( item.kind ) + '" data-id="' + escapeHtml( String( item.id ) ) + '">' +
+				'<td class="floppy-file-name-cell"><button type="button" class="floppy-file-open" data-open-item="' + escapeHtml( key ) + '"><span class="dashicons dashicons-' + icon + '" aria-hidden="true"></span><span><strong>' + escapeHtml( item.name ) + '</strong><small>' + escapeHtml( itemSubtitle( item ) ) + '</small></span></button></td>' +
+				'<td>' + escapeHtml( kindLabel( item ) ) + '</td>' +
+				'<td class="is-number">' + escapeHtml( size ) + '</td>' +
+				'<td>' + escapeHtml( updated || '-' ) + '</td>' +
+				'<td class="floppy-file-actions">' + actions + '</td>' +
+			'</tr>';
 		}
 
 		function renderConflicts() {
@@ -947,6 +1023,52 @@
 					state.shareTarget = targetKey( state.items[0] );
 				}
 				renderShared();
+				markReady( ctx );
+			} ).catch( showPanelError( token ) );
+		}
+
+		function fetchRecoveryCenter() {
+			return apiRequest( 'recovery?limit=75' ).then( function ( data ) {
+				state.recovery = data || {};
+				state.recents = data && data.recents && data.recents.items ? data.recents.items : [];
+				state.trashItems = data && data.trash && data.trash.items ? data.trash.items : [];
+				state.endpointAvailability.recovery = {
+					available: true,
+					checked_at: new Date().toISOString()
+				};
+				return data;
+			} ).catch( function ( error ) {
+				state.recovery = null;
+				state.recents = [];
+				state.trashItems = [];
+				state.endpointAvailability.recovery = {
+					available: false,
+					status: errorStatus( error ),
+					message: error && error.message ? error.message : __( 'Recovery endpoint unavailable.', 'floppy' ),
+					checked_at: new Date().toISOString()
+				};
+				throw error;
+			} );
+		}
+
+		function loadRecents() {
+			var token = beginPanelRequest( __( 'Loading recents', 'floppy' ) );
+			return fetchRecoveryCenter().then( function () {
+				if ( ! panelRequestIsCurrent( token ) ) {
+					return null;
+				}
+				renderRecents();
+				markReady( ctx );
+			} ).catch( showPanelError( token ) );
+		}
+
+		function loadTrash() {
+			var token = beginPanelRequest( __( 'Loading Trash', 'floppy' ) );
+			return fetchRecoveryCenter().then( function () {
+				if ( ! panelRequestIsCurrent( token ) ) {
+					return null;
+				}
+				renderTrash();
 				markReady( ctx );
 			} ).catch( showPanelError( token ) );
 		}
@@ -1424,6 +1546,19 @@
 				state.selected = {};
 				notify( __( 'Moved to Trash.', 'floppy' ), 'success' );
 				return loadFiles();
+				} ).catch( showError );
+			}
+
+		function restoreItem( item ) {
+			if ( ! item ) {
+				return;
+			}
+			updateItemMetadata( item, 'restore', {} ).then( function () {
+				notify( __( 'Restored.', 'floppy' ), 'success' );
+				if ( desktop && typeof desktop.broadcast === 'function' ) {
+					desktop.broadcast( 'floppy.files.changed', { parentId: item.parent_id || 0 } );
+				}
+				return loadTrash();
 			} ).catch( showError );
 		}
 
@@ -1665,6 +1800,10 @@
 			updateChrome();
 			if ( state.panel === 'files' ) {
 				loadFiles();
+			} else if ( state.panel === 'recents' ) {
+				loadRecents();
+			} else if ( state.panel === 'trash' ) {
+				loadTrash();
 			} else if ( state.panel === 'shared' ) {
 				loadShared();
 			} else if ( state.panel === 'conflicts' ) {
@@ -1687,7 +1826,11 @@
 		}
 
 		function reloadCurrentPanel() {
-			if ( state.panel === 'shared' ) {
+			if ( state.panel === 'recents' ) {
+				loadRecents();
+			} else if ( state.panel === 'trash' ) {
+				loadTrash();
+			} else if ( state.panel === 'shared' ) {
 				loadShared();
 			} else if ( state.panel === 'conflicts' ) {
 				loadConflicts();
@@ -1772,10 +1915,14 @@
 				shareItem( rowItem );
 			} else if ( name === 'rename-item' ) {
 				renameItem( rowItem );
-			} else if ( name === 'trash-item' ) {
-				trashItems( [ rowItem ] );
-			} else if ( name === 'unshare' ) {
-				unshareTarget();
+				} else if ( name === 'trash-item' ) {
+					trashItems( [ rowItem ] );
+				} else if ( name === 'restore-item' ) {
+					restoreItem( rowItem );
+				} else if ( name === 'open-recovery-item' ) {
+					openItemByKey( action.getAttribute( 'data-row-key' ) );
+				} else if ( name === 'unshare' ) {
+					unshareTarget();
 			} else if ( name === 'open-sync' ) {
 				switchPanel( 'sync' );
 			} else if ( name === 'conflict-refresh' ) {
@@ -1792,9 +1939,13 @@
 				state.syncCursor = 0;
 				state.syncEvents = [];
 				loadSync( true );
-			} else if ( name === 'sync-more' ) {
-				loadSync( false );
-			} else if ( name === 'health-refresh' ) {
+				} else if ( name === 'sync-more' ) {
+					loadSync( false );
+				} else if ( name === 'recents-refresh' ) {
+					loadRecents();
+				} else if ( name === 'trash-refresh' ) {
+					loadTrash();
+				} else if ( name === 'health-refresh' ) {
 				loadDiagnostics();
 			} else if ( name === 'devices-refresh' ) {
 				loadDevicePanel();
@@ -2882,6 +3033,8 @@
 		if ( desktop && typeof desktop.registerCommand === 'function' ) {
 			[
 				{ slug: 'floppy/open', label: __( 'Open Floppy', 'floppy' ), panel: 'files' },
+				{ slug: 'floppy/recents', label: __( 'Floppy Recents', 'floppy' ), panel: 'recents' },
+				{ slug: 'floppy/trash', label: __( 'Floppy Trash', 'floppy' ), panel: 'trash' },
 				{ slug: 'floppy/shared', label: __( 'Floppy Shared Files', 'floppy' ), panel: 'shared' },
 				{ slug: 'floppy/conflicts', label: __( 'Floppy Conflicts', 'floppy' ), panel: 'conflicts' },
 				{ slug: 'floppy/versions', label: __( 'Floppy Versions', 'floppy' ), panel: 'versions' },
@@ -2919,6 +3072,7 @@
 		if ( desktop && typeof desktop.registerTitleBarButton === 'function' ) {
 			[
 				{ id: 'floppy-upload', icon: 'dashicons-upload', label: __( 'Upload', 'floppy' ), panel: 'files', upload: true },
+				{ id: 'floppy-recents', icon: 'dashicons-clock', label: __( 'Recents', 'floppy' ), panel: 'recents' },
 				{ id: 'floppy-shared', icon: 'dashicons-groups', label: __( 'Shared', 'floppy' ), panel: 'shared' },
 				{ id: 'floppy-sync-status', icon: 'dashicons-update', label: __( 'Sync status', 'floppy' ), panel: 'sync' },
 				{ id: 'floppy-evidence', icon: 'dashicons-clipboard', label: __( 'Release evidence', 'floppy' ), panel: 'evidence' }

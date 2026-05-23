@@ -159,6 +159,16 @@ public enum FloppyItemKind: String, Codable, Sendable {
     case folder
 }
 
+public enum FloppyLocalStoragePolicy: String, Codable, CaseIterable, Sendable {
+    case onlineOnly = "online_only"
+    case availableOffline = "available_offline"
+    case excluded
+
+    public var isFinderVisible: Bool {
+        self != .excluded
+    }
+}
+
 public struct FloppyItem: Codable, Equatable, Identifiable, Sendable {
     public let kind: FloppyItemKind
     public let id: Int64
@@ -175,6 +185,7 @@ public struct FloppyItem: Codable, Equatable, Identifiable, Sendable {
     public let metadataVersion: String
     public let status: String
     public let visibility: String?
+    public let storagePolicy: FloppyLocalStoragePolicy?
     public let downloadURL: URL?
     public let createdAtGMT: String
     public let updatedAtGMT: String
@@ -195,6 +206,7 @@ public struct FloppyItem: Codable, Equatable, Identifiable, Sendable {
         case metadataVersion = "metadata_version"
         case status
         case visibility
+        case storagePolicy = "storage_policy"
         case downloadURL = "download_url"
         case createdAtGMT = "created_at_gmt"
         case updatedAtGMT = "updated_at_gmt"
@@ -216,6 +228,7 @@ public struct FloppyItem: Codable, Equatable, Identifiable, Sendable {
         metadataVersion: String,
         status: String,
         visibility: String? = "private",
+        storagePolicy: FloppyLocalStoragePolicy? = nil,
         downloadURL: URL? = nil,
         createdAtGMT: String,
         updatedAtGMT: String
@@ -235,6 +248,7 @@ public struct FloppyItem: Codable, Equatable, Identifiable, Sendable {
         self.metadataVersion = metadataVersion
         self.status = status
         self.visibility = visibility
+        self.storagePolicy = storagePolicy
         self.downloadURL = downloadURL
         self.createdAtGMT = createdAtGMT
         self.updatedAtGMT = updatedAtGMT

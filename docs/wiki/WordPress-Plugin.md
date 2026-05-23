@@ -69,6 +69,7 @@ Local loopback Studio sites may show a warning instead of a hard failure so uplo
 - Upload-session DTOs include `operation` so clients can distinguish `create` and `replace` flows.
 - Retained versions are listed through `/files/{id}/versions`, restored through `/files/{id}/versions/{version_id}/restore`, and downloaded through `/files/{id}/versions/{version_id}/download`; responses include authenticated URLs only and never expose `storage_key`.
 - Conflict lifecycle updates support both `/conflicts/{uuid}/actions` with Mac action names and the older `/conflicts/{uuid}/resolve` route with server lifecycle verbs.
+- The recovery center lives at `/floppy/v1/recovery`. It returns current-user-owned Recents, Trash, retained versions, open conflicts, recovery activity, export job status, and a trust block. It is authenticated, capability-checked, and redacted: no `storage_key`, private blob path, or export storage key is returned.
 - Sync clients should treat `410 floppy_sync_anchor_expired` as a required full re-enumeration.
 - Export creation returns `202` with a `job_uuid`, `status_url`, and eventual `download_url`.
 
@@ -84,6 +85,7 @@ Local loopback Studio sites may show a warning instead of a hard failure so uplo
 - The admin screen can download a repair dry run, run safe additive repairs, and export a redacted debug bundle.
 - Repair checks cover missing item-name reservations, orphaned reservations, stale upload sessions, attachment link drift, and orphaned blob counts.
 - Debug bundles include compatibility checks, schema validation, repair dry-run output, device/job counts, quota settings, Desktop Mode status, and redacted audit metadata.
+- Debug bundles and release evidence include a recovery summary: trash counts, open conflicts, retained-version quota impact, restore/export activity counts, and private-storage probe freshness.
 - Maintenance responses never include private blob paths or `storage_key` values.
 
 ## CI And Release Gates

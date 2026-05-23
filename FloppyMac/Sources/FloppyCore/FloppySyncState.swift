@@ -3,6 +3,8 @@ import Foundation
 public enum FloppyFinderSyncState: String, Codable, CaseIterable, Sendable {
     case unconfigured
     case queued
+    case onlineOnly = "online_only"
+    case availableOffline = "available_offline"
     case syncing
     case current
     case conflict
@@ -15,7 +17,7 @@ public enum FloppyFinderSyncState: String, Codable, CaseIterable, Sendable {
         switch self {
         case .unconfigured, .conflict, .authNeeded, .repairNeeded, .storageBlocked:
             return true
-        case .queued, .syncing, .current, .offline:
+        case .queued, .onlineOnly, .availableOffline, .syncing, .current, .offline:
             return false
         }
     }
@@ -30,6 +32,10 @@ public enum FloppyFileProviderRecoveryAction: String, Codable, CaseIterable, Sen
     case waitForNetwork = "wait_for_network"
     case retrySync = "retry_sync"
     case freeStorage = "free_storage"
+    case makeAvailableOffline = "make_available_offline"
+    case makeOnlineOnly = "make_online_only"
+    case excludeFromThisMac = "exclude_from_this_mac"
+    case includeOnThisMac = "include_on_this_mac"
     case resolveConflicts = "resolve_conflicts"
     case resetDomain = "reset_domain"
 }
