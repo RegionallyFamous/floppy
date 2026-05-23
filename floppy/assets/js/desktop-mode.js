@@ -386,6 +386,7 @@
 			}
 			wrap.innerHTML = [
 				'<table class="floppy-file-table" aria-label="' + escapeHtml( __( 'Floppy files', 'floppy' ) ) + '">',
+					'<colgroup><col class="floppy-col-check" /><col class="floppy-col-name" /><col class="floppy-col-type" /><col class="floppy-col-size" /><col class="floppy-col-modified" /><col class="floppy-col-actions" /></colgroup>',
 					'<thead><tr>',
 						'<th scope="col" class="floppy-file-check"><input type="checkbox" data-select-visible ' + ( selected.length && selected.length === visible.length ? 'checked ' : '' ) + 'aria-label="' + escapeHtml( __( 'Select all visible files', 'floppy' ) ) + '" /></th>',
 						renderSortHeading( 'name', FILE_SORT_LABELS.name, 'floppy-file-name-heading' ),

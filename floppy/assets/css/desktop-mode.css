@@ -205,8 +205,8 @@
 }
 
 .floppy-files-toolbar {
-	display: grid;
-	grid-template-columns: minmax(160px, 1fr) minmax(180px, 320px) auto auto;
+	display: flex;
+	flex-wrap: wrap;
 	gap: 10px;
 	align-items: center;
 	padding: 10px 12px;
@@ -217,6 +217,7 @@
 
 .floppy-files-title {
 	display: grid;
+	flex: 1 1 160px;
 	gap: 2px;
 	min-width: 0;
 }
@@ -233,10 +234,17 @@
 	font-size: 11px;
 }
 
+.floppy-sort-summary {
+	flex: 0 0 auto;
+	white-space: nowrap;
+}
+
 .floppy-search {
 	display: grid;
+	flex: 1 1 220px;
 	grid-template-columns: 24px minmax(0, 1fr);
 	align-items: center;
+	max-width: 360px;
 	min-height: 34px;
 	border: 1px solid #c3c4c7;
 	border-radius: 6px;
@@ -259,7 +267,9 @@
 
 .floppy-filter-tabs {
 	display: inline-flex;
+	flex: 0 0 auto;
 	align-items: center;
+	max-width: 100%;
 	border: 1px solid #c3c4c7;
 	border-radius: 6px;
 	overflow: hidden;
@@ -315,10 +325,31 @@
 
 .floppy-file-table {
 	width: 100%;
-	min-width: 760px;
+	min-width: 680px;
 	border-collapse: separate;
 	border-spacing: 0;
 	font-size: 13px;
+	table-layout: fixed;
+}
+
+.floppy-col-check {
+	width: 44px;
+}
+
+.floppy-col-type {
+	width: 92px;
+}
+
+.floppy-col-size {
+	width: 86px;
+}
+
+.floppy-col-modified {
+	width: 156px;
+}
+
+.floppy-col-actions {
+	width: 132px;
 }
 
 .floppy-file-table thead th {
@@ -368,6 +399,8 @@
 	padding: 6px 10px;
 	border-bottom: 1px solid #f0f0f1;
 	color: #1d2327;
+	overflow: hidden;
+	text-overflow: ellipsis;
 	vertical-align: middle;
 }
 
@@ -381,16 +414,11 @@
 }
 
 .floppy-file-check {
-	width: 34px;
 	text-align: center;
 }
 
-.floppy-file-name-heading {
-	width: 45%;
-}
-
 .floppy-file-name-cell {
-	min-width: 220px;
+	min-width: 0;
 }
 
 .floppy-file-open {
@@ -428,13 +456,14 @@
 
 .floppy-file-actions-heading,
 .floppy-file-actions {
-	width: 132px;
 	text-align: right;
 	white-space: nowrap;
 }
 
 .floppy-file-actions {
 	display: table-cell;
+	overflow: visible;
+	padding-right: 8px;
 }
 
 .floppy-row-action {
@@ -1024,14 +1053,6 @@
 		grid-template-columns: 1fr 1fr;
 	}
 
-	.floppy-files-toolbar {
-		grid-template-columns: minmax(0, 1fr) minmax(180px, 260px);
-	}
-
-	.floppy-filter-tabs,
-	.floppy-sort-summary {
-		justify-self: start;
-	}
 }
 
 @media (max-width: 760px) {
@@ -1067,12 +1088,9 @@
 		display: grid;
 	}
 
-	.floppy-files-toolbar {
-		grid-template-columns: 1fr;
-	}
-
 	.floppy-search,
 	.floppy-filter-tabs {
+		max-width: none;
 		width: 100%;
 	}
 
