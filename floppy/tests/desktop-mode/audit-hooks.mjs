@@ -129,6 +129,14 @@ const checks = {
 		{ api: 'desktop.dock.setBadge', pass: execution.dockBadges.length > 0 || source.includes( 'desktop.dock.setBadge' ) },
 		{ api: 'desktop.taskbar.setBadge', pass: execution.taskbarBadges.length > 0 || source.includes( 'desktop.taskbar.setBadge' ) }
 	],
+	accessibility: [
+		{ label: 'sidebar exposes a navigation label', pass: /<aside class="floppy-sidebar" aria-label=/.test( source ) },
+		{ label: 'panel navigation buttons have explicit button type', pass: /<button type="button" class="floppy-nav/.test( source ) },
+		{ label: 'app status updates are announced politely', pass: /data-floppy-status aria-live="polite" aria-atomic="true"/.test( source ) },
+		{ label: 'loading panel is a live status region', pass: /floppy-loading-panel" role="status" aria-live="polite" aria-atomic="true"/.test( source ) },
+		{ label: 'inline panel errors use an alert role', pass: /floppy-error-state" role="alert"/.test( source ) },
+		{ label: 'file search has an accessible label', pass: /<label class="floppy-search"><span class="screen-reader-text">[\s\S]*data-file-search/.test( source ) }
+	],
 	cleanup: [
 		{ label: 'native window returned cleanup function', pass: typeof execution.windowCleanup === 'function' },
 		{ label: 'registered drop target has deregister callback', pass: execution.dropDeregistered > 0 },
@@ -147,6 +155,7 @@ const failures = [
 	...checks.commands.filter( ( check ) => ! check.pass ).map( ( check ) => `missing command ${ check.slug }` ),
 	...checks.panels.filter( ( check ) => ! check.pass ).map( ( check ) => `missing panel ${ check.panel }` ),
 	...checks.apis.filter( ( check ) => ! check.pass ).map( ( check ) => `missing API ${ check.api }` ),
+	...checks.accessibility.filter( ( check ) => ! check.pass ).map( ( check ) => `accessibility failed: ${ check.label }` ),
 	...checks.cleanup.filter( ( check ) => ! check.pass ).map( ( check ) => `cleanup failed: ${ check.label }` ),
 	...checks.banned.filter( ( check ) => ! check.pass ).map( ( check ) => `banned pattern: ${ check.label }` ),
 	...execution.errors.map( ( error ) => `execution error: ${ error }` )

@@ -56,7 +56,8 @@ struct MenuBarView: View {
                 Circle()
                     .fill(statusColor)
                     .frame(width: 8, height: 8)
-                    .accessibilityLabel(statusAccessibilityLabel)
+                    .accessibilityLabel("Connection status")
+                    .accessibilityValue(statusAccessibilityLabel)
 
                 Button {
                     Task { await model.syncSelectedAccount() }
@@ -87,6 +88,8 @@ struct MenuBarView: View {
 
             TextField("https://example.com", text: $model.siteURLText)
                 .textFieldStyle(.roundedBorder)
+                .accessibilityLabel("WordPress site URL")
+                .accessibilityHint("Enter the WordPress site to connect with Floppy.")
 
             HStack(spacing: 8) {
                 Button {
@@ -95,6 +98,7 @@ struct MenuBarView: View {
                     Label(model.isOnboarding ? "Connecting" : "Install & Connect", systemImage: model.onboardingStep.systemImage)
                 }
                 .buttonStyle(FloppyPrimaryButtonStyle())
+                .accessibilityHint("Opens WordPress in your browser to approve this Mac.")
                 .disabled(model.isOnboarding)
 
                 if model.isOnboarding {
@@ -113,10 +117,13 @@ struct MenuBarView: View {
                 VStack(alignment: .leading, spacing: 7) {
                     TextField("GitHub release ZIP", text: $model.githubPluginZipURLText)
                         .textFieldStyle(.roundedBorder)
+                        .accessibilityLabel("GitHub release ZIP URL")
                     TextField("Plugin file", text: $model.pluginMainFile)
                         .textFieldStyle(.roundedBorder)
+                        .accessibilityLabel("Plugin main file")
                     TextField("Device name", text: $model.deviceName)
                         .textFieldStyle(.roundedBorder)
+                        .accessibilityLabel("Device name")
                 }
                 .padding(.top, 6)
             } label: {
@@ -177,6 +184,10 @@ struct MenuBarView: View {
                     style: StrokeStyle(lineWidth: 1, dash: isDropTargeted ? [6, 5] : [])
                 )
         }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("File drop target")
+        .accessibilityValue(isDropTargeted ? "Ready to upload dropped files" : "Drop files to upload")
+        .accessibilityHint("Drop files here to upload them to Floppy.")
     }
 
     private var recentPanel: some View {
@@ -190,6 +201,7 @@ struct MenuBarView: View {
                     ProgressView()
                         .controlSize(.small)
                         .scaleEffect(0.72)
+                        .accessibilityLabel("Sync in progress")
                 }
             }
 
@@ -227,6 +239,8 @@ struct MenuBarView: View {
                 .foregroundStyle(.green)
         }
         .frame(height: 22)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(recentItemAccessibilityLabel(item))
     }
 
     private var footer: some View {
@@ -333,6 +347,11 @@ struct MenuBarView: View {
         let prefix = name.prefix(24)
         let suffix = name.suffix(5)
         return "\(prefix)...\(suffix)"
+    }
+
+    private func recentItemAccessibilityLabel(_ item: FloppyItem) -> String {
+        let kind = item.kind == .folder ? "Folder" : "File"
+        return "\(kind), \(item.name), synced"
     }
 }
 

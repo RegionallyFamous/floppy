@@ -339,8 +339,8 @@
 		container.__floppyPaintFileList = paintFileList;
 		container.innerHTML = [
 			'<div class="floppy-shell">',
-				'<aside class="floppy-sidebar">',
-					'<div class="floppy-brand"><span class="dashicons dashicons-archive"></span><div><strong>Floppy</strong><span data-floppy-status>Ready</span></div></div>',
+				'<aside class="floppy-sidebar" aria-label="' + escapeHtml( __( 'Floppy navigation', 'floppy' ) ) + '">',
+					'<div class="floppy-brand"><span class="dashicons dashicons-archive" aria-hidden="true"></span><div><strong>Floppy</strong><span data-floppy-status aria-live="polite" aria-atomic="true">Ready</span></div></div>',
 					renderNavButton( 'files', true ),
 					renderNavButton( 'shared' ),
 					renderNavButton( 'conflicts' ),
@@ -377,7 +377,7 @@
 		var subtitleNode = container.querySelector( '[data-toolbar-subtitle]' );
 
 		function renderNavButton( panel, active ) {
-			return '<button class="floppy-nav' + ( active ? ' is-active' : '' ) + '" data-panel="' + panel + '"' + ( active ? ' aria-current="page"' : '' ) + '>' +
+			return '<button type="button" class="floppy-nav' + ( active ? ' is-active' : '' ) + '" data-panel="' + panel + '"' + ( active ? ' aria-current="page"' : '' ) + '>' +
 				'<span class="dashicons dashicons-' + escapeHtml( PANEL_ICONS[ panel ] || 'admin-generic' ) + '" aria-hidden="true"></span><span>' + escapeHtml( PANEL_LABELS[ panel ] ) + '</span>' +
 			'</button>';
 		}
@@ -411,7 +411,7 @@
 		}
 
 		function renderLoading( label ) {
-			panelRoot.innerHTML = '<div class="floppy-loading-panel"><span class="dashicons dashicons-update"></span><strong>' + escapeHtml( label ) + '</strong></div>';
+			panelRoot.innerHTML = '<div class="floppy-loading-panel" role="status" aria-live="polite" aria-atomic="true"><span class="dashicons dashicons-update" aria-hidden="true"></span><strong>' + escapeHtml( label ) + '</strong></div>';
 		}
 
 		function beginPanelRequest( label ) {
@@ -437,7 +437,7 @@
 				panel: state.panel,
 				at: new Date().toISOString()
 			};
-			panelRoot.innerHTML = '<div class="floppy-empty floppy-error-state"><strong>' + escapeHtml( __( 'Could not load this panel.', 'floppy' ) ) + '</strong><span>' + escapeHtml( message ) + '</span><button type="button" class="button button-primary" data-action="retry-panel">' + escapeHtml( __( 'Try Again', 'floppy' ) ) + '</button></div>';
+			panelRoot.innerHTML = '<div class="floppy-empty floppy-error-state" role="alert"><strong>' + escapeHtml( __( 'Could not load this panel.', 'floppy' ) ) + '</strong><span>' + escapeHtml( message ) + '</span><button type="button" class="button button-primary" data-action="retry-panel">' + escapeHtml( __( 'Try Again', 'floppy' ) ) + '</button></div>';
 		}
 
 		function renderFiles() {
@@ -448,7 +448,7 @@
 					uploadLine,
 					'<div class="floppy-files-toolbar">',
 						'<div class="floppy-files-title"><h2>' + escapeHtml( state.parentId ? __( 'Folder', 'floppy' ) : __( 'My Drive', 'floppy' ) ) + '</h2><span data-file-count></span></div>',
-						'<label class="floppy-search"><span class="dashicons dashicons-search" aria-hidden="true"></span><input type="search" data-file-search value="' + escapeHtml( state.filterText ) + '" placeholder="' + escapeHtml( __( 'Search this drive', 'floppy' ) ) + '" /></label>',
+						'<label class="floppy-search"><span class="screen-reader-text">' + escapeHtml( __( 'Search this drive', 'floppy' ) ) + '</span><span class="dashicons dashicons-search" aria-hidden="true"></span><input type="search" data-file-search value="' + escapeHtml( state.filterText ) + '" placeholder="' + escapeHtml( __( 'Search this drive', 'floppy' ) ) + '" /></label>',
 						'<div class="floppy-filter-tabs" role="group" aria-label="' + escapeHtml( __( 'File type filter', 'floppy' ) ) + '">' + renderKindFilterButtons() + '</div>',
 						'<span class="floppy-sort-summary" data-file-sort-summary></span>',
 					'</div>',

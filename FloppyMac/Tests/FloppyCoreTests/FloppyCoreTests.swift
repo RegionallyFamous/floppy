@@ -207,6 +207,38 @@ import Testing
     }
 }
 
+@Test func uploadSessionCompletesWhenAllBytesAlreadyReceived() async throws {
+    let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: directory) }
+
+    let fileURL = directory.appendingPathComponent("hello.txt")
+    try "hello".data(using: .utf8)!.write(to: fileURL)
+    var paths: [String] = []
+    CompleteUploadURLProtocolStub.handler = { request in
+        paths.append(request.url?.path ?? "")
+        if request.url?.path.hasSuffix("/upload-sessions/session-uuid/complete") == true {
+            return httpJSON(request, body: sampleItemJSON(id: 12, uuid: "file-uuid", name: "hello.txt", size: 5))
+        }
+        if request.url?.path.hasSuffix("/upload-sessions/session-uuid/chunk") == true {
+            return httpJSON(request, status: 500, body: "{}")
+        }
+        return httpJSON(request, status: 404, body: "{}")
+    }
+    defer { CompleteUploadURLProtocolStub.handler = nil }
+
+    let configuration = URLSessionConfiguration.ephemeral
+    configuration.protocolClasses = [CompleteUploadURLProtocolStub.self]
+    let client = FloppyAPIClient(siteURL: URL(string: "https://example.com")!, token: "secret", session: URLSession(configuration: configuration))
+    let session = FloppyUploadSession(sessionUUID: "session-uuid", receivedBytes: 5, chunkSize: 4, operation: "upload", expiresAtGMT: "2026-05-23 00:00:00")
+
+    let item = try await client.uploadChunks(from: fileURL, session: session, totalSize: 5)
+
+    #expect(item.id == 12)
+    #expect(paths.contains { $0.hasSuffix("/upload-sessions/session-uuid/complete") })
+    #expect(!paths.contains { $0.hasSuffix("/upload-sessions/session-uuid/chunk") })
+}
+
 @Test func fileProviderIdentifierCodecUsesStableUUIDs() throws {
     let rawValue = FloppyFileProviderIdentifierCodec.itemIdentifierRawValue(uuid: "file-uuid")
 
@@ -997,6 +1029,34 @@ private final class URLProtocolStub: URLProtocol {
 }
 
 private final class UploadOffsetURLProtocolStub: URLProtocol {
+    nonisolated(unsafe) static var handler: ((URLRequest) throws -> (HTTPURLResponse, Data))?
+
+    override class func canInit(with request: URLRequest) -> Bool {
+        true
+    }
+
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest {
+        request
+    }
+
+    override func startLoading() {
+        do {
+            guard let handler = Self.handler else {
+                throw FloppyAPIError.invalidResponse
+            }
+            let (response, data) = try handler(request)
+            client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+            client?.urlProtocol(self, didLoad: data)
+            client?.urlProtocolDidFinishLoading(self)
+        } catch {
+            client?.urlProtocol(self, didFailWithError: error)
+        }
+    }
+
+    override func stopLoading() {}
+}
+
+private final class CompleteUploadURLProtocolStub: URLProtocol {
     nonisolated(unsafe) static var handler: ((URLRequest) throws -> (HTTPURLResponse, Data))?
 
     override class func canInit(with request: URLRequest) -> Bool {

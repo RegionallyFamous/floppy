@@ -190,6 +190,30 @@ final class Floppy_Schema_Repair_Test extends WP_UnitTestCase {
 		$this->assertTrue( $applied['apply'] );
 	}
 
+	public function test_repair_reports_and_removes_orphaned_sync_audience_rows(): void {
+		global $wpdb;
+
+		$wpdb->insert(
+			Floppy_Schema::table( 'sync_audience' ),
+			array(
+				'seq'            => 999999,
+				'event_uuid'     => wp_generate_uuid4(),
+				'principal_type' => 'user',
+				'principal_ref'  => (string) $this->user_id,
+				'created_at_gmt' => current_time( 'mysql', true ),
+			),
+			array( '%d', '%s', '%s', '%s', '%s' )
+		);
+
+		$dry_run = Floppy_Schema::repair( false );
+		$applied = Floppy_Schema::repair( true );
+		$remaining = (int) $wpdb->get_var( 'SELECT COUNT(*) FROM ' . Floppy_Schema::table( 'sync_audience' ) ); // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared
+
+		$this->assertGreaterThanOrEqual( 1, $dry_run['orphaned_sync_audience']['orphaned'] );
+		$this->assertGreaterThanOrEqual( 1, $applied['orphaned_sync_audience']['orphaned'] );
+		$this->assertSame( 0, $remaining );
+	}
+
 	private function truncate_floppy_tables(): void {
 		global $wpdb;
 

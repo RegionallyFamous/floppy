@@ -652,7 +652,7 @@ final class FloppyFileProviderExtension: NSObject, NSFileProviderReplicatedExten
                   session.localPath == localURL.path,
                   session.totalSize == totalSize,
                   session.offset >= 0,
-                  session.offset < totalSize,
+                  session.offset <= totalSize,
                   session.chunkSize > 0 else {
                 continue
             }

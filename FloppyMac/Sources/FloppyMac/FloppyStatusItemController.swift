@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 import SwiftUI
 
 @MainActor
@@ -7,6 +8,7 @@ final class FloppyStatusItemController: NSObject {
 
     private var statusItem: NSStatusItem?
     private var popover: NSPopover?
+    private var modelObservation: AnyCancellable?
     private weak var model: FloppyAppModel?
 
     func install(model: FloppyAppModel) {
@@ -25,14 +27,19 @@ final class FloppyStatusItemController: NSObject {
         button.target = self
         button.action = #selector(handleStatusItemClick(_:))
         button.sendAction(on: [.leftMouseUp, .rightMouseUp])
-        button.setAccessibilityLabel("Floppy")
-        button.setAccessibilityHelp("Open Floppy sync status")
+        updateStatusItemPresentation()
 
         let popover = NSPopover()
         popover.behavior = .transient
         popover.contentSize = NSSize(width: 380, height: 480)
         popover.contentViewController = NSHostingController(rootView: MenuBarView(model: model))
         self.popover = popover
+
+        modelObservation = model.objectWillChange.sink { [weak self] _ in
+            Task { @MainActor [weak self] in
+                self?.updateStatusItemPresentation()
+            }
+        }
     }
 
     @objc
@@ -63,6 +70,10 @@ final class FloppyStatusItemController: NSObject {
 
         let menu = NSMenu()
         menu.autoenablesItems = false
+        let statusItem = NSMenuItem(title: statusSummary, action: nil, keyEquivalent: "")
+        statusItem.isEnabled = false
+        menu.addItem(statusItem)
+        menu.addItem(.separator())
         menu.addItem(menuItem("Open Floppy Folder", action: #selector(openFolderFromMenu), keyEquivalent: "o", enabled: model?.selectedAccount != nil))
         menu.addItem(menuItem("Sync Now", action: #selector(syncNowFromMenu), keyEquivalent: "r", enabled: model?.selectedAccount != nil && model?.isWorking == false))
         menu.addItem(.separator())
@@ -76,6 +87,51 @@ final class FloppyStatusItemController: NSObject {
         item.target = self
         item.isEnabled = enabled
         return item
+    }
+
+    private func updateStatusItemPresentation() {
+        guard let button = statusItem?.button else {
+            return
+        }
+
+        let summary = statusSummary
+        button.toolTip = "Floppy: \(summary)"
+        button.setAccessibilityLabel("Floppy")
+        button.setAccessibilityValue(summary)
+        button.setAccessibilityHelp("Open Floppy sync status. \(summary)")
+    }
+
+    private var statusSummary: String {
+        guard let model else {
+            return "Not running"
+        }
+
+        guard let account = model.selectedAccount else {
+            return model.onboardingStep.title
+        }
+
+        let host = account.siteURL.host ?? "Connected site"
+        if model.isWorking {
+            return "\(host), syncing"
+        }
+
+        if !model.isNetworkReachable {
+            return "\(host), offline"
+        }
+
+        if model.openConflictCount > 0 {
+            return "\(host), \(model.openConflictCount) conflict\(model.openConflictCount == 1 ? "" : "s") need attention"
+        }
+
+        if model.pendingTransferCount > 0 {
+            return "\(host), \(model.pendingTransferCount) interrupted transfer\(model.pendingTransferCount == 1 ? "" : "s") preserved"
+        }
+
+        if let lastSyncAt = account.lastSyncAt {
+            return "\(host), synced \(lastSyncAt.formatted(date: .omitted, time: .shortened))"
+        }
+
+        return "\(host), \(model.nativeFolderStatusText)"
     }
 
     @objc

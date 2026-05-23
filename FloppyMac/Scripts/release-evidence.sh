@@ -107,6 +107,16 @@ else
     add_check "codesign-verify" "skipped" "No APP_PATH was supplied for exported app verification." "APP_PATH"
 fi
 
+if [[ -n "$APP_PATH" ]]; then
+    if codesign -d --verbose=4 "$APP_PATH" 2>&1 | grep -qi "runtime"; then
+        add_check "hardened-runtime" "pass" "Exported app has hardened runtime enabled." "$(redact_path "$APP_PATH")"
+    else
+        add_check "hardened-runtime" "fail" "Exported app is missing hardened runtime." "$(redact_path "$APP_PATH")"
+    fi
+else
+    add_check "hardened-runtime" "skipped" "No APP_PATH was supplied for hardened runtime verification." "APP_PATH"
+fi
+
 if [[ -n "$APP_PATH" && -d "$APP_PATH/Contents/PlugIns/FloppyFileProviderExtension.appex" ]]; then
     add_check "embedded-extension-artifact" "pass" "Exported app contains the File Provider extension bundle." "$(redact_path "$APP_PATH")"
     if codesign --verify --strict --verbose=2 "$APP_PATH/Contents/PlugIns/FloppyFileProviderExtension.appex" >/dev/null 2>&1; then

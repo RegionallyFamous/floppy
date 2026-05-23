@@ -51,7 +51,7 @@ Before tagging a Mac beta, collect release evidence:
 FloppyMac/Scripts/release-evidence.sh
 ```
 
-The evidence report verifies the Xcode container, embedded File Provider extension, App Group entitlements, signing identity, notarization readiness, exported app signature, and notarization ZIP. See `docs/release-evidence.md`.
+The evidence report verifies the Xcode container, embedded File Provider extension, App Group entitlements, signing identity, notarization readiness, exported app signature, hardened runtime, and notarization ZIP. See `docs/release-evidence.md`.
 
 ## Package The WordPress Plugin ZIP
 

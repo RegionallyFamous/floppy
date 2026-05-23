@@ -451,6 +451,7 @@ final class Floppy_Schema {
 			'storage_keys'              => self::inspect_storage_keys(),
 			'blob_integrity'            => self::inspect_blob_integrity(),
 			'sync_event_continuity'     => self::inspect_sync_event_continuity(),
+			'orphaned_sync_audience'    => self::repair_orphaned_sync_audience( $apply ),
 			'sync_audience'             => self::inspect_sync_audience(),
 			'quota_usage'               => self::inspect_quota_usage(),
 			'orphaned_blobs'            => self::inspect_orphaned_blobs(),
@@ -1022,6 +1023,38 @@ final class Floppy_Schema {
 			'audience_rows'        => $audience_rows,
 			'events_with_audience' => $events_with_audience,
 			'strategy'             => 'principal-index-with-permission-fallback',
+		);
+	}
+
+	/**
+	 * Remove sync audience rows whose source events were compacted away.
+	 */
+	private static function repair_orphaned_sync_audience( bool $apply ): array {
+		global $wpdb;
+
+		$table = self::table( 'sync_audience' );
+		if ( ! self::table_exists( $table ) ) {
+			return array( 'status' => 'missing_table' );
+		}
+
+		$events = self::table( 'sync_events' );
+		if ( ! self::table_exists( $events ) ) {
+			return array( 'status' => 'missing_events_table' );
+		}
+
+		$rows = $wpdb->get_results(
+			"SELECT a.id FROM $table a LEFT JOIN $events e ON e.seq = a.seq WHERE e.seq IS NULL LIMIT 2000",
+			ARRAY_A
+		); // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared
+
+		if ( $apply && $rows ) {
+			$ids = implode( ',', array_map( 'absint', wp_list_pluck( $rows, 'id' ) ) );
+			$wpdb->query( "DELETE FROM $table WHERE id IN ($ids)" ); // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared
+		}
+
+		return array(
+			'orphaned'     => count( $rows ),
+			'scan_limited' => count( $rows ) >= 2000,
 		);
 	}
 
