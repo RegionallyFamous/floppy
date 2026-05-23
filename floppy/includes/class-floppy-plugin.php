@@ -12,6 +12,7 @@ require_once FLOPPY_DIR . 'includes/class-floppy-storage.php';
 require_once FLOPPY_DIR . 'includes/class-floppy-settings.php';
 require_once FLOPPY_DIR . 'includes/class-floppy-audit.php';
 require_once FLOPPY_DIR . 'includes/class-floppy-rate-limiter.php';
+require_once FLOPPY_DIR . 'includes/class-floppy-diagnostics.php';
 require_once FLOPPY_DIR . 'includes/class-floppy-auth.php';
 require_once FLOPPY_DIR . 'includes/class-floppy-permissions.php';
 require_once FLOPPY_DIR . 'includes/class-floppy-sync.php';

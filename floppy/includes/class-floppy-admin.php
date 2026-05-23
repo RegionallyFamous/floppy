@@ -367,6 +367,7 @@ final class Floppy_Admin {
 			array(
 				'format'         => 'floppy-repair-report-v1',
 				'created_at_gmt' => current_time( 'mysql', true ),
+				'support'        => Floppy_Diagnostics::support_block(),
 				'report'         => Floppy_Schema::repair( $apply ),
 			)
 		);
@@ -381,68 +382,7 @@ final class Floppy_Admin {
 			wp_die( esc_html__( 'Administrator access required.', 'floppy' ) );
 		}
 
-		self::download_json( 'floppy-debug-' . gmdate( 'Ymd-His' ) . '.json', self::debug_bundle() );
-	}
-
-	/**
-	 * Build a redacted debug bundle.
-	 */
-	private static function debug_bundle(): array {
-		global $wpdb;
-
-		$device_counts = $wpdb->get_results( 'SELECT status, COUNT(*) AS total FROM ' . Floppy_Schema::table( 'devices' ) . ' GROUP BY status', ARRAY_A ); // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared
-		$job_counts = $wpdb->get_results( 'SELECT status, COUNT(*) AS total FROM ' . Floppy_Schema::table( 'jobs' ) . ' GROUP BY status', ARRAY_A ); // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared
-		$audit_counts = $wpdb->get_results( 'SELECT action, COUNT(*) AS total FROM ' . Floppy_Schema::table( 'audit_log' ) . ' GROUP BY action ORDER BY total DESC LIMIT 25', ARRAY_A ); // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared
-		$settings = Floppy_Settings::get();
-
-		return array(
-			'format'         => 'floppy-debug-bundle-v1',
-			'created_at_gmt' => current_time( 'mysql', true ),
-			'plugin'         => array(
-				'version'    => FLOPPY_VERSION,
-				'db_version' => FLOPPY_DB_VERSION,
-				'namespace'  => Floppy_Rest::NAMESPACE,
-			),
-			'site'           => array(
-				'home_url'     => esc_url_raw( home_url( '/' ) ),
-				'rest_url'     => esc_url_raw( rest_url( Floppy_Rest::NAMESPACE ) ),
-				'is_ssl'       => is_ssl(),
-				'multisite'    => is_multisite(),
-				'php_version'  => PHP_VERSION,
-				'wp_version'   => get_bloginfo( 'version' ),
-			),
-			'compatibility'  => Floppy_Compatibility::summary(),
-			'schema'         => array(
-				'missing' => Floppy_Schema::validate(),
-				'repair'  => Floppy_Schema::repair( false ),
-			),
-			'desktop_mode'   => array(
-				'detected' => function_exists( 'desktop_mode_register_window' ),
-				'enabled'  => ! empty( $settings['enable_desktop_mode'] ),
-			),
-			'quotas'         => array(
-				'max_file_size'            => (int) ( $settings['max_file_size'] ?? wp_max_upload_size() ),
-				'max_batch_files'          => (int) ( $settings['max_batch_files'] ?? 50 ),
-				'user_quota_bytes'         => (int) ( $settings['user_quota_bytes'] ?? 0 ),
-				'site_quota_bytes'         => (int) ( $settings['site_quota_bytes'] ?? 0 ),
-				'sync_retention_days'      => (int) ( $settings['sync_retention_days'] ?? 45 ),
-				'tombstone_retention_days' => (int) ( $settings['tombstone_retention_days'] ?? 90 ),
-			),
-			'devices'        => self::keyed_counts( $device_counts, 'status' ),
-			'jobs'           => self::keyed_counts( $job_counts, 'status' ),
-			'audit_actions'  => self::keyed_counts( $audit_counts, 'action' ),
-		);
-	}
-
-	/**
-	 * Convert grouped count rows into a plain object.
-	 */
-	private static function keyed_counts( array $rows, string $key ): array {
-		$out = array();
-		foreach ( $rows as $row ) {
-			$out[ (string) $row[ $key ] ] = (int) $row['total'];
-		}
-		return $out;
+		self::download_json( 'floppy-debug-' . gmdate( 'Ymd-His' ) . '.json', Floppy_Diagnostics::debug_bundle() );
 	}
 
 	/**

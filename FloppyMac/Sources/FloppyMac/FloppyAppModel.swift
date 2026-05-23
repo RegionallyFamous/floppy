@@ -649,51 +649,57 @@ final class FloppyAppModel: ObservableObject {
         }
 
         let formatter = ISO8601DateFormatter()
-        let appInfo: [String: Any] = [
-            "version": Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "dev",
-            "bundle_id": Bundle.main.bundleIdentifier ?? "unknown"
-        ]
-        let selectedAccountInfo: [String: Any] = [
-            "id": accountID ?? "",
-            "site_url": FloppyDiagnostics.redactedURL(account?.siteURL),
-            "rest_url": FloppyDiagnostics.redactedURL(account?.restURL),
-            "device_uuid": account?.deviceUUID ?? "",
-            "scope": account?.scope ?? "",
-            "last_cursor": account.map { String($0.lastCursor) } ?? "0",
-            "last_sync_at": account?.lastSyncAt.map { formatter.string(from: $0) } ?? ""
-        ]
-        let ledgerInfo: [String: Any] = [
-            "path": ledger?.fileURL.path ?? "",
-            "accounts": accounts.count,
-            "items": items.count,
-            "pending_operations": await ledger?.pendingOperationCount(accountID: accountID) ?? 0,
-            "conflicts": await ledger?.conflictCount(accountID: accountID) ?? 0,
-            "active_enumerators": await ledger?.activeEnumeratorIdentifiers() ?? []
-        ]
-        let keychainInfo: [String: Any] = [
-            "available_for_selected_account": keychainAvailable,
-            "access_group_configured": KeychainTokenStore.defaultAccessGroup() != nil,
-            "data_protection_keychain": true,
-            "interactive_prompts_disabled": true
-        ]
-        let onboardingInfo: [String: Any] = [
-            "step": String(describing: onboardingStep),
-            "has_pending_state": pendingOnboarding != nil,
-            "plugin_main_file": pluginMainFile
-        ]
-        let bundle: [String: Any] = [
-            "format": "floppy-mac-diagnostics-v1",
-            "created_at": formatter.string(from: Date()),
-            "app": appInfo,
-            "selected_account": selectedAccountInfo,
-            "ledger": ledgerInfo,
-            "domains": (try? FloppyDomainRegistry.summaries()) ?? [],
-            "keychain": keychainInfo,
-            "onboarding": onboardingInfo,
-            "last_status": status
-        ]
+        let activeEnumerators = await ledger?.activeEnumeratorIdentifiers() ?? []
+        let conflictDiagnostics: FloppyLedgerConflictDiagnostics
+        let integrity: FloppyLedgerIntegrityReport
+        if let accountID {
+            conflictDiagnostics = await ledger?.conflictDiagnostics(accountID: accountID) ?? .empty(accountID: accountID)
+            integrity = await ledger?.integrityReport(accountID: accountID) ?? .empty(accountID: accountID)
+        } else {
+            conflictDiagnostics = .empty()
+            integrity = .empty()
+        }
+        let domainIdentifier = account.map { FloppyDomainRegistry.domainIdentifier(for: $0) }
+        let bundle = FloppyMacDiagnosticsBundleV2(
+            createdAt: formatter.string(from: Date()),
+            support: FloppyDiagnostics.supportCorrelation(account: account, domainIdentifier: domainIdentifier),
+            app: FloppyMacDiagnosticsAppInfo(
+                version: Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "dev",
+                bundleID: Bundle.main.bundleIdentifier ?? "unknown"
+            ),
+            selectedAccount: FloppyMacDiagnosticsSelectedAccount(
+                account: account,
+                lastSyncAt: account?.lastSyncAt.map { formatter.string(from: $0) } ?? ""
+            ),
+            ledger: FloppyMacDiagnosticsLedgerInfo(
+                path: ledger?.fileURL.path ?? "",
+                accounts: accounts.count,
+                items: items.count,
+                pendingOperations: await ledger?.pendingOperationCount(accountID: accountID) ?? 0,
+                conflicts: await ledger?.conflictCount(accountID: accountID) ?? 0,
+                activeEnumerators: activeEnumerators,
+                conflictDiagnostics: conflictDiagnostics,
+                integrity: integrity
+            ),
+            domains: (try? FloppyDomainRegistry.diagnosticsSummaries()) ?? [],
+            keychain: FloppyMacDiagnosticsKeychainInfo(
+                availableForSelectedAccount: keychainAvailable,
+                accessGroupConfigured: KeychainTokenStore.defaultAccessGroup() != nil,
+                dataProtectionKeychain: true,
+                interactivePromptsDisabled: true
+            ),
+            onboarding: FloppyMacDiagnosticsOnboardingInfo(
+                step: String(describing: onboardingStep),
+                hasPendingState: pendingOnboarding != nil,
+                pluginMainFile: pluginMainFile
+            ),
+            fileProvider: await FileProviderDomainController.lifecycleDiagnostic(account: account, keychainAvailable: keychainAvailable),
+            lastStatus: status
+        )
 
-        let data = try JSONSerialization.data(withJSONObject: bundle, options: [.prettyPrinted, .sortedKeys])
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        let data = try encoder.encode(bundle)
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent("FloppyDiagnostics", isDirectory: true)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         let url = directory.appendingPathComponent("floppy-mac-diagnostics-\(Int(Date().timeIntervalSince1970)).json")

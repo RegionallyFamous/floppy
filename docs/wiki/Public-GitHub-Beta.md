@@ -22,9 +22,27 @@ The first public beta is GitHub-first. Users install the WordPress plugin from a
 
 - Plugin activates on HTTPS WordPress sites with REST API enabled.
 - Direct private-file access probes fail.
+- The 10k load budget runner passes in CI.
+- The 100k load budget runner passes before tagging the beta.
 - Upload sessions enforce chunk caps, file size limits, MIME validation, dangerous extension checks, and quota errors.
 - Replacement sessions handle large Finder edits without whole-file in-memory uploads.
 - Stale Finder edits create local conflict copies instead of silently overwriting.
 - Sync expired cursors return HTTP `410` and tell clients to re-enumerate.
 - Finder item IDs use Floppy UUIDs, with legacy numeric lookup only as a compatibility fallback.
 - Export jobs run asynchronously and expose status/download URLs without leaking private storage keys.
+- Export/restore preserves metadata, blobs, checksums, tombstones, and attachment links.
+- The sync torture drill passes for offline edits, interrupted uploads, concurrent move/rename/delete, stale conflicts, quota failure, token revoke, and reconnect recovery.
+- Mac disconnect/revoke produces a clear repair/auth state and reconnects without orphaning the File Provider domain.
+- WordPress debug bundles and Mac diagnostics bundles share a support correlation ID and remain redacted.
+
+## Required Beta Evidence
+
+Keep these artifacts on the internal release issue for every public beta:
+
+- `10k` CI load report and `100k` pre-tag load report.
+- Private-storage probe results for the target host.
+- Sync torture notes, including conflict-copy and expired-cursor results.
+- Export/restore notes with checksum verification.
+- Mac diagnostics bundle and WordPress debug bundle with matching
+  `support_correlation_id`.
+- Disconnect/revoke notes from a live WordPress site.

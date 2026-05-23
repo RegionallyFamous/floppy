@@ -30,3 +30,37 @@ The server rejects stale metadata/content writes. The Mac beta turns stale Finde
 
 - WordPress debug bundles are admin-only and redact private blob paths, storage keys, tokens, and raw audit metadata.
 - Mac diagnostics redact tokens and URL query strings while preserving enough site, ledger, domain, cursor, pending-operation, and conflict state for support.
+
+## Support Correlation IDs
+
+Every support bundle should carry a shared `support_correlation_id` so a user,
+site admin, and maintainer can match the Mac diagnostics export with the
+WordPress debug bundle without exposing secrets.
+
+Correlation IDs are not authentication credentials. They should be random,
+short-lived support labels that appear in:
+
+- WordPress debug bundle metadata.
+- Mac diagnostics bundle metadata.
+- Recent sync or REST failure summaries.
+- Release or support issue notes when a beta build is being investigated.
+
+Do not include tokens, application passwords, private blob paths, `storage_key`,
+raw local filesystem paths, or URL query strings in either bundle. Keep enough
+origin and account shape to debug the issue, but redact values that could grant
+access or reveal private filenames outside the authenticated item DTOs.
+
+## Robustness Drills
+
+Before a public beta tag, run and record:
+
+- Sync torture: offline edits, interrupted uploads, concurrent move/rename/delete,
+  stale content conflicts, expired cursor full resync, quota failure, token
+  revoke, and reconnect recovery.
+- Scale gates: `10k` in CI and `100k` before tagging with the load budget runner.
+- Security probes: direct private-storage access, invisible item access,
+  revoked-device access, dangerous MIME/extension rejection, and audit logging.
+- Exit drills: export/restore with metadata, blobs, checksums, tombstones, and
+  attachment links verified.
+- Mac revoke drill: disconnect the app, revoke the server device token, confirm
+  Finder enters a repair/auth state, then reconnect cleanly.

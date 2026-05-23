@@ -12,20 +12,62 @@ defined( 'ABSPATH' ) || exit;
  */
 final class Floppy_Rate_Limiter {
 	/**
+	 * Cache group for object-cache-backed buckets.
+	 */
+	private const CACHE_GROUP = 'floppy_rate_limits';
+
+	/**
 	 * Check and increment a rate bucket.
 	 */
 	public static function check( string $bucket, int $limit, int $window, string $identity = '' ) {
 		$identity = $identity ?: self::default_identity();
 		$key      = 'floppy_rate_' . md5( $bucket . '|' . $identity );
-		$count    = (int) get_transient( $key );
+		$count    = self::increment_bucket( $key, $window );
 
-		if ( $count >= $limit ) {
+		if ( $count > $limit ) {
 			Floppy_Audit::log( 'rate_limit.exceeded', 'rate_limit', 0, $bucket, array( 'identity' => md5( $identity ) ) );
-			return new WP_Error( 'floppy_rate_limited', __( 'Too many requests. Please slow down and try again.', 'floppy' ), array( 'status' => 429 ) );
+			return new WP_Error(
+				'floppy_rate_limited',
+				__( 'Too many requests. Please slow down and try again.', 'floppy' ),
+				array(
+					'status'      => 429,
+					'retry_after' => $window,
+				)
+			);
 		}
 
-		set_transient( $key, $count + 1, $window );
 		return true;
+	}
+
+	/**
+	 * Return support-safe limiter diagnostics.
+	 */
+	public static function diagnostics(): array {
+		return array(
+			'backend'      => wp_using_ext_object_cache() ? 'object-cache' : 'transient',
+			'cache_group'  => self::CACHE_GROUP,
+			'identity_pii' => 'hashed-only-in-audit-log',
+		);
+	}
+
+	/**
+	 * Increment a bucket with object-cache support when available.
+	 */
+	private static function increment_bucket( string $key, int $window ): int {
+		if ( wp_using_ext_object_cache() ) {
+			$added = wp_cache_add( $key, 0, self::CACHE_GROUP, $window );
+			$count = wp_cache_incr( $key, 1, self::CACHE_GROUP );
+			if ( false !== $count ) {
+				return (int) $count;
+			}
+			if ( $added ) {
+				return 1;
+			}
+		}
+
+		$count = (int) get_transient( $key ) + 1;
+		set_transient( $key, $count, $window );
+		return $count;
 	}
 
 	/**

@@ -46,7 +46,7 @@ jobs:
       - uses: shivammathur/setup-php@v2
         with:
           php-version: "8.1"
-          extensions: mysqli, zip
+          extensions: mysqli, pdo_sqlite, sqlite3, zip
       - name: Install Composer dependencies
         run: composer install --no-interaction --prefer-dist
       - name: Validate Composer metadata
@@ -55,6 +55,8 @@ jobs:
         run: composer audit:composer
       - name: PHP lint
         run: composer lint:all
+      - name: Load query budget smoke
+        run: php floppy/tests/load/run-query-budget.php --scenario=10k --format=json
       - name: Install WordPress test suite
         run: |
           curl -fsSL https://raw.githubusercontent.com/wp-cli/scaffold-command/main/templates/install-wp-tests.sh \

@@ -1,3 +1,4 @@
+import CryptoKit
 import FileProvider
 import Foundation
 import FloppyCore
@@ -210,7 +211,12 @@ final class FloppyFileProviderExtension: NSObject, NSFileProviderReplicatedExten
                             progress.completedUnitCount = total > 0 ? min(Int64(99), Int64(Double(sent) / Double(total) * 99.0)) : 0
                         }
                     } catch FloppyAPIError.httpStatus(let status, _) where status == 409 || status == 428 {
-                        let conflictItem = try await createLocalConflict(for: current, editedURL: newContents, contentType: item.contentType)
+                        let conflictItem = try await createLocalConflict(
+                            for: current,
+                            editedURL: newContents,
+                            contentType: item.contentType,
+                            reason: "HTTP \(status) while replacing a stale Finder edit."
+                        )
                         try? await refreshParent(parentID: current.parentID, apiClient: apiClient)
                         await signalEnumerators()
                         progress.completedUnitCount = 100
@@ -318,7 +324,7 @@ final class FloppyFileProviderExtension: NSObject, NSFileProviderReplicatedExten
         FloppyFileProviderItem(item: item, parentItemIdentifier: await parentIdentifier(for: item))
     }
 
-    private func createLocalConflict(for original: FloppyItem, editedURL: URL, contentType: UTType?) async throws -> FloppyItem {
+    private func createLocalConflict(for original: FloppyItem, editedURL: URL, contentType: UTType?, reason: String) async throws -> FloppyItem {
         let uuid = "local-conflict-\(UUID().uuidString)"
         let filename = Self.conflictFilename(for: original.name)
         let localURL = try await ledger.conflictFileURL(uuid: uuid, filename: filename)
@@ -326,6 +332,10 @@ final class FloppyFileProviderExtension: NSObject, NSFileProviderReplicatedExten
             try FileManager.default.removeItem(at: localURL)
         }
         try FileManager.default.copyItem(at: editedURL, to: localURL)
+        guard try Self.filesMatch(editedURL, localURL) else {
+            try? FileManager.default.removeItem(at: localURL)
+            throw NSFileProviderError(.cannotSynchronize)
+        }
 
         let size = (try? FileManager.default.attributesOfItem(atPath: localURL.path)[.size] as? NSNumber)?.int64Value
         let conflictItem = FloppyItem(
@@ -351,7 +361,7 @@ final class FloppyFileProviderExtension: NSObject, NSFileProviderReplicatedExten
         let conflict = FloppyConflict(
             accountID: "",
             itemUUID: conflictItem.uuid,
-            message: "Local edit preserved after the server copy changed.",
+            message: reason,
             displayName: filename,
             parentID: original.parentID,
             parentUUID: original.parentUUID,
@@ -372,9 +382,11 @@ final class FloppyFileProviderExtension: NSObject, NSFileProviderReplicatedExten
         guard let manager = NSFileProviderManager(for: domain) else {
             return
         }
-        var identifiers = [NSFileProviderItemIdentifier.workingSet]
-        identifiers.append(contentsOf: await ledger.activeEnumeratorIdentifiers().map { NSFileProviderItemIdentifier($0) })
-        for identifier in identifiers {
+        let signalPlan = FloppyEnumeratorSignalPlan(
+            workingSetIdentifier: NSFileProviderItemIdentifier.workingSet.rawValue,
+            activeEnumerators: await ledger.activeEnumeratorIdentifiers()
+        )
+        for identifier in signalPlan.rawIdentifiers.map({ NSFileProviderItemIdentifier($0) }) {
             do {
                 try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
                     manager.signalEnumerator(for: identifier) { error in
@@ -432,6 +444,26 @@ final class FloppyFileProviderExtension: NSObject, NSFileProviderReplicatedExten
         formatter.dateFormat = "yyyy-MM-dd HH:mm:ss"
         return formatter
     }()
+
+    private static func filesMatch(_ lhs: URL, _ rhs: URL) throws -> Bool {
+        try fileSize(lhs) == fileSize(rhs) && fileDigest(lhs) == fileDigest(rhs)
+    }
+
+    private static func fileSize(_ url: URL) throws -> UInt64 {
+        let attributes = try FileManager.default.attributesOfItem(atPath: url.path)
+        return (attributes[.size] as? NSNumber)?.uint64Value ?? 0
+    }
+
+    private static func fileDigest(_ url: URL) throws -> SHA256.Digest {
+        let handle = try FileHandle(forReadingFrom: url)
+        defer { try? handle.close() }
+
+        var hasher = SHA256()
+        while let chunk = try handle.read(upToCount: 1024 * 1024), !chunk.isEmpty {
+            hasher.update(data: chunk)
+        }
+        return hasher.finalize()
+    }
 }
 
 private extension NSFileProviderItemVersion {

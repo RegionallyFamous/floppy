@@ -185,6 +185,81 @@ import Testing
     #expect(FloppyFileProviderIdentifierCodec.itemUUID(from: "floppy:item:12") == nil)
 }
 
+@Test func enumeratorSignalPlanDeduplicatesWorkingSetAndActiveFolders() throws {
+    let plan = FloppyEnumeratorSignalPlan(
+        workingSetIdentifier: "working-set",
+        activeEnumerators: ["folder-a", "working-set", "", "folder-b", "folder-a"]
+    )
+
+    #expect(plan.rawIdentifiers == ["working-set", "folder-a", "folder-b"])
+}
+
+@Test func diagnosticsBundleV2RedactsCorrelationAndAccountSecrets() throws {
+    let account = FloppyAccount(
+        siteURL: URL(string: "https://user:password@example.com/wp?token=secret#fragment")!,
+        restURL: URL(string: "https://example.com/wp-json/floppy/v1?token=secret")!,
+        userHint: "admin@example.com",
+        deviceUUID: "device-secret-uuid",
+        scope: "files:read,files:write",
+        lastCursor: 42
+    )
+    let bundle = FloppyMacDiagnosticsBundleV2(
+        createdAt: "2026-05-22T00:00:00Z",
+        support: FloppyDiagnostics.supportCorrelation(account: account, domainIdentifier: "floppy-device-secret-uuid"),
+        app: FloppyMacDiagnosticsAppInfo(version: "dev", bundleID: "com.floppy.mac"),
+        selectedAccount: FloppyMacDiagnosticsSelectedAccount(account: account, lastSyncAt: ""),
+        ledger: FloppyMacDiagnosticsLedgerInfo(
+            path: FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support/FloppyMac/ledger.sqlite").path,
+            accounts: 1,
+            items: 0,
+            pendingOperations: 0,
+            conflicts: 0,
+            activeEnumerators: [],
+            conflictDiagnostics: .empty(accountID: account.id),
+            integrity: .empty(accountID: account.id)
+        ),
+        domains: [
+            [
+                "domain_identifier_fingerprint": FloppyDiagnostics.redactedFingerprint("floppy-device-secret-uuid"),
+                "account_fingerprint": FloppyDiagnostics.redactedFingerprint(account.id),
+                "site_url": FloppyDiagnostics.redactedURL(account.siteURL),
+                "rest_url": FloppyDiagnostics.redactedURL(account.restURL),
+                "display_name": "Floppy - example.com"
+            ]
+        ],
+        keychain: FloppyMacDiagnosticsKeychainInfo(
+            availableForSelectedAccount: true,
+            accessGroupConfigured: true,
+            dataProtectionKeychain: true,
+            interactivePromptsDisabled: true
+        ),
+        onboarding: FloppyMacDiagnosticsOnboardingInfo(step: "idle", hasPendingState: false, pluginMainFile: "floppy/floppy.php"),
+        fileProvider: FloppyFileProviderLifecycleDiagnostic(
+            state: .configured,
+            message: "ready",
+            domainIdentifierFingerprint: FloppyDiagnostics.redactedFingerprint("floppy-device-secret-uuid"),
+            displayName: "Floppy - example.com",
+            readinessStatus: "ready",
+            registeredInLocalRegistry: true,
+            keychainTokenAvailable: true,
+            ledgerOK: true,
+            activeEnumeratorCount: 0
+        ),
+        lastStatus: "Ready"
+    )
+
+    let data = try JSONEncoder.floppy.encode(bundle)
+    let json = String(data: data, encoding: .utf8) ?? ""
+
+    #expect(json.contains("\"format\":\"floppy-mac-diagnostics-v2\""))
+    #expect(json.contains("correlation_id"))
+    #expect(json.contains("device_uuid_fingerprint"))
+    #expect(!json.contains("device-secret-uuid"))
+    #expect(!json.contains("password"))
+    #expect(!json.contains("token=secret"))
+    #expect(!json.contains(FileManager.default.homeDirectoryForCurrentUser.path))
+}
+
 @Test func downloadOriginPolicyRejectsForeignHosts() throws {
     let policy = FloppyDownloadOriginPolicy(
         siteURL: URL(string: "https://example.com")!,
@@ -293,6 +368,54 @@ import Testing
     #expect(conflictCount == 1)
     #expect(activeEnumerators == ["floppy:item:folder-uuid"])
     #expect(storedURL?.path == materializedURL.path)
+}
+
+@Test func sqliteLedgerReportsIntegrityAndConflictDiagnostics() async throws {
+    let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: directory) }
+
+    let account = FloppyAccount(
+        siteURL: URL(string: "https://example.com")!,
+        restURL: URL(string: "https://example.com/wp-json/floppy/v1")!,
+        userHint: "admin",
+        deviceUUID: "device-uuid",
+        scope: "files:read,files:write"
+    )
+    let ledger = LocalLedger(fileURL: directory.appendingPathComponent("ledger.sqlite"))
+    try await ledger.upsert(account: account)
+
+    let item = sampleItem(uuid: "file-uuid", id: 12, name: "hello.txt")
+    let missingMaterializedURL = directory.appendingPathComponent("missing-materialized.txt")
+    try await ledger.markMaterialized(item: item, localURL: missingMaterializedURL)
+
+    let missingConflictURL = directory.appendingPathComponent("missing-conflict.txt")
+    let conflictItem = sampleItem(uuid: "local-conflict-\(UUID().uuidString)", id: -1, name: "hello (Floppy conflict 2026-05-22 10.00.00).txt")
+    let conflict = FloppyConflict(
+        accountID: "",
+        itemUUID: conflictItem.uuid,
+        message: "HTTP 409 while replacing a stale Finder edit.",
+        displayName: conflictItem.name,
+        parentID: conflictItem.parentID,
+        parentUUID: conflictItem.parentUUID,
+        materializedPath: missingConflictURL.path,
+        originalContentVersion: "cv"
+    )
+    try await ledger.recordConflict(conflict: conflict, item: conflictItem, localURL: missingConflictURL, accountID: account.id)
+    await ledger.recordActiveEnumerator("floppy:item:folder-uuid")
+
+    let conflictDiagnostics = await ledger.conflictDiagnostics(accountID: account.id)
+    let integrity = await ledger.integrityReport(accountID: account.id)
+    await ledger.close()
+
+    #expect(conflictDiagnostics.openCount == 1)
+    #expect(conflictDiagnostics.missingMaterializedOpenCount == 1)
+    #expect(conflictDiagnostics.reasons.first?.reason == "HTTP 409 while replacing a stale Finder edit.")
+    #expect(integrity.ok == false)
+    #expect(integrity.counts.items == 2)
+    #expect(integrity.counts.activeEnumerators == 1)
+    #expect(integrity.issues.contains { $0.code == "missing_materialized_files" })
+    #expect(integrity.issues.contains { $0.code == "missing_conflict_files" })
 }
 
 @Test func nativeFolderReadinessRequiresEmbeddedExtensionAndAppGroupEntitlement() throws {

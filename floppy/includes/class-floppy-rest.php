@@ -46,6 +46,36 @@ final class Floppy_Rest {
 
 		register_rest_route(
 			self::NAMESPACE,
+			'/maintenance/deep-health',
+			array(
+				'methods'             => WP_REST_Server::READABLE,
+				'callback'            => array( __CLASS__, 'deep_health' ),
+				'permission_callback' => array( __CLASS__, 'require_admin' ),
+			)
+		);
+
+		register_rest_route(
+			self::NAMESPACE,
+			'/maintenance/repair',
+			array(
+				'methods'             => WP_REST_Server::READABLE . ',' . WP_REST_Server::CREATABLE,
+				'callback'            => array( __CLASS__, 'maintenance_repair' ),
+				'permission_callback' => array( __CLASS__, 'require_admin' ),
+			)
+		);
+
+		register_rest_route(
+			self::NAMESPACE,
+			'/debug-bundle',
+			array(
+				'methods'             => WP_REST_Server::READABLE,
+				'callback'            => array( __CLASS__, 'debug_bundle' ),
+				'permission_callback' => array( __CLASS__, 'require_admin' ),
+			)
+		);
+
+		register_rest_route(
+			self::NAMESPACE,
 			'/files',
 			array(
 				'methods'             => WP_REST_Server::READABLE,
@@ -330,7 +360,48 @@ final class Floppy_Rest {
 	 * Health endpoint.
 	 */
 	public static function health(): WP_REST_Response {
-		return new WP_REST_Response( Floppy_Compatibility::summary() );
+		return new WP_REST_Response(
+			array_merge(
+				Floppy_Compatibility::summary(),
+				array( 'support' => Floppy_Diagnostics::support_block() )
+			)
+		);
+	}
+
+	/**
+	 * Deep admin-only maintenance health.
+	 */
+	public static function deep_health(): WP_REST_Response {
+		return new WP_REST_Response( Floppy_Diagnostics::deep_health() );
+	}
+
+	/**
+	 * Admin-only repair dry run or execution.
+	 */
+	public static function maintenance_repair( WP_REST_Request $request ): WP_REST_Response {
+		$apply = WP_REST_Server::CREATABLE === $request->get_method() && rest_sanitize_boolean( $request->get_param( 'apply' ) );
+		$report = Floppy_Schema::repair( $apply );
+
+		if ( $apply ) {
+			Floppy_Audit::log( 'maintenance.repair_applied', 'maintenance', 0, '', array( 'support_id' => Floppy_Diagnostics::correlation_id() ) );
+		}
+
+		return new WP_REST_Response(
+			array(
+				'format'         => 'floppy-repair-report-v2',
+				'support'        => Floppy_Diagnostics::support_block(),
+				'apply'          => $apply,
+				'report'         => $report,
+			)
+		);
+	}
+
+	/**
+	 * Admin-only redacted debug bundle.
+	 */
+	public static function debug_bundle(): WP_REST_Response {
+		Floppy_Audit::log( 'maintenance.debug_bundle_downloaded', 'maintenance', 0, '', array( 'support_id' => Floppy_Diagnostics::correlation_id() ) );
+		return new WP_REST_Response( Floppy_Diagnostics::debug_bundle() );
 	}
 
 	/**

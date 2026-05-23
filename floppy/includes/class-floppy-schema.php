@@ -306,8 +306,13 @@ final class Floppy_Schema {
 			'apply'                     => $apply,
 			'item_names'                => self::repair_item_name_reservations( $apply ),
 			'orphaned_name_reservations' => self::repair_orphaned_name_reservations( $apply ),
+			'orphaned_acl_grants'       => self::repair_orphaned_acl_grants( $apply ),
 			'stale_upload_sessions'     => self::repair_stale_upload_sessions( $apply ),
 			'attachment_links'          => self::repair_attachment_links( $apply ),
+			'missing_tombstones'        => self::repair_missing_tombstones( $apply ),
+			'blob_integrity'            => self::inspect_blob_integrity(),
+			'sync_event_continuity'     => self::inspect_sync_event_continuity(),
+			'quota_usage'               => self::inspect_quota_usage(),
 			'orphaned_blobs'            => self::inspect_orphaned_blobs(),
 		);
 	}
@@ -402,6 +407,39 @@ final class Floppy_Schema {
 	}
 
 	/**
+	 * Remove ACL grants whose target no longer exists or is deleted.
+	 */
+	private static function repair_orphaned_acl_grants( bool $apply ): array {
+		global $wpdb;
+
+		$table = self::table( 'acl_grants' );
+		$rows = $wpdb->get_results( "SELECT id, target_type, target_id FROM $table LIMIT 2000", ARRAY_A ); // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared
+		$orphans = 0;
+		foreach ( $rows as $row ) {
+			$source = 'folder' === $row['target_type'] ? self::table( 'folders' ) : self::table( 'files' );
+			$target = $wpdb->get_var(
+				$wpdb->prepare(
+					"SELECT id FROM $source WHERE id = %d AND status != 'deleted' LIMIT 1", // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared
+					(int) $row['target_id']
+				)
+			);
+			if ( $target ) {
+				continue;
+			}
+
+			++$orphans;
+			if ( $apply ) {
+				$wpdb->delete( $table, array( 'id' => (int) $row['id'] ), array( '%d' ) );
+			}
+		}
+
+		return array(
+			'orphaned'     => $orphans,
+			'scan_limited' => count( $rows ) >= 2000,
+		);
+	}
+
+	/**
 	 * Clean expired upload-session rows and temporary blobs.
 	 */
 	private static function repair_stale_upload_sessions( bool $apply ): array {
@@ -455,6 +493,118 @@ final class Floppy_Schema {
 		}
 
 		return array( 'drifted' => $drift );
+	}
+
+	/**
+	 * Create missing tombstones for deleted files/folders.
+	 */
+	private static function repair_missing_tombstones( bool $apply ): array {
+		global $wpdb;
+
+		$missing = 0;
+		foreach ( array( 'folders' => 'folder', 'files' => 'file' ) as $source => $target_type ) {
+			$rows = $wpdb->get_results(
+				'SELECT id, owner_id FROM ' . self::table( $source ) . " WHERE status = 'deleted' LIMIT 1000",
+				ARRAY_A
+			); // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared
+			foreach ( $rows as $row ) {
+				$exists = (int) $wpdb->get_var(
+					$wpdb->prepare(
+						'SELECT id FROM ' . self::table( 'tombstones' ) . ' WHERE target_type = %s AND target_id = %d LIMIT 1',
+						$target_type,
+						(int) $row['id']
+					)
+				);
+				if ( $exists ) {
+					continue;
+				}
+
+				++$missing;
+				if ( $apply ) {
+					$sync_seq = (int) $wpdb->get_var(
+						$wpdb->prepare(
+							'SELECT MAX(seq) FROM ' . self::table( 'sync_events' ) . ' WHERE target_type = %s AND target_id = %d',
+							$target_type,
+							(int) $row['id']
+						)
+					);
+					Floppy_Sync::tombstone( $target_type, (int) $row['id'], (int) $row['owner_id'], $sync_seq );
+				}
+			}
+		}
+
+		return array( 'missing' => $missing );
+	}
+
+	/**
+	 * Inspect private blob existence, size, and hashes without returning paths.
+	 */
+	private static function inspect_blob_integrity(): array {
+		global $wpdb;
+
+		$rows = $wpdb->get_results(
+			'SELECT id, storage_key, size_bytes, content_hash FROM ' . self::table( 'files' ) . " WHERE status != 'deleted' AND storage_key != '' LIMIT 1000",
+			ARRAY_A
+		); // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared
+		$missing = 0;
+		$size_mismatches = 0;
+		$hash_mismatches = 0;
+		foreach ( $rows as $row ) {
+			$path = Floppy_Storage::path_for_key( (string) $row['storage_key'] );
+			if ( ! is_readable( $path ) ) {
+				++$missing;
+				continue;
+			}
+			$size = filesize( $path );
+			if ( false !== $size && (int) $size !== (int) $row['size_bytes'] ) {
+				++$size_mismatches;
+			}
+			$hash = hash_file( 'sha256', $path );
+			if ( is_string( $hash ) && '' !== (string) $row['content_hash'] && $hash !== (string) $row['content_hash'] ) {
+				++$hash_mismatches;
+			}
+		}
+
+		return array(
+			'scanned'         => count( $rows ),
+			'missing'         => $missing,
+			'size_mismatches' => $size_mismatches,
+			'hash_mismatches' => $hash_mismatches,
+			'scan_limited'    => count( $rows ) >= 1000,
+		);
+	}
+
+	/**
+	 * Inspect sync sequence continuity without reading payloads.
+	 */
+	private static function inspect_sync_event_continuity(): array {
+		global $wpdb;
+
+		$row = $wpdb->get_row( 'SELECT MIN(seq) AS min_seq, MAX(seq) AS max_seq, COUNT(*) AS total FROM ' . self::table( 'sync_events' ), ARRAY_A ); // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared
+		$min = (int) ( $row['min_seq'] ?? 0 );
+		$max = (int) ( $row['max_seq'] ?? 0 );
+		$total = (int) ( $row['total'] ?? 0 );
+
+		return array(
+			'min_seq' => $min,
+			'max_seq' => $max,
+			'total'   => $total,
+			'gaps'    => $min && $max ? max( 0, ( $max - $min + 1 ) - $total ) : 0,
+		);
+	}
+
+	/**
+	 * Summarize quota-impacting metadata.
+	 */
+	private static function inspect_quota_usage(): array {
+		global $wpdb;
+
+		return array(
+			'active_files'   => (int) $wpdb->get_var( 'SELECT COUNT(*) FROM ' . self::table( 'files' ) . " WHERE status != 'deleted'" ), // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared
+			'active_folders' => (int) $wpdb->get_var( 'SELECT COUNT(*) FROM ' . self::table( 'folders' ) . " WHERE status != 'deleted'" ), // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared
+			'active_bytes'   => (int) $wpdb->get_var( 'SELECT COALESCE(SUM(size_bytes),0) FROM ' . self::table( 'files' ) . " WHERE status != 'deleted'" ), // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared
+			'deleted_bytes'  => (int) $wpdb->get_var( 'SELECT COALESCE(SUM(size_bytes),0) FROM ' . self::table( 'files' ) . " WHERE status = 'deleted'" ), // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared
+		);
 	}
 
 	/**

@@ -61,11 +61,13 @@ enum FileProviderDomainController {
         let domainLedger = LocalLedger(appGroupIdentifier: FloppyDomainRegistry.appGroupIdentifier, domainIdentifier: record.domainIdentifier)
         let activeIdentifiers = await domainLedger.activeEnumeratorIdentifiers()
         await domainLedger.close()
-        var identifiers = [NSFileProviderItemIdentifier.workingSet]
-        identifiers.append(contentsOf: activeIdentifiers.map { NSFileProviderItemIdentifier($0) })
+        let signalPlan = FloppyEnumeratorSignalPlan(
+            workingSetIdentifier: NSFileProviderItemIdentifier.workingSet.rawValue,
+            activeEnumerators: activeIdentifiers
+        )
 
         do {
-            for identifier in identifiers {
+            for identifier in signalPlan.rawIdentifiers.map({ NSFileProviderItemIdentifier($0) }) {
                 try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
                     manager.signalEnumerator(for: identifier) { error in
                         if let error {
@@ -76,10 +78,67 @@ enum FileProviderDomainController {
                     }
                 }
             }
-            FloppyDiagnostics.fileProvider.info("Signaled File Provider working set for \(record.domainIdentifier, privacy: .public)")
+            FloppyDiagnostics.fileProvider.info("Signaled \(signalPlan.rawIdentifiers.count, privacy: .public) File Provider enumerator(s) for \(record.domainIdentifier, privacy: .public)")
         } catch {
             FloppyDiagnostics.fileProvider.error("File Provider signal failed: \(error.localizedDescription, privacy: .public)")
         }
+    }
+
+    static func lifecycleDiagnostic(account: FloppyAccount?, keychainAvailable: Bool) async -> FloppyFileProviderLifecycleDiagnostic {
+        guard let account else {
+            let readiness = readiness()
+            return FloppyFileProviderLifecycleDiagnostic(
+                state: .unconfigured,
+                message: "No Floppy account is selected.",
+                domainIdentifierFingerprint: "",
+                displayName: "",
+                readinessStatus: readiness.status.rawValue,
+                registeredInLocalRegistry: false,
+                keychainTokenAvailable: false,
+                ledgerOK: true,
+                activeEnumeratorCount: 0
+            )
+        }
+
+        let record = FloppyDomainRegistry.record(for: account)
+        let readiness = readiness()
+        let registeredInLocalRegistry = (try? FloppyDomainRegistry.load(domainIdentifier: record.domainIdentifier)) != nil
+        let domainLedger = LocalLedger(appGroupIdentifier: FloppyDomainRegistry.appGroupIdentifier, domainIdentifier: record.domainIdentifier)
+        let integrity = await domainLedger.integrityReport(accountID: account.id)
+        let activeEnumeratorIdentifiers = await domainLedger.activeEnumeratorIdentifiers()
+        let activeEnumeratorCount = activeEnumeratorIdentifiers.count
+        await domainLedger.close()
+
+        let state: FloppyFileProviderLifecycleState
+        let message: String
+        if !readiness.isReady {
+            state = .nativeFolderNotReady
+            message = readiness.message
+        } else if !keychainAvailable {
+            state = .missingToken
+            message = "Reconnect this site to create a new Keychain token."
+        } else if !registeredInLocalRegistry {
+            state = .registryMissing
+            message = "The File Provider domain is not present in Floppy's local registry."
+        } else if !integrity.ok {
+            state = .needsLedgerRepair
+            message = "The File Provider ledger needs repair before it can be trusted."
+        } else {
+            state = .configured
+            message = "The File Provider domain is configured and ready for Finder sync."
+        }
+
+        return FloppyFileProviderLifecycleDiagnostic(
+            state: state,
+            message: message,
+            domainIdentifierFingerprint: FloppyDiagnostics.redactedFingerprint(record.domainIdentifier),
+            displayName: record.displayName,
+            readinessStatus: readiness.status.rawValue,
+            registeredInLocalRegistry: registeredInLocalRegistry,
+            keychainTokenAvailable: keychainAvailable,
+            ledgerOK: integrity.ok,
+            activeEnumeratorCount: activeEnumeratorCount
+        )
     }
 
     static func userVisibleRootURL(account: FloppyAccount) async throws -> URL {

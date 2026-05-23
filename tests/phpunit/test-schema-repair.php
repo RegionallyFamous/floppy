@@ -68,6 +68,63 @@ final class Floppy_Schema_Repair_Test extends WP_UnitTestCase {
 		$this->assertNotEmpty( $reservation );
 	}
 
+	public function test_repair_reports_blob_integrity_without_private_paths(): void {
+		$file = $this->insert_private_file( 'repair me' );
+		@unlink( Floppy_Storage::path_for_key( $file['storage_key'] ) ); // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged
+
+		$report = Floppy_Schema::repair( false );
+		$json = wp_json_encode( $report );
+
+		$this->assertGreaterThanOrEqual( 1, $report['blob_integrity']['missing'] );
+		$this->assertStringNotContainsString( $file['storage_key'], $json );
+		$this->assertStringNotContainsString( Floppy_Storage::path_for_key( $file['storage_key'] ), $json );
+	}
+
+	public function test_repair_apply_creates_missing_tombstones_and_removes_orphaned_acl_grants(): void {
+		global $wpdb;
+
+		$file = $this->insert_private_file( 'repair me' );
+		$wpdb->update(
+			Floppy_Schema::table( 'files' ),
+			array( 'status' => 'deleted', 'deleted_at_gmt' => current_time( 'mysql', true ) ),
+			array( 'id' => $file['id'] ),
+			array( '%s', '%s' ),
+			array( '%d' )
+		);
+		$wpdb->insert(
+			Floppy_Schema::table( 'acl_grants' ),
+			array(
+				'target_type'    => 'file',
+				'target_id'      => 999999,
+				'principal_type' => 'user',
+				'principal_ref'  => (string) $this->user_id,
+				'capability'     => 'read',
+				'state'          => 'accepted',
+				'created_by'     => $this->user_id,
+				'created_at_gmt' => current_time( 'mysql', true ),
+				'updated_at_gmt' => current_time( 'mysql', true ),
+			),
+			array( '%s', '%d', '%s', '%s', '%s', '%s', '%d', '%s', '%s' )
+		);
+
+		$dry_run = Floppy_Schema::repair( false );
+		$applied = Floppy_Schema::repair( true );
+		$tombstone = (int) $wpdb->get_var(
+			$wpdb->prepare(
+				'SELECT id FROM ' . Floppy_Schema::table( 'tombstones' ) . ' WHERE target_type = %s AND target_id = %d',
+				'file',
+				$file['id']
+			)
+		);
+		$acl_count = (int) $wpdb->get_var( 'SELECT COUNT(*) FROM ' . Floppy_Schema::table( 'acl_grants' ) ); // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared
+
+		$this->assertGreaterThanOrEqual( 1, $dry_run['missing_tombstones']['missing'] );
+		$this->assertGreaterThanOrEqual( 1, $dry_run['orphaned_acl_grants']['orphaned'] );
+		$this->assertTrue( $applied['apply'] );
+		$this->assertGreaterThan( 0, $tombstone );
+		$this->assertSame( 0, $acl_count );
+	}
+
 	private function truncate_floppy_tables(): void {
 		global $wpdb;
 

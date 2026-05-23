@@ -149,6 +149,22 @@ final class Floppy_Storage {
 	}
 
 	/**
+	 * Return support-safe host guidance for private-storage protection.
+	 */
+	public static function private_storage_probe_matrix(): array {
+		$probe = self::private_storage_status();
+		$server = self::server_family();
+
+		return array(
+			'probe'             => $probe,
+			'server_family'     => $server,
+			'protected_path'    => 'wp-content/uploads/' . self::PRIVATE_DIR . '/',
+			'local_development' => self::allows_unprotected_storage_for_local_development(),
+			'recommended_fixes' => self::private_storage_fixes_for_server( $server ),
+		);
+	}
+
+	/**
 	 * Return a WP_Error when private storage is not enforceable.
 	 */
 	public static function require_private_mode() {
@@ -190,6 +206,59 @@ final class Floppy_Storage {
 		}
 
 		return (bool) apply_filters( 'floppy_allow_unprotected_local_storage', $allowed );
+	}
+
+	/**
+	 * Detect broad server family for diagnostics.
+	 */
+	private static function server_family(): string {
+		$software = isset( $_SERVER['SERVER_SOFTWARE'] ) ? strtolower( sanitize_text_field( wp_unslash( $_SERVER['SERVER_SOFTWARE'] ) ) ) : ''; // phpcs:ignore WordPress.Security.ValidatedSanitizedInput.InputNotSanitized
+		$host = strtolower( (string) wp_parse_url( home_url(), PHP_URL_HOST ) );
+
+		if ( false !== strpos( $host, 'localhost' ) || self::is_loopback_site() ) {
+			return 'studio_or_loopback';
+		}
+		if ( false !== strpos( $software, 'nginx' ) ) {
+			return 'nginx';
+		}
+		if ( false !== strpos( $software, 'apache' ) || false !== strpos( $software, 'litespeed' ) ) {
+			return 'apache';
+		}
+		if ( false !== strpos( $software, 'iis' ) ) {
+			return 'iis';
+		}
+
+		return 'unknown';
+	}
+
+	/**
+	 * Return concise direct-access remediation steps without exposing local paths.
+	 */
+	private static function private_storage_fixes_for_server( string $server ): array {
+		$common = array(
+			__( 'Keep all file, preview, and thumbnail access behind authenticated Floppy REST endpoints.', 'floppy' ),
+			__( 'Re-run the Floppy private-storage probe after changing host rules.', 'floppy' ),
+		);
+
+		if ( 'nginx' === $server ) {
+			array_unshift( $common, __( 'Add a location block that denies access to /wp-content/uploads/floppy-private/.', 'floppy' ) );
+			return $common;
+		}
+		if ( 'apache' === $server ) {
+			array_unshift( $common, __( 'Ensure .htaccess files are honored and deny all access under wp-content/uploads/floppy-private/.', 'floppy' ) );
+			return $common;
+		}
+		if ( 'iis' === $server ) {
+			array_unshift( $common, __( 'Ensure web.config denies anonymous access under wp-content/uploads/floppy-private/.', 'floppy' ) );
+			return $common;
+		}
+		if ( 'studio_or_loopback' === $server ) {
+			array_unshift( $common, __( 'Loopback development may warn instead of fail; production sites must block the private upload path.', 'floppy' ) );
+			return $common;
+		}
+
+		array_unshift( $common, __( 'Configure your web server to deny direct HTTP access to /wp-content/uploads/floppy-private/.', 'floppy' ) );
+		return $common;
 	}
 
 	/**

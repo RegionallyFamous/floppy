@@ -1,4 +1,4 @@
-# Floppy Load Fixtures
+# Floppy Load Fixtures And Query Budgets
 
 This directory owns CLI-oriented scale fixtures for Floppy metadata. The goal is
 to exercise private-by-default file metadata, Desktop Mode app state, and macOS
@@ -43,16 +43,42 @@ Each row represents one private file metadata record:
 The data is deterministic for a given `--seed`, so failures can be reproduced
 with the exact same command.
 
+## Query Budget Runner
+
+`run-query-budget.php` is the real acceptance harness for this directory. It
+streams the deterministic JSONL fixture into SQLite, creates Floppy-like indexes,
+runs representative metadata hot paths, records query plans, and exits non-zero
+when budgets or index-use expectations fail.
+
+```sh
+php floppy/tests/load/run-query-budget.php --scenario=10k
+php floppy/tests/load/run-query-budget.php --scenario=100k --format=json
+php floppy/tests/load/run-query-budget.php --scenario=1m --iterations=5 --keep-db --db=/tmp/floppy-load.sqlite
+```
+
+The runner covers:
+
+- Owner folder listing with stable cursor-style ordering.
+- Exact path lookup for materialization and download checks.
+- Prefix filename search for large-folder search behavior.
+- Sync-delta enumeration for Desktop Mode and Finder clients.
+- Conflict listing for diagnostics.
+- Quota rollup and repair dry-run count queries for maintenance paths.
+
+Reports include scenario, record count, seed, import duration, query p95, query
+plans, peak memory, and budget failures. JSON output is intended for CI artifacts
+and release notes; text output is easier for local profiling.
+
 ## Acceptance Targets
 
 These targets are initial budgets for Floppy load work. They should be tightened
 after real schema and production hardware baselines exist.
 
-| Scenario | Generator target | Metadata/API target | Sync target |
-| --- | --- | --- | --- |
-| `10k` | Describe instantly; seed JSONL in under 5 seconds on a developer laptop. | First page, owner-filtered page, and exact path lookup p95 under 150 ms. | Delta scan for 1,000 changed rows under 1 second. |
-| `100k` | Seed JSONL/CSV in under 30 seconds and SQL without memory growth above 128 MB. | Indexed list/search p95 under 250 ms with stable pagination. | Desktop/Finder delta scan for 5,000 changed rows under 3 seconds. |
-| `1m` | Stream fixture output without OOM; direct SQL import should remain batchable and resumable. | Indexed owner/path/sync-state queries p95 under 500 ms; no full-table scan on hot paths. | Delta scan for 25,000 changed rows under 10 seconds and conflict listing under 2 seconds. |
+| Scenario | Required gate | Import target | Metadata/API target | Sync target |
+| --- | --- | --- | --- | --- |
+| `10k` | Every branch and PR. | Import in under 20 seconds with peak memory under 192 MB. | Hot list/search/path queries p95 under 150 ms with indexed plans. | Sync-delta query p95 under 1 second. |
+| `100k` | Required before public beta tagging. | Import in under 60 seconds with peak memory under 256 MB. | Hot list/search/path queries p95 under 250 ms with indexed plans. | Sync-delta query p95 under 3 seconds. |
+| `1m` | Release rehearsal and stress-path review. | Import in under 10 minutes with peak memory under 512 MB. | Hot owner/path/sync-state queries p95 under 500 ms and no full-table scan on hot paths. | Sync-delta query p95 under 10 seconds and conflict listing under 2 seconds. |
 
 Minimum pass criteria:
 
@@ -63,10 +89,15 @@ Minimum pass criteria:
 - Import runs can be repeated with the same seed and produce the same row ids.
 - Test results report scenario, record count, seed, import duration, query p95,
   peak memory, and database/index notes.
+- Hot-path query plans must use an index; full table scans fail the budget.
 
-## Next Harness Steps
+## Release Workflow
 
-Once the plugin schema exists, add thin wrappers outside this fixture generator
-that import the JSONL/CSV/SQL into the chosen store, run query plans, and record
-timings. Keep this file focused on the portable metadata fixture so load tests
-can run before WordPress is available.
+Use `10k` in CI as the fast regression guard. Run `100k` locally or in a release
+job before cutting a public beta. Run `1m` before major schema/index changes and
+attach the JSON report to the release issue.
+
+The SQLite harness is not a substitute for WordPress/MySQL integration tests. It
+is the first gate: if these query shapes regress here, the branch is not ready
+for the heavier WordPress REST, sync torture, export/restore, and Mac revoke
+drills.

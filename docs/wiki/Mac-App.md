@@ -38,7 +38,9 @@ After sync, conflict creation, upload completion, delete, move, and rename, the 
 ## Diagnostics
 
 - Settings can export a redacted JSON diagnostics bundle.
-- The bundle includes app version, selected account, redacted site/rest origins, Keychain availability, domain registry, ledger path, cursor, pending/conflict counts, active enumerators, and onboarding status.
+- The bundle includes app version, `support_correlation_id`, selected account, redacted site/rest origins, Keychain availability, domain registry, ledger path, cursor, pending/conflict counts, active enumerators, last sync error, last onboarding error, and onboarding status.
+- The `support_correlation_id` must match the WordPress debug bundle used for the same support case.
+- Tokens, application passwords, URL query strings, and private local paths stay redacted.
 
 ## Xcode
 

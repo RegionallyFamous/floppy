@@ -78,6 +78,18 @@ public enum FloppyDomainRegistry {
         }.sorted { ($0["domainIdentifier"] ?? "") < ($1["domainIdentifier"] ?? "") }
     }
 
+    public static func diagnosticsSummaries() throws -> [[String: String]] {
+        try loadAll().values.map { record in
+            [
+                "domain_identifier_fingerprint": FloppyDiagnostics.redactedFingerprint(record.domainIdentifier),
+                "account_fingerprint": FloppyDiagnostics.redactedFingerprint(record.accountID),
+                "site_url": FloppyDiagnostics.redactedURL(record.siteURL),
+                "rest_url": FloppyDiagnostics.redactedURL(record.restURL),
+                "display_name": record.displayName
+            ]
+        }.sorted { ($0["domain_identifier_fingerprint"] ?? "") < ($1["domain_identifier_fingerprint"] ?? "") }
+    }
+
     public static func sharedContainerBaseURL(appGroupIdentifier: String = Self.appGroupIdentifier) -> URL {
         if let url = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: appGroupIdentifier) {
             return url

@@ -69,6 +69,166 @@ public struct FloppyConflict: Codable, Equatable, Identifiable, Sendable {
     }
 }
 
+public struct FloppyConflictReasonCount: Codable, Equatable, Sendable {
+    public let reason: String
+    public let count: Int
+
+    public init(reason: String, count: Int) {
+        self.reason = reason
+        self.count = count
+    }
+}
+
+public struct FloppyLedgerConflictDiagnostics: Codable, Equatable, Sendable {
+    public let accountFingerprint: String
+    public let totalCount: Int
+    public let openCount: Int
+    public let resolvedCount: Int
+    public let materializedOpenCount: Int
+    public let missingMaterializedOpenCount: Int
+    public let missingItemRecordCount: Int
+    public let reasons: [FloppyConflictReasonCount]
+
+    public init(
+        accountFingerprint: String,
+        totalCount: Int,
+        openCount: Int,
+        resolvedCount: Int,
+        materializedOpenCount: Int,
+        missingMaterializedOpenCount: Int,
+        missingItemRecordCount: Int,
+        reasons: [FloppyConflictReasonCount]
+    ) {
+        self.accountFingerprint = accountFingerprint
+        self.totalCount = totalCount
+        self.openCount = openCount
+        self.resolvedCount = resolvedCount
+        self.materializedOpenCount = materializedOpenCount
+        self.missingMaterializedOpenCount = missingMaterializedOpenCount
+        self.missingItemRecordCount = missingItemRecordCount
+        self.reasons = reasons
+    }
+
+    public static func empty(accountID: String? = nil) -> FloppyLedgerConflictDiagnostics {
+        FloppyLedgerConflictDiagnostics(
+            accountFingerprint: FloppyDiagnostics.redactedFingerprint(accountID),
+            totalCount: 0,
+            openCount: 0,
+            resolvedCount: 0,
+            materializedOpenCount: 0,
+            missingMaterializedOpenCount: 0,
+            missingItemRecordCount: 0,
+            reasons: []
+        )
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case accountFingerprint = "account_fingerprint"
+        case totalCount = "total_count"
+        case openCount = "open_count"
+        case resolvedCount = "resolved_count"
+        case materializedOpenCount = "materialized_open_count"
+        case missingMaterializedOpenCount = "missing_materialized_open_count"
+        case missingItemRecordCount = "missing_item_record_count"
+        case reasons
+    }
+}
+
+public struct FloppyLedgerIntegrityIssue: Codable, Equatable, Sendable {
+    public let code: String
+    public let severity: String
+    public let count: Int
+    public let message: String
+
+    public init(code: String, severity: String, count: Int, message: String) {
+        self.code = code
+        self.severity = severity
+        self.count = count
+        self.message = message
+    }
+}
+
+public struct FloppyLedgerIntegrityCounts: Codable, Equatable, Sendable {
+    public let accounts: Int
+    public let items: Int
+    public let pendingOperations: Int
+    public let conflicts: Int
+    public let materializedItems: Int
+    public let missingMaterializedItems: Int
+    public let activeEnumerators: Int
+
+    public init(
+        accounts: Int,
+        items: Int,
+        pendingOperations: Int,
+        conflicts: Int,
+        materializedItems: Int,
+        missingMaterializedItems: Int,
+        activeEnumerators: Int
+    ) {
+        self.accounts = accounts
+        self.items = items
+        self.pendingOperations = pendingOperations
+        self.conflicts = conflicts
+        self.materializedItems = materializedItems
+        self.missingMaterializedItems = missingMaterializedItems
+        self.activeEnumerators = activeEnumerators
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case accounts
+        case items
+        case pendingOperations = "pending_operations"
+        case conflicts
+        case materializedItems = "materialized_items"
+        case missingMaterializedItems = "missing_materialized_items"
+        case activeEnumerators = "active_enumerators"
+    }
+}
+
+public struct FloppyLedgerIntegrityReport: Codable, Equatable, Sendable {
+    public let accountFingerprint: String
+    public let ok: Bool
+    public let counts: FloppyLedgerIntegrityCounts
+    public let issues: [FloppyLedgerIntegrityIssue]
+
+    public init(
+        accountFingerprint: String,
+        ok: Bool,
+        counts: FloppyLedgerIntegrityCounts,
+        issues: [FloppyLedgerIntegrityIssue]
+    ) {
+        self.accountFingerprint = accountFingerprint
+        self.ok = ok
+        self.counts = counts
+        self.issues = issues
+    }
+
+    public static func empty(accountID: String? = nil) -> FloppyLedgerIntegrityReport {
+        FloppyLedgerIntegrityReport(
+            accountFingerprint: FloppyDiagnostics.redactedFingerprint(accountID),
+            ok: true,
+            counts: FloppyLedgerIntegrityCounts(
+                accounts: 0,
+                items: 0,
+                pendingOperations: 0,
+                conflicts: 0,
+                materializedItems: 0,
+                missingMaterializedItems: 0,
+                activeEnumerators: 0
+            ),
+            issues: []
+        )
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case accountFingerprint = "account_fingerprint"
+        case ok
+        case counts
+        case issues
+    }
+}
+
 public enum LocalLedgerError: Error, LocalizedError {
     case sqlite(String)
 
@@ -224,6 +384,26 @@ public actor LocalLedger {
         } catch {
             FloppyDiagnostics.ledger.error("Failed loading conflict count: \(error.localizedDescription, privacy: .public)")
             return 0
+        }
+    }
+
+    public func conflictDiagnostics(accountID: String? = nil) -> FloppyLedgerConflictDiagnostics {
+        do {
+            let resolvedAccountID = try defaultAccountID(accountID)
+            return try store.conflictDiagnostics(accountID: resolvedAccountID)
+        } catch {
+            FloppyDiagnostics.ledger.error("Failed loading conflict diagnostics: \(error.localizedDescription, privacy: .public)")
+            return .empty(accountID: accountID)
+        }
+    }
+
+    public func integrityReport(accountID: String? = nil) -> FloppyLedgerIntegrityReport {
+        do {
+            let resolvedAccountID = try defaultAccountID(accountID)
+            return try store.integrityReport(accountID: resolvedAccountID)
+        } catch {
+            FloppyDiagnostics.ledger.error("Failed checking ledger integrity: \(error.localizedDescription, privacy: .public)")
+            return .empty(accountID: accountID)
         }
     }
 
@@ -635,6 +815,98 @@ private final class SQLiteLedgerStore {
         return Int(sqlite3_column_int64(statement, 0))
     }
 
+    func conflictDiagnostics(accountID: String) throws -> FloppyLedgerConflictDiagnostics {
+        let totalCount = try scalarInt("SELECT COUNT(*) FROM conflicts WHERE account_id = ?", .text(accountID))
+        let openCount = try scalarInt("SELECT COUNT(*) FROM conflicts WHERE account_id = ? AND state != 'resolved'", .text(accountID))
+        let resolvedCount = try scalarInt("SELECT COUNT(*) FROM conflicts WHERE account_id = ? AND state = 'resolved'", .text(accountID))
+        let materializedPaths = try nonEmptyStrings(
+            sql: "SELECT materialized_path FROM conflicts WHERE account_id = ? AND state != 'resolved' AND materialized_path != ''",
+            bindings: [.text(accountID)]
+        )
+        let missingMaterializedOpenCount = materializedPaths.filter { !FileManager.default.fileExists(atPath: $0) }.count
+        let missingItemRecordCount = try scalarInt("""
+            SELECT COUNT(*)
+            FROM conflicts c
+            LEFT JOIN items i ON i.account_id = c.account_id AND i.uuid = c.item_uuid
+            WHERE c.account_id = ? AND c.state != 'resolved' AND i.uuid IS NULL
+            """, .text(accountID))
+        let reasons = try conflictReasonCounts(accountID: accountID)
+
+        return FloppyLedgerConflictDiagnostics(
+            accountFingerprint: FloppyDiagnostics.redactedFingerprint(accountID),
+            totalCount: totalCount,
+            openCount: openCount,
+            resolvedCount: resolvedCount,
+            materializedOpenCount: materializedPaths.count,
+            missingMaterializedOpenCount: missingMaterializedOpenCount,
+            missingItemRecordCount: missingItemRecordCount,
+            reasons: reasons
+        )
+    }
+
+    func integrityReport(accountID: String) throws -> FloppyLedgerIntegrityReport {
+        let accountCount = try scalarInt("SELECT COUNT(*) FROM accounts WHERE id = ?", .text(accountID))
+        let itemCount = try scalarInt("SELECT COUNT(*) FROM items WHERE account_id = ?", .text(accountID))
+        let pendingCount = try scalarInt("SELECT COUNT(*) FROM pending_operations WHERE account_id = ?", .text(accountID))
+        let conflictCount = try scalarInt("SELECT COUNT(*) FROM conflicts WHERE account_id = ?", .text(accountID))
+        let materializedPaths = try nonEmptyStrings(
+            sql: "SELECT materialized_url FROM items WHERE account_id = ? AND materialized_url IS NOT NULL AND materialized_url != ''",
+            bindings: [.text(accountID)]
+        )
+        let missingMaterializedItems = materializedPaths.filter { !FileManager.default.fileExists(atPath: $0) }.count
+        let conflictDiagnostics = try conflictDiagnostics(accountID: accountID)
+        let activeEnumeratorCount = try scalarInt("SELECT COUNT(*) FROM active_enumerators")
+
+        var issues: [FloppyLedgerIntegrityIssue] = []
+        if accountCount == 0 {
+            issues.append(FloppyLedgerIntegrityIssue(
+                code: "missing_account",
+                severity: "error",
+                count: 1,
+                message: "The selected account is not present in the local ledger."
+            ))
+        }
+        if missingMaterializedItems > 0 {
+            issues.append(FloppyLedgerIntegrityIssue(
+                code: "missing_materialized_files",
+                severity: "warning",
+                count: missingMaterializedItems,
+                message: "One or more materialized Finder files no longer exists on disk."
+            ))
+        }
+        if conflictDiagnostics.missingMaterializedOpenCount > 0 {
+            issues.append(FloppyLedgerIntegrityIssue(
+                code: "missing_conflict_files",
+                severity: "error",
+                count: conflictDiagnostics.missingMaterializedOpenCount,
+                message: "One or more open conflict copies is missing from local disk."
+            ))
+        }
+        if conflictDiagnostics.missingItemRecordCount > 0 {
+            issues.append(FloppyLedgerIntegrityIssue(
+                code: "conflict_missing_item_record",
+                severity: "error",
+                count: conflictDiagnostics.missingItemRecordCount,
+                message: "One or more open conflicts does not have a matching local item row."
+            ))
+        }
+
+        return FloppyLedgerIntegrityReport(
+            accountFingerprint: FloppyDiagnostics.redactedFingerprint(accountID),
+            ok: issues.isEmpty,
+            counts: FloppyLedgerIntegrityCounts(
+                accounts: accountCount,
+                items: itemCount,
+                pendingOperations: pendingCount,
+                conflicts: conflictCount,
+                materializedItems: materializedPaths.count,
+                missingMaterializedItems: missingMaterializedItems,
+                activeEnumerators: activeEnumeratorCount
+            ),
+            issues: issues
+        )
+    }
+
     func pendingOperationCount(accountID: String) throws -> Int {
         let statement = try prepare("SELECT COUNT(*) FROM pending_operations WHERE account_id = ?")
         defer { sqlite3_finalize(statement) }
@@ -864,6 +1136,60 @@ private final class SQLiteLedgerStore {
         }
 
         return try JSONDecoder.floppy.decode(FloppyItem.self, from: columnData(statement, 0))
+    }
+
+    private func scalarInt(_ sql: String, _ bindings: SQLiteBinding...) throws -> Int {
+        let statement = try prepare(sql)
+        defer { sqlite3_finalize(statement) }
+
+        for (offset, binding) in bindings.enumerated() {
+            bind(binding, to: statement, at: Int32(offset + 1))
+        }
+
+        guard try step(statement) == SQLITE_ROW else {
+            return 0
+        }
+        return Int(sqlite3_column_int64(statement, 0))
+    }
+
+    private func nonEmptyStrings(sql: String, bindings: [SQLiteBinding]) throws -> [String] {
+        let statement = try prepare(sql)
+        defer { sqlite3_finalize(statement) }
+
+        for (offset, binding) in bindings.enumerated() {
+            bind(binding, to: statement, at: Int32(offset + 1))
+        }
+
+        var values: [String] = []
+        while try step(statement) == SQLITE_ROW {
+            let value = columnText(statement, 0)
+            if !value.isEmpty {
+                values.append(value)
+            }
+        }
+        return values
+    }
+
+    private func conflictReasonCounts(accountID: String) throws -> [FloppyConflictReasonCount] {
+        let statement = try prepare("""
+            SELECT message, COUNT(*)
+            FROM conflicts
+            WHERE account_id = ? AND state != 'resolved'
+            GROUP BY message
+            ORDER BY COUNT(*) DESC, message COLLATE NOCASE ASC
+            LIMIT 5
+            """)
+        defer { sqlite3_finalize(statement) }
+
+        bind(accountID, to: statement, at: 1)
+        var reasons: [FloppyConflictReasonCount] = []
+        while try step(statement) == SQLITE_ROW {
+            reasons.append(FloppyConflictReasonCount(
+                reason: columnText(statement, 0),
+                count: Int(sqlite3_column_int64(statement, 1))
+            ))
+        }
+        return reasons
     }
 
     private func prepare(_ sql: String) throws -> OpaquePointer {
