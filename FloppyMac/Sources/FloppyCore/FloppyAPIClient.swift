@@ -483,7 +483,11 @@ public struct FloppyAPIClient: Sendable {
                 offset: offset,
                 idempotencyKey: "\(uploadSession.sessionUUID)-\(offset)"
             )
-            offset = response.receivedBytes
+            let expectedOffset = offset + Int64(chunk.count)
+            guard response.receivedBytes == expectedOffset else {
+                throw FloppyTransferError.unexpectedUploadOffset(expected: expectedOffset, actual: response.receivedBytes)
+            }
+            offset = expectedOffset
             progressHandler?(offset, totalSize)
             if let progressRecorder {
                 await progressRecorder(offset)

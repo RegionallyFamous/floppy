@@ -40,6 +40,22 @@ public enum FloppyDiagnostics {
         return URL(fileURLWithPath: path).lastPathComponent
     }
 
+    public static func redactedStatus(_ status: String) -> String {
+        let home = NSRegularExpression.escapedPattern(for: FileManager.default.homeDirectoryForCurrentUser.path)
+        var result = status
+        let patterns = [
+            "\(home)/[^\\s\"']+",
+            "/(?:Users|private|var|Volumes|tmp)/[^\\s\"']+",
+            #"[A-Za-z0-9._%+-]+\.(?:txt|pdf|png|jpe?g|gif|heic|webp|mov|mp4|mp3|wav|zip|dmg|docx?|xlsx?|pptx?|csv|json|xml|php|swift|sqlite)\b"#
+        ]
+
+        for pattern in patterns {
+            result = result.replacingOccurrences(of: pattern, with: "[redacted-file]", options: [.regularExpression, .caseInsensitive])
+        }
+
+        return result
+    }
+
     public static func redactedFingerprint(_ value: String?) -> String {
         guard let value, !value.isEmpty else {
             return ""

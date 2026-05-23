@@ -517,6 +517,14 @@ public struct FloppyUploadSession: Codable, Equatable, Sendable {
     public let operation: String?
     public let expiresAtGMT: String
 
+    public init(sessionUUID: String, receivedBytes: Int64, chunkSize: Int, operation: String?, expiresAtGMT: String) {
+        self.sessionUUID = sessionUUID
+        self.receivedBytes = receivedBytes
+        self.chunkSize = chunkSize
+        self.operation = operation
+        self.expiresAtGMT = expiresAtGMT
+    }
+
     enum CodingKeys: String, CodingKey {
         case sessionUUID = "session_uuid"
         case receivedBytes = "received_bytes"

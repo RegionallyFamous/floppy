@@ -3,6 +3,7 @@ import Foundation
 public enum FloppyTransferError: Error, Equatable, LocalizedError {
     case checksumMismatch(expected: String, actual: String)
     case retryLimitExceeded(attempts: Int)
+    case unexpectedUploadOffset(expected: Int64, actual: Int64)
 
     public var errorDescription: String? {
         switch self {
@@ -10,6 +11,8 @@ public enum FloppyTransferError: Error, Equatable, LocalizedError {
             return "Downloaded file checksum did not match the server metadata."
         case .retryLimitExceeded(let attempts):
             return "Transfer failed after \(attempts) attempt(s)."
+        case .unexpectedUploadOffset:
+            return "Upload session returned an unexpected chunk offset."
         }
     }
 }

@@ -42,10 +42,7 @@ struct ContentView: View {
             }
         }
         .task {
-            await model.refreshSelectedAccount()
-        }
-        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
-            Task { await model.refreshSelectedAccount() }
+            await model.refreshSelectedAccountIfStale()
         }
     }
 

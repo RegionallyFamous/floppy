@@ -9,7 +9,8 @@ import UniformTypeIdentifiers
 @MainActor
 final class FloppyAppModel: ObservableObject {
     private static let backgroundSyncEnabledDefaultsKey = "FloppyBackgroundSyncEnabled"
-    private static let backgroundSyncIntervalNanoseconds: UInt64 = 60_000_000_000
+    private static let backgroundSyncInterval: TimeInterval = 60
+    private static let syncCadence = FloppyMacSyncCadence.standard
 
     @Published var siteURLText: String = ""
     @Published var deviceName: String = Host.current().localizedName ?? "Mac"
@@ -30,15 +31,25 @@ final class FloppyAppModel: ObservableObject {
     @Published var backgroundSyncEnabled: Bool
     @Published var isNetworkReachable = true
     @Published var lastAutomaticSyncAt: Date?
+    @Published var lastRefreshAt: Date?
+    @Published var lastSyncError: String = ""
+    @Published var lastSyncTrigger: String = ""
+    @Published var openConflictCount = 0
+    @Published var pendingTransferCount = 0
+    @Published var isExportingDiagnostics = false
+    @Published var lastHealthCheckAt: Date?
+    @Published var lastHealthError: String = ""
 
     private let tokenStore: FloppyTokenStore = KeychainTokenStore.default()
     private var ledger: LocalLedger?
     private var pendingOnboarding: PendingOnboarding?
     private var onboardingTask: Task<Void, Never>?
-    private var backgroundSyncTask: Task<Void, Never>?
+    private var backgroundSyncScheduler: NSBackgroundActivityScheduler?
     private var lifecycleObservers: [NSObjectProtocol] = []
     private var networkMonitor: NWPathMonitor?
     private let networkMonitorQueue = DispatchQueue(label: "com.floppy.mac.network-monitor")
+    private var syncInProgress = false
+    private var refreshInProgress = false
 
     var isOnboarding: Bool {
         onboardingStep.isActiveSetupStep
@@ -46,6 +57,14 @@ final class FloppyAppModel: ObservableObject {
 
     var nativeFolderStatusText: String {
         nativeFolderReadiness.isReady ? "Native Finder folder" : "Finder folder needs signed app"
+    }
+
+    var isSyncing: Bool {
+        syncInProgress
+    }
+
+    var hasLocalAttentionItems: Bool {
+        openConflictCount > 0 || pendingTransferCount > 0
     }
 
     init() {
@@ -65,15 +84,16 @@ final class FloppyAppModel: ObservableObject {
         refreshLaunchAtLoginStatus()
         startNativeLifecycleMonitoring()
         startNetworkMonitoring()
-        startBackgroundSyncLoop()
+        startBackgroundSyncScheduler()
         accounts = await ledger.accounts()
         await prepareNativeDomainsIfAvailable(for: accounts)
         selectedAccountID = accounts.first?.id
         if let selectedAccountID {
             items = await ledger.items(accountID: selectedAccountID)
+            await refreshLocalCounters(accountID: selectedAccountID)
         }
         FloppyDiagnostics.app.info("Loaded \(self.accounts.count, privacy: .public) account(s) from local ledger")
-        await refreshSelectedAccount()
+        await refreshSelectedAccountIfStale(maxAge: 0)
     }
 
     func startBrowserApproval() {
@@ -400,27 +420,30 @@ final class FloppyAppModel: ObservableObject {
         backgroundSyncEnabled = enabled
         UserDefaults.standard.set(enabled, forKey: Self.backgroundSyncEnabledDefaultsKey)
         if enabled {
-            startBackgroundSyncLoop()
+            startBackgroundSyncScheduler()
             status = "Background sync is on."
         } else {
-            backgroundSyncTask?.cancel()
-            backgroundSyncTask = nil
+            backgroundSyncScheduler?.invalidate()
+            backgroundSyncScheduler = nil
             status = "Background sync is off."
         }
     }
 
     func recoverNativeSync(reason: String) async {
-        guard selectedAccount != nil else {
-            return
-        }
-
-        guard backgroundSyncEnabled, isNetworkReachable, !isWorking, !isOnboarding else {
+        guard Self.syncCadence.shouldRunAutomaticSync(
+            now: Date(),
+            lastAutomaticSyncAt: lastAutomaticSyncAt,
+            hasAccount: selectedAccount != nil,
+            isNetworkReachable: isNetworkReachable,
+            isWorking: isWorking,
+            isOnboarding: isOnboarding
+        ) else {
             return
         }
 
         status = reason
         await reconcileSelectedNativeDomain()
-        await syncSelectedAccount()
+        await syncSelectedAccount(trigger: reason)
         lastAutomaticSyncAt = Date()
     }
 
@@ -463,31 +486,74 @@ final class FloppyAppModel: ObservableObject {
         guard let account = selectedAccount else {
             items = []
             health = nil
+            openConflictCount = 0
+            pendingTransferCount = 0
             return
         }
 
+        guard !refreshInProgress, !syncInProgress else {
+            return
+        }
+
+        refreshInProgress = true
         isWorking = true
-        defer { isWorking = false }
+        defer {
+            refreshInProgress = false
+            isWorking = false
+        }
 
         do {
             let client = try await client(for: account)
             let list = try await client.listFiles()
             try await ledger?.merge(items: list.items, accountID: account.id)
             items = list.items
+            lastRefreshAt = Date()
+            await refreshLocalCounters(accountID: account.id)
             status = "Loaded \(list.items.count) items."
         } catch {
             status = error.localizedDescription
+            lastSyncError = error.localizedDescription
             items = await ledger?.items(accountID: account.id) ?? []
+            await refreshLocalCounters(accountID: account.id)
         }
     }
 
-    func syncSelectedAccount() async {
+    func refreshSelectedAccountIfStale(maxAge: TimeInterval? = nil) async {
+        guard Self.syncCadence.shouldRefreshCache(
+            now: Date(),
+            lastRefreshAt: maxAge == 0 ? nil : lastRefreshAt,
+            hasAccount: selectedAccount != nil
+        ) else {
+            return
+        }
+
+        if let maxAge,
+           maxAge > 0,
+           let lastRefreshAt,
+           Date().timeIntervalSince(lastRefreshAt) < maxAge {
+            return
+        }
+
+        await refreshSelectedAccount()
+    }
+
+    func syncSelectedAccount(trigger: String = "Manual sync") async {
         guard let account = selectedAccount else {
             return
         }
 
+        guard !syncInProgress else {
+            status = "Sync already running."
+            return
+        }
+
+        syncInProgress = true
         isWorking = true
-        defer { isWorking = false }
+        lastSyncTrigger = trigger
+        defer {
+            syncInProgress = false
+            isWorking = false
+        }
 
         do {
             let client = try await client(for: account)
@@ -496,10 +562,15 @@ final class FloppyAppModel: ObservableObject {
             try await ledger?.record(changeFeed: changes, accountID: account.id)
             accounts = await ledger?.accounts() ?? accounts
             items = await ledger?.items(accountID: account.id) ?? items
+            lastRefreshAt = Date()
+            lastSyncError = ""
+            await refreshLocalCounters(accountID: account.id)
             await FileProviderDomainController.signal(account: account)
             status = "Synced \(changes.events.count) changes. Cursor \(changes.nextCursor)."
         } catch {
             status = error.localizedDescription
+            lastSyncError = error.localizedDescription
+            await refreshLocalCounters(accountID: account.id)
         }
     }
 
@@ -523,9 +594,12 @@ final class FloppyAppModel: ObservableObject {
 
         do {
             health = try await client(for: account).health()
+            lastHealthCheckAt = Date()
+            lastHealthError = ""
             status = health?.ok == true ? "Server health passed." : "Server needs attention."
         } catch {
             status = error.localizedDescription
+            lastHealthError = error.localizedDescription
         }
     }
 
@@ -626,13 +700,32 @@ final class FloppyAppModel: ObservableObject {
     func exportDiagnostics() {
         Task {
             do {
+                let destination = try await chooseDiagnosticsDestination()
+                guard let destination else {
+                    return
+                }
+                isExportingDiagnostics = true
+                defer { isExportingDiagnostics = false }
                 let url = try await makeDiagnosticsBundle()
-                NSWorkspace.shared.activateFileViewerSelecting([url])
+                if FileManager.default.fileExists(atPath: destination.path) {
+                    try FileManager.default.removeItem(at: destination)
+                }
+                try FileManager.default.copyItem(at: url, to: destination)
+                NSWorkspace.shared.activateFileViewerSelecting([destination])
                 status = "Diagnostics exported."
             } catch {
+                isExportingDiagnostics = false
                 status = error.localizedDescription
             }
         }
+    }
+
+    func copySupportID() {
+        let domainIdentifier = selectedAccount.map { FloppyDomainRegistry.domainIdentifier(for: $0) }
+        let id = FloppyDiagnostics.supportCorrelation(account: selectedAccount, domainIdentifier: domainIdentifier).correlationID
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(id, forType: .string)
+        status = "Copied support ID."
     }
 
     private func uploadFileURLsAsync(_ urls: [URL]) async {
@@ -656,6 +749,8 @@ final class FloppyAppModel: ObservableObject {
             let list = try await client.listFiles()
             try await ledger?.merge(items: list.items, accountID: account.id)
             items = list.items
+            lastRefreshAt = Date()
+            await refreshLocalCounters(accountID: account.id)
             await FileProviderDomainController.signal(account: account)
             status = "Added \(addedCount) item\(addedCount == 1 ? "" : "s") to Floppy."
         } catch {
@@ -663,6 +758,7 @@ final class FloppyAppModel: ObservableObject {
                 ? "Added \(addedCount) item\(addedCount == 1 ? "" : "s"), then stopped: \(error.localizedDescription)"
                 : error.localizedDescription
             items = await ledger?.items(accountID: account.id) ?? items
+            await refreshLocalCounters(accountID: account.id)
         }
 
         isWorking = false
@@ -739,7 +835,7 @@ final class FloppyAppModel: ObservableObject {
         let accountID = account?.id
         let keychainAvailable: Bool
         if let accountID {
-            keychainAvailable = ( try? tokenStore.load(accountID: accountID) ) != nil
+            keychainAvailable = (try? await loadToken(accountID: accountID)) != nil
         } else {
             keychainAvailable = false
         }
@@ -767,13 +863,13 @@ final class FloppyAppModel: ObservableObject {
             lifecycleState: fileProviderDiagnostic.state,
             hasSelectedAccount: account != nil,
             keychainTokenAvailable: keychainAvailable,
-            serverReachable: !status.localizedCaseInsensitiveContains("unreachable"),
-            storageBlocked: status.localizedCaseInsensitiveContains("quota") || status.localizedCaseInsensitiveContains("storage"),
-            isSyncing: isWorking,
+            serverReachable: isNetworkReachable && !isAuthOrServerFailure(lastSyncError),
+            storageBlocked: isStorageFailure(lastSyncError),
+            isSyncing: syncInProgress,
             pendingOperationCount: pendingOperations,
             openConflictCount: conflictDiagnostics.openCount,
             materializationIssueCount: integrity.counts.missingMaterializedItems + conflictDiagnostics.missingMaterializedOpenCount,
-            lastError: status
+            lastError: FloppyDiagnostics.redactedStatus(lastSyncError.isEmpty ? status : lastSyncError)
         ))
         let bundle = FloppyMacDiagnosticsBundleV3(
             createdAt: formatter.string(from: Date()),
@@ -833,13 +929,25 @@ final class FloppyAppModel: ObservableObject {
             versionRestores: FloppyMacDiagnosticsVersionRestoreInfo(),
             releaseBuild: FloppyReleaseBuildIdentity.current(),
             releaseEvidence: .empty,
+            serverHealth: FloppyMacDiagnosticsServerHealthInfo(
+                checkedAt: lastHealthCheckAt.map { formatter.string(from: $0) } ?? "",
+                ok: health?.ok,
+                failedChecks: health.map { $0.checks.values.filter { !$0.ok }.count } ?? 0,
+                lastError: lastHealthError
+            ),
             nativeRuntime: FloppyMacDiagnosticsNativeRuntimeInfo(
                 launchAtLogin: launchAtLoginStatusText,
                 backgroundSyncEnabled: backgroundSyncEnabled,
                 networkReachable: isNetworkReachable,
-                lastAutomaticSyncAt: lastAutomaticSyncAt.map { formatter.string(from: $0) } ?? ""
+                lastAutomaticSyncAt: lastAutomaticSyncAt.map { formatter.string(from: $0) } ?? "",
+                lastRefreshAt: lastRefreshAt.map { formatter.string(from: $0) } ?? "",
+                lastSyncTrigger: lastSyncTrigger,
+                lastSyncError: lastSyncError,
+                syncInProgress: syncInProgress,
+                openConflicts: openConflictCount,
+                pendingTransfers: pendingTransferCount
             ),
-            lastStatus: status
+            lastStatus: FloppyDiagnostics.redactedStatus(status)
         )
 
         let encoder = JSONEncoder()
@@ -850,6 +958,16 @@ final class FloppyAppModel: ObservableObject {
         let url = directory.appendingPathComponent("floppy-mac-diagnostics-\(Int(Date().timeIntervalSince1970)).json")
         try data.write(to: url, options: [.atomic])
         return url
+    }
+
+    private func chooseDiagnosticsDestination() async throws -> URL? {
+        let panel = NSSavePanel()
+        panel.title = "Export Floppy Diagnostics"
+        panel.prompt = "Export"
+        panel.allowedContentTypes = [.json]
+        panel.nameFieldStringValue = "floppy-mac-diagnostics-\(Int(Date().timeIntervalSince1970)).json"
+        panel.canCreateDirectories = true
+        return panel.runModal() == .OK ? panel.url : nil
     }
 
     func disconnectSelectedAccount() {
@@ -882,7 +1000,7 @@ final class FloppyAppModel: ObservableObject {
                 try await ledger?.removeAccount(id: account.id)
                 accounts = await ledger?.accounts() ?? []
                 selectedAccountID = accounts.first?.id
-                await refreshSelectedAccount()
+                await refreshSelectedAccountIfStale(maxAge: 0)
                 if let revokeError {
                     status = "Disconnected locally. Server revoke failed: \(revokeError.localizedDescription)"
                 } else {
@@ -996,6 +1114,34 @@ final class FloppyAppModel: ObservableObject {
         UserDefaults.standard.removeObject(forKey: PendingOnboarding.defaultsKey)
     }
 
+    private func refreshLocalCounters(accountID: String?) async {
+        guard let accountID else {
+            openConflictCount = 0
+            pendingTransferCount = 0
+            return
+        }
+
+        openConflictCount = await ledger?.conflictDiagnostics(accountID: accountID).openCount ?? 0
+        pendingTransferCount = await ledger?.uploadTransferSessions(accountID: accountID).count ?? 0
+    }
+
+    private func isStorageFailure(_ message: String) -> Bool {
+        let lowered = message.lowercased()
+        return lowered.contains("507") || lowered.contains("quota") || lowered.contains("storage")
+    }
+
+    private func isAuthOrServerFailure(_ message: String) -> Bool {
+        let lowered = message.lowercased()
+        return lowered.contains("401")
+            || lowered.contains("403")
+            || lowered.contains("500")
+            || lowered.contains("502")
+            || lowered.contains("503")
+            || lowered.contains("504")
+            || lowered.contains("offline")
+            || lowered.contains("unreachable")
+    }
+
     private static func launchAtLoginDescription(for status: SMAppService.Status) -> String {
         switch status {
         case .enabled:
@@ -1072,29 +1218,27 @@ final class FloppyAppModel: ObservableObject {
         networkMonitor = monitor
     }
 
-    private func startBackgroundSyncLoop() {
-        guard backgroundSyncEnabled, backgroundSyncTask == nil else {
+    private func startBackgroundSyncScheduler() {
+        guard backgroundSyncEnabled, backgroundSyncScheduler == nil else {
             return
         }
 
-        backgroundSyncTask = Task { [weak self] in
-            while !Task.isCancelled {
-                do {
-                    try await Task.sleep(nanoseconds: Self.backgroundSyncIntervalNanoseconds)
-                } catch {
+        let scheduler = NSBackgroundActivityScheduler(identifier: "com.floppy.mac.background-sync")
+        scheduler.interval = Self.backgroundSyncInterval
+        scheduler.tolerance = 20
+        scheduler.repeats = true
+        scheduler.schedule { [weak self] completion in
+            Task { @MainActor [weak self] in
+                guard let self, self.backgroundSyncEnabled else {
+                    completion(.deferred)
                     return
                 }
 
-                await MainActor.run {
-                    guard let self else {
-                        return
-                    }
-                    Task {
-                        await self.recoverNativeSync(reason: "Background sync is checking for changes.")
-                    }
-                }
+                await self.recoverNativeSync(reason: "Background sync is checking for changes.")
+                completion(.finished)
             }
         }
+        backgroundSyncScheduler = scheduler
     }
 }
 

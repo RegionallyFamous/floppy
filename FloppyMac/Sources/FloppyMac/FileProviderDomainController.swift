@@ -60,14 +60,15 @@ enum FileProviderDomainController {
 
         let domainLedger = LocalLedger(appGroupIdentifier: FloppyDomainRegistry.appGroupIdentifier, domainIdentifier: record.domainIdentifier)
         let activeIdentifiers = await domainLedger.activeEnumeratorIdentifiers()
-        await domainLedger.close()
         let signalPlan = FloppyEnumeratorSignalPlan(
             workingSetIdentifier: NSFileProviderItemIdentifier.workingSet.rawValue,
             activeEnumerators: activeIdentifiers
         )
 
-        do {
-            for identifier in signalPlan.rawIdentifiers.map({ NSFileProviderItemIdentifier($0) }) {
+        var signaled = 0
+        for rawIdentifier in signalPlan.rawIdentifiers {
+            let identifier = NSFileProviderItemIdentifier(rawIdentifier)
+            do {
                 try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
                     manager.signalEnumerator(for: identifier) { error in
                         if let error {
@@ -77,11 +78,16 @@ enum FileProviderDomainController {
                         }
                     }
                 }
+                signaled += 1
+            } catch {
+                FloppyDiagnostics.fileProvider.error("File Provider signal failed for \(rawIdentifier, privacy: .public): \(error.localizedDescription, privacy: .public)")
+                if rawIdentifier != NSFileProviderItemIdentifier.workingSet.rawValue {
+                    await domainLedger.removeActiveEnumerator(rawIdentifier)
+                }
             }
-            FloppyDiagnostics.fileProvider.info("Signaled \(signalPlan.rawIdentifiers.count, privacy: .public) File Provider enumerator(s) for \(record.domainIdentifier, privacy: .public)")
-        } catch {
-            FloppyDiagnostics.fileProvider.error("File Provider signal failed: \(error.localizedDescription, privacy: .public)")
         }
+        await domainLedger.close()
+        FloppyDiagnostics.fileProvider.info("Signaled \(signaled, privacy: .public) of \(signalPlan.rawIdentifiers.count, privacy: .public) File Provider enumerator(s) for \(record.domainIdentifier, privacy: .public)")
     }
 
     static func reconcile(account: FloppyAccount) async throws {

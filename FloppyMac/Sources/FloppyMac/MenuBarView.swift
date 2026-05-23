@@ -30,7 +30,7 @@ struct MenuBarView: View {
             model.uploadDroppedProviders(providers)
         }
         .task {
-            await model.refreshSelectedAccount()
+            await model.refreshSelectedAccountIfStale()
         }
     }
 
@@ -54,9 +54,9 @@ struct MenuBarView: View {
 
             HStack(spacing: 6) {
                 Circle()
-                    .fill(model.selectedAccount == nil ? Color.orange : Color.green)
+                    .fill(statusColor)
                     .frame(width: 8, height: 8)
-                    .accessibilityLabel(model.selectedAccount == nil ? "Not connected" : "Connected")
+                    .accessibilityLabel(statusAccessibilityLabel)
 
                 Button {
                     Task { await model.syncSelectedAccount() }
@@ -65,6 +65,7 @@ struct MenuBarView: View {
                 }
                 .buttonStyle(FloppyIconButtonStyle())
                 .help("Sync now")
+                .accessibilityLabel("Sync now")
                 .disabled(model.selectedAccount == nil || model.isWorking)
 
                 Button {
@@ -74,6 +75,7 @@ struct MenuBarView: View {
                 }
                 .buttonStyle(FloppyIconButtonStyle())
                 .help("Settings")
+                .accessibilityLabel("Open Floppy Settings")
             }
         }
     }
@@ -103,6 +105,7 @@ struct MenuBarView: View {
                     }
                     .buttonStyle(FloppyIconButtonStyle())
                     .help("Cancel")
+                    .accessibilityLabel("Cancel setup")
                 }
             }
 
@@ -245,6 +248,7 @@ struct MenuBarView: View {
                     Label("Settings", systemImage: "gearshape")
                 }
                 .buttonStyle(FloppyFooterButtonStyle())
+                .accessibilityLabel("Open Floppy Settings")
 
                 Button {
                     NSApp.terminate(nil)
@@ -252,6 +256,7 @@ struct MenuBarView: View {
                     Label("Quit", systemImage: "power")
                 }
                 .buttonStyle(FloppyFooterButtonStyle())
+                .accessibilityLabel("Quit Floppy")
             }
         }
     }
@@ -279,11 +284,45 @@ struct MenuBarView: View {
             return model.onboardingStep.title
         }
 
+        if model.openConflictCount > 0 {
+            return "\(model.openConflictCount) conflict\(model.openConflictCount == 1 ? "" : "s") need attention"
+        }
+
+        if model.pendingTransferCount > 0 {
+            return "\(model.pendingTransferCount) interrupted transfer\(model.pendingTransferCount == 1 ? "" : "s") preserved"
+        }
+
         if model.status.isEmpty {
             return model.nativeFolderStatusText
         }
 
         return model.status
+    }
+
+    private var statusColor: Color {
+        if model.selectedAccount == nil {
+            return .orange
+        }
+        if model.hasLocalAttentionItems {
+            return .orange
+        }
+        if !model.isNetworkReachable {
+            return .secondary
+        }
+        return .green
+    }
+
+    private var statusAccessibilityLabel: String {
+        if model.selectedAccount == nil {
+            return "Not connected"
+        }
+        if model.hasLocalAttentionItems {
+            return "Needs attention"
+        }
+        if !model.isNetworkReachable {
+            return "Offline"
+        }
+        return "Connected"
     }
 
     private func shortenedName(_ name: String) -> String {

@@ -176,6 +176,37 @@ import Testing
     #expect(chunkBodies == ["hell", "o"])
 }
 
+@Test func uploadSessionRejectsUnexpectedServerOffsets() async throws {
+    let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: directory) }
+
+    let fileURL = directory.appendingPathComponent("hello.txt")
+    try "hello".data(using: .utf8)!.write(to: fileURL)
+    UploadOffsetURLProtocolStub.handler = { request in
+        if request.url?.path.hasSuffix("/upload-sessions/session-uuid/chunk") == true {
+            return httpJSON(request, body: #"{"received_bytes":3}"#)
+        }
+        return httpJSON(request, status: 404, body: "{}")
+    }
+    defer { UploadOffsetURLProtocolStub.handler = nil }
+
+    let configuration = URLSessionConfiguration.ephemeral
+    configuration.protocolClasses = [UploadOffsetURLProtocolStub.self]
+    let client = FloppyAPIClient(siteURL: URL(string: "https://example.com")!, token: "secret", session: URLSession(configuration: configuration))
+    let session = FloppyUploadSession(sessionUUID: "session-uuid", receivedBytes: 0, chunkSize: 4, operation: "upload", expiresAtGMT: "2026-05-23 00:00:00")
+
+    do {
+        _ = try await client.uploadChunks(from: fileURL, session: session, totalSize: 5)
+        Issue.record("Expected unexpected upload offset to fail.")
+    } catch FloppyTransferError.unexpectedUploadOffset(let expected, let actual) {
+        #expect(expected == 4)
+        #expect(actual == 3)
+    } catch {
+        Issue.record("Expected unexpected upload offset error, got \(error).")
+    }
+}
+
 @Test func fileProviderIdentifierCodecUsesStableUUIDs() throws {
     let rawValue = FloppyFileProviderIdentifierCodec.itemIdentifierRawValue(uuid: "file-uuid")
 
@@ -183,6 +214,27 @@ import Testing
     #expect(FloppyFileProviderIdentifierCodec.itemUUID(from: rawValue) == "file-uuid")
     #expect(FloppyFileProviderIdentifierCodec.legacyItemID(from: "floppy:item:12") == 12)
     #expect(FloppyFileProviderIdentifierCodec.itemUUID(from: "floppy:item:12") == nil)
+}
+
+@Test func syncCadenceCoalescesAutomaticAndCacheRefreshWork() throws {
+    let cadence = FloppyMacSyncCadence(minimumAutomaticSyncInterval: 20, cacheRefreshTTL: 12)
+    let now = Date(timeIntervalSinceReferenceDate: 1_000)
+
+    #expect(cadence.shouldRunAutomaticSync(now: now, lastAutomaticSyncAt: nil, hasAccount: true, isNetworkReachable: true, isWorking: false, isOnboarding: false))
+    #expect(!cadence.shouldRunAutomaticSync(now: now, lastAutomaticSyncAt: now.addingTimeInterval(-5), hasAccount: true, isNetworkReachable: true, isWorking: false, isOnboarding: false))
+    #expect(!cadence.shouldRunAutomaticSync(now: now, lastAutomaticSyncAt: nil, hasAccount: true, isNetworkReachable: false, isWorking: false, isOnboarding: false))
+    #expect(cadence.shouldRefreshCache(now: now, lastRefreshAt: nil, hasAccount: true))
+    #expect(!cadence.shouldRefreshCache(now: now, lastRefreshAt: now.addingTimeInterval(-2), hasAccount: true))
+}
+
+@Test func diagnosticsStatusRedactsFilenamesAndLocalPaths() throws {
+    let homePath = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Secret/report.pdf").path
+    let redacted = FloppyDiagnostics.redactedStatus("Uploading client-list.csv from \(homePath)")
+
+    #expect(redacted.contains("[redacted-file]"))
+    #expect(!redacted.contains("client-list.csv"))
+    #expect(!redacted.contains("report.pdf"))
+    #expect(!redacted.contains(FileManager.default.homeDirectoryForCurrentUser.path))
 }
 
 @Test func enumeratorSignalPlanDeduplicatesWorkingSetAndActiveFolders() throws {
@@ -333,6 +385,8 @@ import Testing
         versionRestores: FloppyMacDiagnosticsVersionRestoreInfo(supportedByServer: "unknown", restoresAttempted: 0),
         releaseBuild: FloppyReleaseBuildIdentity(version: "0.1.0", build: "1", bundleID: "com.floppy.mac", appGroupIdentifier: "group.com.floppy.mac", executablePath: FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Floppy.app/Contents/MacOS/Floppy").path, isSwiftPMBundle: false),
         releaseEvidence: FloppyReleaseEvidenceSummary(passed: 8, warnings: 0, failed: 0, skipped: 0, readyForPublicBeta: true),
+        serverHealth: FloppyMacDiagnosticsServerHealthInfo(checkedAt: "2026-05-22T01:00:00Z", ok: false, failedChecks: 1, lastError: "Uploading secret.pdf failed"),
+        nativeRuntime: FloppyMacDiagnosticsNativeRuntimeInfo(launchAtLogin: "Enabled", backgroundSyncEnabled: true, networkReachable: true, lastAutomaticSyncAt: "2026-05-22T01:00:00Z", lastRefreshAt: "2026-05-22T01:00:00Z", lastSyncTrigger: "Background sync", lastSyncError: "Could not upload private.csv", syncInProgress: false, openConflicts: 1, pendingTransfers: 1),
         lastStatus: "Ready"
     )
 
@@ -347,9 +401,13 @@ import Testing
     #expect(json.contains("release_build"))
     #expect(json.contains("release_evidence"))
     #expect(json.contains("native_runtime"))
+    #expect(json.contains("server_health"))
+    #expect(json.contains("pending_transfers"))
     #expect(!json.contains("device-secret-uuid"))
     #expect(!json.contains("password"))
     #expect(!json.contains("token=secret"))
+    #expect(!json.contains("secret.pdf"))
+    #expect(!json.contains("private.csv"))
     #expect(!json.contains(FileManager.default.homeDirectoryForCurrentUser.path))
 }
 
@@ -532,6 +590,8 @@ import Testing
         localPath: directory.appendingPathComponent("hello.txt").path,
         totalSize: 1024,
         offset: 0,
+        chunkSize: 256,
+        expiresAtGMT: "2026-05-23 00:00:00",
         idempotencyKey: "session-uuid-0"
     )
 
@@ -546,6 +606,8 @@ import Testing
     #expect(stored[0].sessionUUID == transfer.sessionUUID)
     #expect(stored[0].operation == "replace")
     #expect(stored[0].offset == 512)
+    #expect(stored[0].chunkSize == 256)
+    #expect(stored[0].expiresAtGMT == "2026-05-23 00:00:00")
     #expect(stored[0].idempotencyKey == "session-uuid-0")
     #expect(removed.isEmpty)
 }
@@ -907,6 +969,34 @@ private func requestBodyData(_ request: URLRequest) -> Data {
 }
 
 private final class URLProtocolStub: URLProtocol {
+    nonisolated(unsafe) static var handler: ((URLRequest) throws -> (HTTPURLResponse, Data))?
+
+    override class func canInit(with request: URLRequest) -> Bool {
+        true
+    }
+
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest {
+        request
+    }
+
+    override func startLoading() {
+        do {
+            guard let handler = Self.handler else {
+                throw FloppyAPIError.invalidResponse
+            }
+            let (response, data) = try handler(request)
+            client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+            client?.urlProtocol(self, didLoad: data)
+            client?.urlProtocolDidFinishLoading(self)
+        } catch {
+            client?.urlProtocol(self, didFailWithError: error)
+        }
+    }
+
+    override func stopLoading() {}
+}
+
+private final class UploadOffsetURLProtocolStub: URLProtocol {
     nonisolated(unsafe) static var handler: ((URLRequest) throws -> (HTTPURLResponse, Data))?
 
     override class func canInit(with request: URLRequest) -> Bool {

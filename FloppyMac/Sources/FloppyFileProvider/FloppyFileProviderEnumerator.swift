@@ -61,18 +61,20 @@ final class FloppyFileProviderEnumerator: NSObject, NSFileProviderEnumerator {
             do {
                 let cursor = UInt64(syncAnchor.floppyToken ?? "0") ?? 0
                 let response = try await apiClient.syncChanges(cursor: cursor, limit: 500)
+                var deletedIdentifiers: [NSFileProviderItemIdentifier] = []
+                for change in response.events where change.isDeletion {
+                    if let uuid = change.deletedItemUUID {
+                        deletedIdentifiers.append(NSFileProviderItemIdentifier(FloppyFileProviderIdentifierCodec.itemIdentifierRawValue(uuid: uuid)))
+                    } else if let item = await ledger.item(id: change.targetID) {
+                        deletedIdentifiers.append(item.fileProviderIdentifier)
+                    } else {
+                        deletedIdentifiers.append(NSFileProviderItemIdentifier(FloppyFileProviderIdentifierCodec.legacyItemIdentifierRawValue(id: change.targetID)))
+                    }
+                }
                 try await ledger.apply(changes: response.events)
                 try await ledger.record(changeFeed: response)
 
                 let updatedItems = await fileProviderItems(for: response.events.compactMap(\.floppyItemPayload))
-                let deletedIdentifiers = response.events
-                    .filter(\.isDeletion)
-                    .map { change -> NSFileProviderItemIdentifier in
-                        if let uuid = change.deletedItemUUID {
-                            return NSFileProviderItemIdentifier(FloppyFileProviderIdentifierCodec.itemIdentifierRawValue(uuid: uuid))
-                        }
-                        return NSFileProviderItemIdentifier(FloppyFileProviderIdentifierCodec.legacyItemIdentifierRawValue(id: change.targetID))
-                    }
 
                 observer.didUpdate(updatedItems)
                 observer.didDeleteItems(withIdentifiers: deletedIdentifiers)

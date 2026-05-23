@@ -40,6 +40,8 @@ public struct FloppyUploadTransferSession: Codable, Equatable, Identifiable, Sen
     public let localPath: String
     public let totalSize: Int64
     public let offset: Int64
+    public let chunkSize: Int
+    public let expiresAtGMT: String
     public let idempotencyKey: String
     public let updatedAt: Date
 
@@ -52,6 +54,8 @@ public struct FloppyUploadTransferSession: Codable, Equatable, Identifiable, Sen
         localPath: String,
         totalSize: Int64,
         offset: Int64,
+        chunkSize: Int = 8_388_608,
+        expiresAtGMT: String = "",
         idempotencyKey: String,
         updatedAt: Date = Date()
     ) {
@@ -63,6 +67,8 @@ public struct FloppyUploadTransferSession: Codable, Equatable, Identifiable, Sen
         self.localPath = localPath
         self.totalSize = totalSize
         self.offset = offset
+        self.chunkSize = chunkSize
+        self.expiresAtGMT = expiresAtGMT
         self.idempotencyKey = idempotencyKey
         self.updatedAt = updatedAt
     }
@@ -1078,8 +1084,8 @@ private final class SQLiteLedgerStore {
 
     func upsert(uploadTransferSession session: FloppyUploadTransferSession) throws {
         let statement = try prepare("""
-            INSERT OR REPLACE INTO upload_transfer_sessions (session_uuid, account_id, operation, item_uuid, file_id, local_path, total_size, offset, idempotency_key, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT OR REPLACE INTO upload_transfer_sessions (session_uuid, account_id, operation, item_uuid, file_id, local_path, total_size, offset, chunk_size, expires_at_gmt, idempotency_key, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """)
         defer { sqlite3_finalize(statement) }
 
@@ -1095,8 +1101,10 @@ private final class SQLiteLedgerStore {
         bind(session.localPath, to: statement, at: 6)
         sqlite3_bind_int64(statement, 7, session.totalSize)
         sqlite3_bind_int64(statement, 8, session.offset)
-        bind(session.idempotencyKey, to: statement, at: 9)
-        sqlite3_bind_double(statement, 10, session.updatedAt.timeIntervalSinceReferenceDate)
+        sqlite3_bind_int(statement, 9, Int32(session.chunkSize))
+        bind(session.expiresAtGMT, to: statement, at: 10)
+        bind(session.idempotencyKey, to: statement, at: 11)
+        sqlite3_bind_double(statement, 12, session.updatedAt.timeIntervalSinceReferenceDate)
         try finish(statement)
     }
 
@@ -1116,7 +1124,7 @@ private final class SQLiteLedgerStore {
 
     func uploadTransferSessions(accountID: String) throws -> [FloppyUploadTransferSession] {
         let statement = try prepare("""
-            SELECT session_uuid, account_id, operation, item_uuid, file_id, local_path, total_size, offset, idempotency_key, updated_at
+            SELECT session_uuid, account_id, operation, item_uuid, file_id, local_path, total_size, offset, chunk_size, expires_at_gmt, idempotency_key, updated_at
             FROM upload_transfer_sessions
             WHERE account_id = ?
             ORDER BY updated_at DESC
@@ -1136,8 +1144,10 @@ private final class SQLiteLedgerStore {
                 localPath: columnText(statement, 5),
                 totalSize: sqlite3_column_int64(statement, 6),
                 offset: sqlite3_column_int64(statement, 7),
-                idempotencyKey: columnText(statement, 8),
-                updatedAt: Date(timeIntervalSinceReferenceDate: sqlite3_column_double(statement, 9))
+                chunkSize: Int(sqlite3_column_int(statement, 8)),
+                expiresAtGMT: columnText(statement, 9),
+                idempotencyKey: columnText(statement, 10),
+                updatedAt: Date(timeIntervalSinceReferenceDate: sqlite3_column_double(statement, 11))
             ))
         }
 
@@ -1223,10 +1233,14 @@ private final class SQLiteLedgerStore {
                 local_path TEXT NOT NULL,
                 total_size INTEGER NOT NULL,
                 offset INTEGER NOT NULL,
+                chunk_size INTEGER NOT NULL DEFAULT 8388608,
+                expires_at_gmt TEXT NOT NULL DEFAULT '',
                 idempotency_key TEXT NOT NULL,
                 updated_at REAL NOT NULL
             )
             """)
+        try addColumnIfMissing(table: "upload_transfer_sessions", column: "chunk_size", definition: "chunk_size INTEGER NOT NULL DEFAULT 8388608")
+        try addColumnIfMissing(table: "upload_transfer_sessions", column: "expires_at_gmt", definition: "expires_at_gmt TEXT NOT NULL DEFAULT ''")
         try execute("CREATE INDEX IF NOT EXISTS upload_transfer_sessions_account ON upload_transfer_sessions (account_id, updated_at)")
         try execute("""
             CREATE TABLE IF NOT EXISTS conflicts (

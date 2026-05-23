@@ -35,7 +35,7 @@ public struct FloppyMacDiagnosticsBundleV2: Codable, Equatable, Sendable {
         self.keychain = keychain
         self.onboarding = onboarding
         self.fileProvider = fileProvider
-        self.lastStatus = lastStatus
+        self.lastStatus = FloppyDiagnostics.redactedStatus(lastStatus)
     }
 
     enum CodingKeys: String, CodingKey {
@@ -70,6 +70,7 @@ public struct FloppyMacDiagnosticsBundleV3: Codable, Equatable, Sendable {
     public let versionRestores: FloppyMacDiagnosticsVersionRestoreInfo
     public let releaseBuild: FloppyReleaseBuildIdentity
     public let releaseEvidence: FloppyReleaseEvidenceSummary
+    public let serverHealth: FloppyMacDiagnosticsServerHealthInfo
     public let nativeRuntime: FloppyMacDiagnosticsNativeRuntimeInfo
     public let lastStatus: String
 
@@ -89,6 +90,7 @@ public struct FloppyMacDiagnosticsBundleV3: Codable, Equatable, Sendable {
         versionRestores: FloppyMacDiagnosticsVersionRestoreInfo,
         releaseBuild: FloppyReleaseBuildIdentity,
         releaseEvidence: FloppyReleaseEvidenceSummary,
+        serverHealth: FloppyMacDiagnosticsServerHealthInfo = .empty,
         nativeRuntime: FloppyMacDiagnosticsNativeRuntimeInfo = .empty,
         lastStatus: String
     ) {
@@ -108,8 +110,9 @@ public struct FloppyMacDiagnosticsBundleV3: Codable, Equatable, Sendable {
         self.versionRestores = versionRestores
         self.releaseBuild = releaseBuild
         self.releaseEvidence = releaseEvidence
+        self.serverHealth = serverHealth
         self.nativeRuntime = nativeRuntime
-        self.lastStatus = lastStatus
+        self.lastStatus = FloppyDiagnostics.redactedStatus(lastStatus)
     }
 
     enum CodingKeys: String, CodingKey {
@@ -129,6 +132,7 @@ public struct FloppyMacDiagnosticsBundleV3: Codable, Equatable, Sendable {
         case versionRestores = "version_restores"
         case releaseBuild = "release_build"
         case releaseEvidence = "release_evidence"
+        case serverHealth = "server_health"
         case nativeRuntime = "native_runtime"
         case lastStatus = "last_status"
     }
@@ -235,12 +239,35 @@ public struct FloppyMacDiagnosticsNativeRuntimeInfo: Codable, Equatable, Sendabl
     public let backgroundSyncEnabled: Bool
     public let networkReachable: Bool
     public let lastAutomaticSyncAt: String
+    public let lastRefreshAt: String
+    public let lastSyncTrigger: String
+    public let lastSyncError: String
+    public let syncInProgress: Bool
+    public let openConflicts: Int
+    public let pendingTransfers: Int
 
-    public init(launchAtLogin: String, backgroundSyncEnabled: Bool, networkReachable: Bool, lastAutomaticSyncAt: String) {
+    public init(
+        launchAtLogin: String,
+        backgroundSyncEnabled: Bool,
+        networkReachable: Bool,
+        lastAutomaticSyncAt: String,
+        lastRefreshAt: String = "",
+        lastSyncTrigger: String = "",
+        lastSyncError: String = "",
+        syncInProgress: Bool = false,
+        openConflicts: Int = 0,
+        pendingTransfers: Int = 0
+    ) {
         self.launchAtLogin = launchAtLogin
         self.backgroundSyncEnabled = backgroundSyncEnabled
         self.networkReachable = networkReachable
         self.lastAutomaticSyncAt = lastAutomaticSyncAt
+        self.lastRefreshAt = lastRefreshAt
+        self.lastSyncTrigger = FloppyDiagnostics.redactedStatus(lastSyncTrigger)
+        self.lastSyncError = FloppyDiagnostics.redactedStatus(lastSyncError)
+        self.syncInProgress = syncInProgress
+        self.openConflicts = openConflicts
+        self.pendingTransfers = pendingTransfers
     }
 
     public static let empty = FloppyMacDiagnosticsNativeRuntimeInfo(
@@ -255,6 +282,35 @@ public struct FloppyMacDiagnosticsNativeRuntimeInfo: Codable, Equatable, Sendabl
         case backgroundSyncEnabled = "background_sync_enabled"
         case networkReachable = "network_reachable"
         case lastAutomaticSyncAt = "last_automatic_sync_at"
+        case lastRefreshAt = "last_refresh_at"
+        case lastSyncTrigger = "last_sync_trigger"
+        case lastSyncError = "last_sync_error"
+        case syncInProgress = "sync_in_progress"
+        case openConflicts = "open_conflicts"
+        case pendingTransfers = "pending_transfers"
+    }
+}
+
+public struct FloppyMacDiagnosticsServerHealthInfo: Codable, Equatable, Sendable {
+    public let checkedAt: String
+    public let ok: Bool?
+    public let failedChecks: Int
+    public let lastError: String
+
+    public init(checkedAt: String, ok: Bool?, failedChecks: Int, lastError: String) {
+        self.checkedAt = checkedAt
+        self.ok = ok
+        self.failedChecks = failedChecks
+        self.lastError = FloppyDiagnostics.redactedStatus(lastError)
+    }
+
+    public static let empty = FloppyMacDiagnosticsServerHealthInfo(checkedAt: "", ok: nil, failedChecks: 0, lastError: "")
+
+    enum CodingKeys: String, CodingKey {
+        case checkedAt = "checked_at"
+        case ok
+        case failedChecks = "failed_checks"
+        case lastError = "last_error"
     }
 }
 

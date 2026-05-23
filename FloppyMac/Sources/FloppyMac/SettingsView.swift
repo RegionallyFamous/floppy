@@ -66,6 +66,7 @@ struct SettingsView: View {
                     )
                 }
                 .buttonStyle(.plain)
+                .accessibilityValue(selectedSection == section ? "Selected" : "")
             }
 
             Spacer()
@@ -344,6 +345,12 @@ struct SettingsView: View {
                     SettingsActionButton("Export Bundle", systemImage: "square.and.arrow.down", prominence: .primary) {
                         model.exportDiagnostics()
                     }
+                    .disabled(model.isExportingDiagnostics)
+
+                    SettingsActionButton("Copy Support ID", systemImage: "doc.on.doc") {
+                        model.copySupportID()
+                    }
+
                     SettingsActionButton("Refresh Health", systemImage: "stethoscope") {
                         Task { await model.loadHealth() }
                     }
@@ -356,6 +363,8 @@ struct SettingsView: View {
                 SettingsInfoRow("App Status", value: model.status, systemImage: model.isWorking ? "hourglass" : "info.circle")
                 SettingsInfoRow("Accounts", value: "\(model.accounts.count)", systemImage: "person.2")
                 SettingsInfoRow("Selected Items", value: "\(model.items.count)", systemImage: "doc.text")
+                SettingsInfoRow("Conflicts", value: "\(model.openConflictCount)", systemImage: "exclamationmark.triangle")
+                SettingsInfoRow("Pending Transfers", value: "\(model.pendingTransferCount)", systemImage: "arrow.up.arrow.down")
                 SettingsInfoRow("Health Checks", value: healthSummaryText, systemImage: "checkmark.seal")
             }
         }

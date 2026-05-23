@@ -97,13 +97,16 @@ final class FloppyFileProviderExtension: NSObject, NSFileProviderReplicatedExten
                     return
                 }
 
-                let directory = FileManager.default.temporaryDirectory.appendingPathComponent("FloppyFileProvider", isDirectory: true)
-                try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-                let destination = directory.appendingPathComponent(UUID().uuidString + "-" + item.name)
+                let requestedContentVersion = requestedVersion?.floppyContentVersion
+                let destination = try materializedCacheURL(for: item, requestedContentVersion: requestedContentVersion)
                 if let requestedContentVersion = requestedVersion?.floppyContentVersion,
                    !requestedContentVersion.isEmpty,
-                   requestedContentVersion != item.contentVersion,
-                   let version = try await apiClient.listFileVersions(fileID: item.id, limit: 100).versions.first(where: { $0.contentVersion == requestedContentVersion }) {
+                   requestedContentVersion != item.contentVersion {
+                    let version = try await findVersion(
+                        fileID: item.id,
+                        contentVersion: requestedContentVersion,
+                        apiClient: apiClient
+                    )
                     try await apiClient.download(version: version, to: destination)
                 } else {
                     try await apiClient.download(file: item, to: destination)
@@ -283,17 +286,7 @@ final class FloppyFileProviderExtension: NSObject, NSFileProviderReplicatedExten
                     throw NSFileProviderError(.notAuthenticated)
                 }
 
-                if item.kind == .folder {
-                    if options.contains(.recursive) {
-                        try await apiClient.deleteFolder(id: item.id, metadataVersion: version.floppyMetadataVersion)
-                    } else {
-                        try await apiClient.trashFolder(id: item.id, metadataVersion: version.floppyMetadataVersion)
-                    }
-                } else if options.contains(.recursive) {
-                    try await apiClient.deleteFile(id: item.id, metadataVersion: version.floppyMetadataVersion)
-                } else {
-                    try await apiClient.trashFile(id: item.id, metadataVersion: version.floppyMetadataVersion)
-                }
+                try await deleteServerItem(item, version: version, options: options, apiClient: apiClient)
                 try await ledger.removeItem(uuid: item.uuid)
                 await signalEnumerators()
                 progress.completedUnitCount = 1
@@ -429,6 +422,57 @@ final class FloppyFileProviderExtension: NSObject, NSFileProviderReplicatedExten
         return NSFileProviderItemIdentifier(FloppyFileProviderIdentifierCodec.legacyItemIdentifierRawValue(id: item.parentID))
     }
 
+    private func findVersion(fileID: Int64, contentVersion: String, apiClient: FloppyAPIClient) async throws -> FloppyFileVersion {
+        var afterID: Int64 = 0
+        for _ in 0..<50 {
+            let response = try await apiClient.listFileVersions(fileID: fileID, afterID: afterID, limit: 100)
+            if let version = response.versions.first(where: { $0.contentVersion == contentVersion }) {
+                return version
+            }
+            guard response.hasMore, let nextCursor = response.nextCursor, nextCursor > afterID else {
+                break
+            }
+            afterID = nextCursor
+        }
+        throw NSFileProviderError(.noSuchItem)
+    }
+
+    private func materializedCacheURL(for item: FloppyItem, requestedContentVersion: String?) throws -> URL {
+        let version = (requestedContentVersion?.isEmpty == false ? requestedContentVersion : item.contentVersion) ?? item.metadataVersion
+        let directory = ledger.fileURL
+            .deletingLastPathComponent()
+            .appendingPathComponent("Materialized", isDirectory: true)
+            .appendingPathComponent(item.uuid.safeFileProviderPathComponent, isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let filename = [version.safeFileProviderPathComponent, item.name.safeFileProviderPathComponent]
+            .filter { !$0.isEmpty }
+            .joined(separator: "-")
+        return directory.appendingPathComponent(filename.isEmpty ? UUID().uuidString : filename)
+    }
+
+    private func deleteServerItem(
+        _ item: FloppyItem,
+        version: NSFileProviderItemVersion,
+        options: NSFileProviderDeleteItemOptions,
+        apiClient: FloppyAPIClient
+    ) async throws {
+        do {
+            if item.kind == .folder {
+                if options.contains(.recursive) {
+                    try await apiClient.deleteFolder(id: item.id, metadataVersion: version.floppyMetadataVersion)
+                } else {
+                    try await apiClient.trashFolder(id: item.id, metadataVersion: version.floppyMetadataVersion)
+                }
+            } else if options.contains(.recursive) {
+                try await apiClient.deleteFile(id: item.id, metadataVersion: version.floppyMetadataVersion)
+            } else {
+                try await apiClient.trashFile(id: item.id, metadataVersion: version.floppyMetadataVersion)
+            }
+        } catch FloppyAPIError.httpStatus(let status, _) where status == 404 {
+            FloppyDiagnostics.fileProvider.info("Treating server-side missing item as idempotent delete success for \(item.uuid, privacy: .public)")
+        }
+    }
+
     private func uploadTrackedFile(
         using apiClient: FloppyAPIClient,
         at url: URL,
@@ -439,6 +483,27 @@ final class FloppyFileProviderExtension: NSObject, NSFileProviderReplicatedExten
     ) async throws -> FloppyItem {
         let totalSize = try FloppyAPIClient.fileSize(for: url)
         let contentHash = try FloppyAPIClient.sha256HexDigest(for: url)
+        let accountID = await ledger.accounts().first?.id
+        if let resumed = await resumableSession(
+            accountID: accountID,
+            operation: "upload",
+            itemUUID: nil,
+            fileID: nil,
+            localURL: url,
+            totalSize: totalSize
+        ) {
+            return try await finishTrackedTransfer(
+                using: apiClient,
+                session: resumed,
+                operation: "upload",
+                itemUUID: nil,
+                fileID: nil,
+                localURL: url,
+                totalSize: totalSize,
+                accountID: accountID,
+                progressHandler: progressHandler
+            )
+        }
         let session = try await apiClient.createUploadSession(
             filename: filename,
             parentID: parentID,
@@ -454,6 +519,7 @@ final class FloppyFileProviderExtension: NSObject, NSFileProviderReplicatedExten
             fileID: nil,
             localURL: url,
             totalSize: totalSize,
+            accountID: accountID,
             progressHandler: progressHandler
         )
     }
@@ -470,6 +536,27 @@ final class FloppyFileProviderExtension: NSObject, NSFileProviderReplicatedExten
     ) async throws -> FloppyItem {
         let totalSize = try FloppyAPIClient.fileSize(for: url)
         let contentHash = try FloppyAPIClient.sha256HexDigest(for: url)
+        let accountID = await ledger.accounts().first?.id
+        if let resumed = await resumableSession(
+            accountID: accountID,
+            operation: "replace",
+            itemUUID: original.uuid,
+            fileID: id,
+            localURL: url,
+            totalSize: totalSize
+        ) {
+            return try await finishTrackedTransfer(
+                using: apiClient,
+                session: resumed,
+                operation: "replace",
+                itemUUID: original.uuid,
+                fileID: id,
+                localURL: url,
+                totalSize: totalSize,
+                accountID: accountID,
+                progressHandler: progressHandler
+            )
+        }
         let session = try await apiClient.createReplaceSession(
             fileID: id,
             contentVersion: contentVersion,
@@ -485,6 +572,7 @@ final class FloppyFileProviderExtension: NSObject, NSFileProviderReplicatedExten
             fileID: id,
             localURL: url,
             totalSize: totalSize,
+            accountID: accountID,
             progressHandler: progressHandler
         )
     }
@@ -497,9 +585,9 @@ final class FloppyFileProviderExtension: NSObject, NSFileProviderReplicatedExten
         fileID: Int64?,
         localURL: URL,
         totalSize: Int64,
+        accountID: String?,
         progressHandler: ((Int64, Int64) -> Void)? = nil
     ) async throws -> FloppyItem {
-        let accountID = await ledger.accounts().first?.id
         let ledger = self.ledger
         if let accountID {
             try await ledger.saveUploadTransferSession(FloppyUploadTransferSession(
@@ -511,6 +599,8 @@ final class FloppyFileProviderExtension: NSObject, NSFileProviderReplicatedExten
                 localPath: localURL.path,
                 totalSize: totalSize,
                 offset: session.receivedBytes,
+                chunkSize: session.chunkSize,
+                expiresAtGMT: session.expiresAtGMT,
                 idempotencyKey: UUID().uuidString
             ))
         }
@@ -531,10 +621,56 @@ final class FloppyFileProviderExtension: NSObject, NSFileProviderReplicatedExten
                 try? await ledger.removeUploadTransferSession(sessionUUID: session.sessionUUID, accountID: accountID)
             }
             return item
+        } catch FloppyAPIError.httpStatus(let status, _) where status == 404 || status == 410 {
+            if let accountID {
+                try? await ledger.removeUploadTransferSession(sessionUUID: session.sessionUUID, accountID: accountID)
+            }
+            FloppyDiagnostics.fileProvider.error("Expired \(operation, privacy: .public) session \(session.sessionUUID, privacy: .public) was removed after HTTP \(status, privacy: .public)")
+            throw FloppyAPIError.httpStatus(status, "Upload session expired. Finder can retry with a fresh session.")
         } catch {
             FloppyDiagnostics.fileProvider.error("Preserved interrupted \(operation, privacy: .public) session \(session.sessionUUID, privacy: .public) for diagnostics")
             throw error
         }
+    }
+
+    private func resumableSession(
+        accountID: String?,
+        operation: String,
+        itemUUID: String?,
+        fileID: Int64?,
+        localURL: URL,
+        totalSize: Int64
+    ) async -> FloppyUploadSession? {
+        guard let accountID else {
+            return nil
+        }
+
+        let sessions = await ledger.uploadTransferSessions(accountID: accountID)
+        for session in sessions where session.operation == operation {
+            let sameItem = fileID.map { session.fileID == $0 } ?? (session.itemUUID == itemUUID)
+            guard sameItem,
+                  session.localPath == localURL.path,
+                  session.totalSize == totalSize,
+                  session.offset >= 0,
+                  session.offset < totalSize,
+                  session.chunkSize > 0 else {
+                continue
+            }
+            guard FileManager.default.fileExists(atPath: session.localPath) else {
+                try? await ledger.removeUploadTransferSession(sessionUUID: session.sessionUUID, accountID: accountID)
+                continue
+            }
+            FloppyDiagnostics.fileProvider.info("Resuming \(operation, privacy: .public) session \(session.sessionUUID, privacy: .public) at offset \(session.offset, privacy: .public)")
+            return FloppyUploadSession(
+                sessionUUID: session.sessionUUID,
+                receivedBytes: session.offset,
+                chunkSize: session.chunkSize,
+                operation: session.operation,
+                expiresAtGMT: session.expiresAtGMT
+            )
+        }
+
+        return nil
     }
 
     private static func conflictFilename(for name: String) -> String {
@@ -591,5 +727,11 @@ private extension NSFileProviderItemVersion {
 
     var floppyContentVersion: String {
         String(data: contentVersion, encoding: .utf8) ?? ""
+    }
+}
+
+private extension String {
+    var safeFileProviderPathComponent: String {
+        replacingOccurrences(of: "[^A-Za-z0-9_.-]", with: "-", options: .regularExpression)
     }
 }
