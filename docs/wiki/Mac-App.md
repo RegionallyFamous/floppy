@@ -2,6 +2,23 @@
 
 The Mac app connects a WordPress site to Finder.
 
+## Requirements
+
+- macOS 26.0+.
+- Swift tools 6.2.
+- File Provider extension support.
+- App Group and File Provider entitlements for signed builds.
+- Developer ID signing, hardened runtime, notarization, stapling, and Gatekeeper assessment before public distribution.
+
+Local scratch builds are useful for development, but public beta artifacts should come from the signing-ready release lane.
+
+## Native App Shape
+
+- The menu bar app uses native macOS surfaces for status, settings, onboarding, diagnostics, disconnect/reconnect, and Finder handoff.
+- Finder integration belongs in the File Provider extension, not in custom background folder polling.
+- Tokens live in Keychain, ledgers live in App Group storage, and diagnostics are exported locally as redacted JSON.
+- The app should prefer deterministic repair states over silent fallback behavior whenever auth, network, quota, storage, or domain registration fails.
+
 ## Identity
 
 - File Provider item identifiers are UUID based: `floppy:item:{uuid}`.

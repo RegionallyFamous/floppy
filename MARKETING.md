@@ -204,6 +204,8 @@ Use these when the message needs credibility:
 - Audit logs and rate limits
 - Export/repair tooling
 - Load-test fixtures up to 100k and 1M metadata rows
+- CI gates for Composer validation/audit, dependency freshness, WordPress PHPUnit/MySQL, plugin ZIP shape, executable Desktop Mode hook auditing, Swift build/tests, and Xcode doctor
+- Current beta baseline: WordPress 7.0+, PHP 8.3+, macOS 26.0+, Swift tools 6.2
 
 ## Launch Narrative
 
@@ -285,4 +287,3 @@ Floppy should not promise that every user can replace every cloud drive today.
 It should promise something stronger and more honest:
 
 **Your files can belong to your own infrastructure again.**
-

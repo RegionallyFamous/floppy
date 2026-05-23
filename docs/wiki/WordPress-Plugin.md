@@ -2,6 +2,17 @@
 
 The WordPress plugin is the authoritative storage and permissions system for Floppy.
 
+## Requirements
+
+- WordPress 7.0+.
+- PHP 8.3+.
+- REST API enabled.
+- HTTPS for production private sync and device tokens.
+- A database engine capable of the Floppy custom tables and indexes.
+- Private storage protection for `wp-content/uploads/floppy-private/`.
+
+Local loopback Studio sites are allowed for smoke tests, but production and LAN-accessible sites must pass private-storage probes before real sync is trusted.
+
 ## Storage Model
 
 - Private blobs live under the Floppy private storage root.
@@ -74,3 +85,11 @@ Local loopback Studio sites may show a warning instead of a hard failure so uplo
 - Repair checks cover missing item-name reservations, orphaned reservations, stale upload sessions, attachment link drift, and orphaned blob counts.
 - Debug bundles include compatibility checks, schema validation, repair dry-run output, device/job counts, quota settings, Desktop Mode status, and redacted audit metadata.
 - Maintenance responses never include private blob paths or `storage_key` values.
+
+## CI And Release Gates
+
+- Composer metadata validation, security audit, and safe dependency freshness checks run in CI.
+- PHP linting, WordPress compatibility checks, and WordPress PHPUnit/MySQL tests run before release.
+- A 10k load-budget smoke run is required on every CI push.
+- The 100k load-budget run is required before a public beta tag.
+- Plugin ZIP validation must preserve `floppy/floppy.php` and exclude development, test, Composer, and CI artifacts.

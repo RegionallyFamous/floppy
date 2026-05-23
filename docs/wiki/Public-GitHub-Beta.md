@@ -2,6 +2,16 @@
 
 The first public beta is GitHub-first. Users install the WordPress plugin from a GitHub ZIP and connect the Mac app to their own WordPress site.
 
+Floppy does not use a hosted file, telemetry, diagnostics, or sync service. GitHub is the distribution channel; the user's WordPress site and Mac remain the product's data boundary.
+
+## Current Baseline
+
+- WordPress plugin target: WordPress 7.0+ and PHP 8.3+.
+- macOS app target: macOS 26.0+ with Swift tools 6.2.
+- The Mac app is signing-ready; public distribution requires the Developer ID, hardened runtime, notarization, stapling, and Gatekeeper release lane.
+- Desktop Mode support is tested through an executable public-API harness, not string matching.
+- The required CI gate runs a 10k load budget on every push; the 100k load budget is a manual release gate before beta tags; 1M metadata rows remain stress evidence before public announcements.
+
 ## Beta Goals
 
 - Private-by-default WordPress storage for personal and team files.
@@ -36,6 +46,8 @@ The first public beta is GitHub-first. Users install the WordPress plugin from a
 - WordPress debug bundles and Mac diagnostics bundles share a support correlation ID and remain redacted.
 - The Desktop Mode Release Evidence panel can download a redacted evidence JSON sidecar, and CI creates `dist/floppy-release-evidence.json`.
 - The Desktop Mode hook audit passes with public `wp.desktop`, `wp.desktop.HOOKS`, and `wp.hooks` integration only.
+- Composer dependency freshness passes through the safe compatibility lane. PHPUnit remains on the WordPress-compatible 9.6 line until the WordPress test harness no longer depends on APIs removed in newer PHPUnit majors.
+- Swift build/tests pass on the current macOS runner, and Xcode doctor verifies the local release setup before shipping Mac artifacts.
 
 ## Required Beta Evidence
 

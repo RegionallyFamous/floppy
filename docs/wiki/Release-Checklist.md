@@ -4,6 +4,7 @@
 
 - Run `composer validate --strict`.
 - Run `composer audit:composer`.
+- Run `composer deps:outdated-safe`.
 - Confirm `floppy/floppy.php` exists in the release ZIP.
 - Run `composer lint:all` for PHP syntax, PHP compatibility, and WordPress API checks.
 - Run Composer PHPUnit integration tests against the WordPress test suite and MySQL.
@@ -19,6 +20,13 @@
 - Run the 100k load budget before public beta tagging and fail the tag if hot-path query plans full-scan metadata tables.
 - Run the private-storage probe matrix for Studio, Apache, Nginx, and the target host. Production/LAN sites must block direct access before release.
 - Run an export/restore drill and confirm restored metadata, blobs, checksums, tombstones, and attachment links match the source site.
+- Confirm the release target still matches the current baseline: WordPress 7.0+ and PHP 8.3+.
+
+### Dependency Notes
+
+- PHPUnit intentionally stays on the WordPress-compatible 9.6 line while the WordPress test harness calls APIs removed in later PHPUnit majors.
+- PHPCS intentionally stays on the latest line supported by the active WordPress Coding Standards and PHPCompatibilityWP toolchain.
+- Dependency freshness failures should distinguish real security/compatibility issues from ecosystem major-version blockers before release work is stopped.
 
 ## macOS App
 
@@ -34,6 +42,7 @@
 - Test disconnect/revoke behavior against a live WordPress site.
 - Run the sync torture drill against a live WordPress site: offline edit, interrupted upload, stale edit conflict, concurrent move/rename/delete, expired cursor full resync, quota failure, token revoke, and reconnect recovery.
 - Confirm the Mac diagnostics bundle includes the support correlation ID, selected account, domain registry state, cursor, pending/conflict counts, active enumerators, last sync error, and last onboarding error without leaking tokens or query strings.
+- Confirm the release target still matches the current baseline: macOS 26.0+ and Swift tools 6.2.
 
 ## GitHub Release
 
