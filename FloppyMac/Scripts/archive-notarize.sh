@@ -24,6 +24,9 @@ ALLOW_PROVISIONING_DEVICE_REGISTRATION="${ALLOW_PROVISIONING_DEVICE_REGISTRATION
 APP_STORE_CONNECT_KEY_PATH="${APP_STORE_CONNECT_KEY_PATH:-}"
 APP_STORE_CONNECT_KEY_ID="${APP_STORE_CONNECT_KEY_ID:-}"
 APP_STORE_CONNECT_ISSUER_ID="${APP_STORE_CONNECT_ISSUER_ID:-}"
+NOTARY_KEY_PATH="${NOTARY_KEY_PATH:-}"
+NOTARY_KEY_ID="${NOTARY_KEY_ID:-}"
+NOTARY_ISSUER_ID="${NOTARY_ISSUER_ID:-}"
 
 if [[ ! -x "$XCODE_DEVELOPER_DIR/usr/bin/xcodebuild" ]]; then
     echo "Xcode not found at $XCODE_DEVELOPER_DIR" >&2
@@ -72,6 +75,17 @@ if [[ -n "$APP_STORE_CONNECT_KEY_PATH" || -n "$APP_STORE_CONNECT_KEY_ID" || -n "
     )
 fi
 
+if [[ -n "$NOTARY_KEY_PATH" || -n "$NOTARY_KEY_ID" || -n "$NOTARY_ISSUER_ID" ]]; then
+    if [[ -z "$NOTARY_KEY_PATH" || -z "$NOTARY_KEY_ID" || -z "$NOTARY_ISSUER_ID" ]]; then
+        echo "NOTARY_KEY_PATH, NOTARY_KEY_ID, and NOTARY_ISSUER_ID must be set together." >&2
+        exit 2
+    fi
+    if [[ ! -f "$NOTARY_KEY_PATH" ]]; then
+        echo "Notary API key was not found at $NOTARY_KEY_PATH" >&2
+        exit 2
+    fi
+fi
+
 mkdir -p "$(dirname "$ARCHIVE_PATH")" "$EXPORT_PATH"
 rm -rf "$ARCHIVE_PATH" "$EXPORT_PATH" "$ZIP_PATH"
 
@@ -103,7 +117,6 @@ ARCHIVE_ARGS=(
     -configuration "$CONFIGURATION"
     -archivePath "$ARCHIVE_PATH"
     -destination "$ARCHIVE_DESTINATION"
-    SKIP_INSTALL=NO
 )
 
 if [[ -n "$DEVELOPMENT_TEAM" ]]; then
@@ -115,7 +128,9 @@ fi
 if [[ "$ALLOW_PROVISIONING_DEVICE_REGISTRATION" == "1" ]]; then
     ARCHIVE_ARGS+=(-allowProvisioningDeviceRegistration)
 fi
-ARCHIVE_ARGS+=("${AUTHENTICATION_ARGS[@]}")
+if [[ ${#AUTHENTICATION_ARGS[@]} -gt 0 ]]; then
+    ARCHIVE_ARGS+=("${AUTHENTICATION_ARGS[@]}")
+fi
 
 DEVELOPER_DIR="$XCODE_DEVELOPER_DIR" xcodebuild archive "${ARCHIVE_ARGS[@]}"
 
@@ -131,7 +146,9 @@ fi
 if [[ "$ALLOW_PROVISIONING_DEVICE_REGISTRATION" == "1" ]]; then
     EXPORT_ARGS+=(-allowProvisioningDeviceRegistration)
 fi
-EXPORT_ARGS+=("${AUTHENTICATION_ARGS[@]}")
+if [[ ${#AUTHENTICATION_ARGS[@]} -gt 0 ]]; then
+    EXPORT_ARGS+=("${AUTHENTICATION_ARGS[@]}")
+fi
 
 if ! DEVELOPER_DIR="$XCODE_DEVELOPER_DIR" xcodebuild "${EXPORT_ARGS[@]}"; then
     if [[ "$ALLOW_NOTARIZATION_SKIP" != "1" ]]; then
@@ -175,19 +192,25 @@ if ! codesign -d --entitlements :- "$EXTENSION_PATH" 2>/dev/null | grep -q "com.
     echo "File Provider extension is missing App Group entitlements." >&2
     exit 4
 fi
-if ! spctl --assess --type execute --verbose "$APP_PATH"; then
-    if [[ "$ALLOW_NOTARIZATION_SKIP" == "1" ]]; then
-        echo "Gatekeeper assessment failed for a local development build; continuing because ALLOW_NOTARIZATION_SKIP=1."
-    else
-        exit 4
-    fi
+if [[ "$ALLOW_NOTARIZATION_SKIP" == "1" ]] && ! spctl --assess --type execute --verbose "$APP_PATH"; then
+    echo "Gatekeeper assessment failed for a local development build; continuing because ALLOW_NOTARIZATION_SKIP=1."
 fi
 
 ditto -c -k --sequesterRsrc --keepParent "$APP_PATH" "$ZIP_PATH"
 echo "Created notarization ZIP: $ZIP_PATH"
 
+NOTARYTOOL_KEY_PATH="${NOTARY_KEY_PATH:-$APP_STORE_CONNECT_KEY_PATH}"
+NOTARYTOOL_KEY_ID="${NOTARY_KEY_ID:-$APP_STORE_CONNECT_KEY_ID}"
+NOTARYTOOL_ISSUER_ID="${NOTARY_ISSUER_ID:-$APP_STORE_CONNECT_ISSUER_ID}"
+
 if [[ -n "$NOTARY_PROFILE" ]]; then
     xcrun notarytool submit "$ZIP_PATH" --keychain-profile "$NOTARY_PROFILE" --wait
+elif [[ -n "$NOTARYTOOL_KEY_PATH" && -n "$NOTARYTOOL_KEY_ID" && -n "$NOTARYTOOL_ISSUER_ID" ]]; then
+    xcrun notarytool submit "$ZIP_PATH" \
+        --key "$NOTARYTOOL_KEY_PATH" \
+        --key-id "$NOTARYTOOL_KEY_ID" \
+        --issuer "$NOTARYTOOL_ISSUER_ID" \
+        --wait
 elif [[ -n "$APPLE_ID" && -n "$APPLE_PASSWORD" && -n "$NOTARY_TEAM_ID" ]]; then
     xcrun notarytool submit "$ZIP_PATH" \
         --apple-id "$APPLE_ID" \
@@ -196,12 +219,12 @@ elif [[ -n "$APPLE_ID" && -n "$APPLE_PASSWORD" && -n "$NOTARY_TEAM_ID" ]]; then
         --wait
 else
     if [[ "$ALLOW_NOTARIZATION_SKIP" == "1" ]]; then
-        echo "Notarization skipped for local development only. Set NOTARY_PROFILE, or APPLE_ID + APPLE_PASSWORD + NOTARY_TEAM_ID for release builds."
+        echo "Notarization skipped for local development only. Set NOTARY_PROFILE, NOTARY_KEY_* values, or APPLE_ID + APPLE_PASSWORD + NOTARY_TEAM_ID for release builds."
         echo "$APP_PATH"
         exit 0
     fi
     echo "Notarization credentials are required for signed release builds." >&2
-    echo "Set NOTARY_PROFILE, or APPLE_ID + APPLE_PASSWORD + NOTARY_TEAM_ID. Use ALLOW_NOTARIZATION_SKIP=1 only for local development." >&2
+    echo "Set NOTARY_PROFILE, NOTARY_KEY_* values, or APPLE_ID + APPLE_PASSWORD + NOTARY_TEAM_ID. Use ALLOW_NOTARIZATION_SKIP=1 only for local development." >&2
     exit 4
 fi
 

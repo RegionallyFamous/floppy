@@ -27,6 +27,7 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.floppy.mac.core
         GENERATE_INFOPLIST_FILE: "YES"
+        SKIP_INSTALL: "YES"
 
   FloppyMac:
     type: application
