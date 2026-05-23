@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
+  <title>Floppy A:/ icon</title>
+  <g fill="none" stroke="#111111" stroke-width="92" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M168 742 L304 282 L440 742 M216 590 H392"/>
+    <path d="M812 276 L650 748"/>
+  </g>
+  <g fill="#111111">
+    <circle cx="536" cy="470" r="46"/>
+    <circle cx="536" cy="652" r="46"/>
+  </g>
+</svg>

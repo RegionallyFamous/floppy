@@ -63,6 +63,14 @@ FloppyMac/Scripts/package-wordpress-plugin.sh
 
 This writes `dist/floppy.zip`, suitable for attaching to a GitHub release as `floppy.zip`.
 
+## Regenerate Icons
+
+The app icon, menu bar template, and WordPress plugin icon assets come from the checked-in `A:/` SVG sources:
+
+```bash
+FloppyMac/Scripts/generate-icons.sh
+```
+
 ## Connect Flow
 
 1. Start Floppy for Mac.

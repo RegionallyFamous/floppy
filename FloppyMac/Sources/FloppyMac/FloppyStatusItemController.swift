@@ -181,16 +181,19 @@ final class FloppyStatusItemController: NSObject {
         }
 
         let path = NSBezierPath()
-        path.move(to: point(3.0, 1.7))
-        path.line(to: point(12.8, 1.7))
-        path.line(to: point(16.3, 5.2))
-        path.line(to: point(16.3, 15.1))
-        path.curve(to: point(15.1, 16.3), controlPoint1: point(16.3, 15.8), controlPoint2: point(15.8, 16.3))
-        path.line(to: point(2.9, 16.3))
-        path.curve(to: point(1.7, 15.1), controlPoint1: point(2.2, 16.3), controlPoint2: point(1.7, 15.8))
-        path.line(to: point(1.7, 3.0))
-        path.curve(to: point(3.0, 1.7), controlPoint1: point(1.7, 2.3), controlPoint2: point(2.3, 1.7))
-        path.close()
-        path.fill()
+        path.lineWidth = 1.9 * scale
+        path.lineCapStyle = .round
+        path.lineJoinStyle = .round
+        path.move(to: point(2.4, 14.2))
+        path.line(to: point(5.5, 3.9))
+        path.line(to: point(8.6, 14.2))
+        path.move(to: point(3.5, 10.5))
+        path.line(to: point(7.5, 10.5))
+        path.move(to: point(15.6, 4.1))
+        path.line(to: point(12.5, 14.1))
+        path.stroke()
+
+        NSBezierPath(ovalIn: CGRect(x: point(10.6, 7.6).x - 0.85 * scale, y: point(10.6, 7.6).y - 0.85 * scale, width: 1.7 * scale, height: 1.7 * scale)).fill()
+        NSBezierPath(ovalIn: CGRect(x: point(10.6, 12.0).x - 0.85 * scale, y: point(10.6, 12.0).y - 0.85 * scale, width: 1.7 * scale, height: 1.7 * scale)).fill()
     }
 }
