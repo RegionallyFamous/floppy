@@ -53,7 +53,7 @@ jobs:
       - uses: actions/checkout@v6
       - uses: shivammathur/setup-php@v2
         with:
-          php-version: "8.1"
+          php-version: "8.3"
           extensions: mysqli, pdo_sqlite, sqlite3, zip
       - name: Install Composer dependencies
         run: composer install --no-interaction --prefer-dist
@@ -61,6 +61,8 @@ jobs:
         run: composer validate --strict
       - name: Composer security audit
         run: composer audit:composer
+      - name: Composer safe dependency freshness
+        run: composer deps:outdated-safe
       - name: PHP lint
         run: composer lint:all
       - name: Load query budget smoke
@@ -97,9 +99,14 @@ jobs:
 
   mac:
     name: macOS App
-    runs-on: macos-latest
+    runs-on: macos-26
     steps:
       - uses: actions/checkout@v6
+      - name: Toolchain versions
+        run: |
+          sw_vers
+          xcodebuild -version
+          swift --version
       - name: Resolve Swift package
         run: swift package --package-path FloppyMac resolve
       - name: Swift build
@@ -117,7 +124,7 @@ jobs:
       - uses: actions/checkout@v6
       - uses: shivammathur/setup-php@v2
         with:
-          php-version: "8.1"
+          php-version: "8.3"
           extensions: pdo_sqlite, sqlite3
       - name: Run 100k load budget
         run: |

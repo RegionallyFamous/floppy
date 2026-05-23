@@ -48,7 +48,7 @@ final class Floppy_REST_Maintenance_Test extends WP_UnitTestCase {
 		$data = $response->get_data();
 		$json = wp_json_encode( $data );
 
-		$this->assertSame( 'floppy-debug-bundle-v2', $data['format'] );
+		$this->assertSame( 'floppy-debug-bundle-v3', $data['format'] );
 		$this->assertArrayHasKey( 'support', $data );
 		$this->assertArrayHasKey( 'private_storage', $data );
 		$this->assertArrayHasKey( 'sync', $data );
@@ -68,7 +68,7 @@ final class Floppy_REST_Maintenance_Test extends WP_UnitTestCase {
 		$data = $response->get_data();
 		$json = wp_json_encode( $data );
 
-		$this->assertSame( 'floppy-beta-evidence-v1', $data['format'] );
+		$this->assertSame( 'floppy-beta-evidence-v2', $data['format'] );
 		$this->assertTrue( $data['privacy']['no_external_services'] );
 		$this->assertSame( 'ci-required', $data['release_gates']['phpunit_wordpress'] );
 		$this->assertArrayHasKey( 'developer_id_notarization', $data['release_gates'] );
