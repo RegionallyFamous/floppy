@@ -164,6 +164,12 @@ public enum FloppyLocalStoragePolicy: String, Codable, CaseIterable, Sendable {
     case availableOffline = "available_offline"
     case excluded
 
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        let rawValue = try container.decode(String.self)
+        self = FloppyLocalStoragePolicy(rawValue: rawValue) ?? .onlineOnly
+    }
+
     public var isFinderVisible: Bool {
         self != .excluded
     }
@@ -252,6 +258,30 @@ public struct FloppyItem: Codable, Equatable, Identifiable, Sendable {
         self.downloadURL = downloadURL
         self.createdAtGMT = createdAtGMT
         self.updatedAtGMT = updatedAtGMT
+    }
+
+    public func withStoragePolicy(_ policy: FloppyLocalStoragePolicy) -> FloppyItem {
+        FloppyItem(
+            kind: kind,
+            id: id,
+            uuid: uuid,
+            attachmentID: attachmentID,
+            ownerID: ownerID,
+            parentID: parentID,
+            parentUUID: parentUUID,
+            name: name,
+            mimeType: mimeType,
+            sizeBytes: sizeBytes,
+            contentHash: contentHash,
+            contentVersion: contentVersion,
+            metadataVersion: metadataVersion,
+            status: status,
+            visibility: visibility,
+            storagePolicy: policy,
+            downloadURL: downloadURL,
+            createdAtGMT: createdAtGMT,
+            updatedAtGMT: updatedAtGMT
+        )
     }
 }
 

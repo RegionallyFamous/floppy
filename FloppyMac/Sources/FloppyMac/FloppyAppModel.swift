@@ -10,6 +10,7 @@ import UniformTypeIdentifiers
 final class FloppyAppModel: ObservableObject {
     private static let backgroundSyncEnabledDefaultsKey = "FloppyBackgroundSyncEnabled"
     private static let backgroundSyncInterval: TimeInterval = 60
+    private static let tokenFailureCooldown: TimeInterval = 30
     private static let syncCadence = FloppyMacSyncCadence.standard
 
     @Published var siteURLText: String = ""
@@ -50,6 +51,7 @@ final class FloppyAppModel: ObservableObject {
     private let networkMonitorQueue = DispatchQueue(label: "com.floppy.mac.network-monitor")
     private var syncInProgress = false
     private var refreshInProgress = false
+    private var recentTokenLoadFailures: [String: (date: Date, error: Error)] = [:]
 
     var isOnboarding: Bool {
         onboardingStep.isActiveSetupStep
@@ -1140,19 +1142,31 @@ final class FloppyAppModel: ObservableObject {
     }
 
     private func loadToken(accountID: String, timeout: TimeInterval = 15) async throws -> String? {
+        if let recent = recentTokenLoadFailures[accountID],
+           Date().timeIntervalSince(recent.date) < Self.tokenFailureCooldown {
+            throw recent.error
+        }
+
         let tokenStore = self.tokenStore
-        return try await withCheckedThrowingContinuation { continuation in
-            let gate = TokenLoadContinuationGate()
-            DispatchQueue.global(qos: .userInitiated).async {
-                do {
-                    gate.resume(continuation, with: .success(try tokenStore.load(accountID: accountID)))
-                } catch {
-                    gate.resume(continuation, with: .failure(error))
+        do {
+            let token = try await withCheckedThrowingContinuation { continuation in
+                let gate = TokenLoadContinuationGate()
+                DispatchQueue.global(qos: .userInitiated).async {
+                    do {
+                        gate.resume(continuation, with: .success(try tokenStore.load(accountID: accountID)))
+                    } catch {
+                        gate.resume(continuation, with: .failure(error))
+                    }
+                }
+                DispatchQueue.global().asyncAfter(deadline: .now() + timeout) {
+                    gate.resume(continuation, with: .failure(FloppyTokenStoreError.timeout))
                 }
             }
-            DispatchQueue.global().asyncAfter(deadline: .now() + timeout) {
-                gate.resume(continuation, with: .failure(FloppyTokenStoreError.timeout))
-            }
+            recentTokenLoadFailures.removeValue(forKey: accountID)
+            return token
+        } catch {
+            recentTokenLoadFailures[accountID] = (Date(), error)
+            throw error
         }
     }
 

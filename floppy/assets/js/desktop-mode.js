@@ -493,6 +493,10 @@
 			}
 			var visible = visibleFileItems();
 			var selected = selectedFileItems();
+			var rendered = visible.slice( 0, FILE_RENDER_LIMIT );
+			var renderedSelected = rendered.filter( function ( item ) {
+				return !! state.selected[ targetKey( item ) ];
+			} );
 			var countNode = panelRoot.querySelector( '[data-file-count]' );
 			var sortNode = panelRoot.querySelector( '[data-file-sort-summary]' );
 			var selectionBar = panelRoot.querySelector( '[data-selection-bar]' );
@@ -514,13 +518,12 @@
 				wrap.innerHTML = '<div class="floppy-empty"><strong>' + escapeHtml( __( 'No matching files.', 'floppy' ) ) + '</strong><span>' + escapeHtml( __( 'Try a different search or filter.', 'floppy' ) ) + '</span></div>';
 				return;
 			}
-			var rendered = visible.slice( 0, FILE_RENDER_LIMIT );
 			var limitNotice = visible.length > rendered.length ? '<div class="floppy-list-limit"><span class="dashicons dashicons-performance" aria-hidden="true"></span><span>' + escapeHtml( __( 'Showing the first ', 'floppy' ) + String( rendered.length ) + __( ' matching items. Search, filter, sort, or load another page to narrow this large folder.', 'floppy' ) ) + '</span></div>' : '';
 			wrap.innerHTML = [
 				'<table class="floppy-file-table" aria-label="' + escapeHtml( __( 'Floppy files', 'floppy' ) ) + '">',
 					'<colgroup><col class="floppy-col-check" /><col class="floppy-col-name" /><col class="floppy-col-type" /><col class="floppy-col-size" /><col class="floppy-col-modified" /><col class="floppy-col-actions" /></colgroup>',
 					'<thead><tr>',
-						'<th scope="col" class="floppy-file-check"><input type="checkbox" data-select-visible ' + ( selected.length && selected.length === visible.length ? 'checked ' : '' ) + 'aria-label="' + escapeHtml( __( 'Select all visible files', 'floppy' ) ) + '" /></th>',
+						'<th scope="col" class="floppy-file-check"><input type="checkbox" data-select-visible ' + ( renderedSelected.length && renderedSelected.length === rendered.length ? 'checked ' : '' ) + 'aria-label="' + escapeHtml( __( 'Select all rendered files', 'floppy' ) ) + '" /></th>',
 						renderSortHeading( 'name', FILE_SORT_LABELS.name, 'floppy-file-name-heading' ),
 						renderSortHeading( 'kind', FILE_SORT_LABELS.kind, '' ),
 						renderSortHeading( 'size', FILE_SORT_LABELS.size, 'is-number' ),
@@ -564,7 +567,7 @@
 			var updated = item.updated_at_gmt ? formatDate( item.updated_at_gmt ) : '';
 			var key = targetKey( item );
 			var selected = !! state.selected[ key ];
-			return '<tr class="floppy-file-row' + ( selected ? ' is-selected' : '' ) + '" tabindex="0" aria-selected="' + ( selected ? 'true' : 'false' ) + '" data-row-key="' + escapeHtml( key ) + '" data-kind="' + escapeHtml( item.kind ) + '" data-id="' + escapeHtml( String( item.id ) ) + '">' +
+			return '<tr class="floppy-file-row' + ( selected ? ' is-selected' : '' ) + '" tabindex="0" aria-selected="' + ( selected ? 'true' : 'false' ) + '" data-selectable-row="1" data-row-key="' + escapeHtml( key ) + '" data-kind="' + escapeHtml( item.kind ) + '" data-id="' + escapeHtml( String( item.id ) ) + '">' +
 				'<td class="floppy-file-check"><input type="checkbox" data-select-item="' + escapeHtml( key ) + '" ' + ( selected ? 'checked ' : '' ) + 'aria-label="' + escapeHtml( __( 'Select ', 'floppy' ) + item.name ) + '" /></td>' +
 				'<td class="floppy-file-name-cell"><button type="button" class="floppy-file-open" data-open-item="' + escapeHtml( key ) + '"><span class="dashicons dashicons-' + icon + '" aria-hidden="true"></span><span><strong>' + escapeHtml( item.name ) + '</strong><small>' + escapeHtml( itemSubtitle( item ) ) + '</small></span></button></td>' +
 				'<td>' + escapeHtml( kindLabel( item ) ) + '</td>' +
@@ -690,12 +693,14 @@
 			var icon = item.kind === 'folder' ? 'category' : fileIcon( item.mime_type );
 			var size = item.kind === 'file' ? formatBytes( item.size_bytes ) : __( 'Folder', 'floppy' );
 			var updated = item.updated_at_gmt ? formatDate( item.updated_at_gmt ) : '';
+			var primary = mode === 'trash' ? __( 'Restore ', 'floppy' ) + item.name : __( 'Open ', 'floppy' ) + item.name;
+			var primaryAction = mode === 'trash' ? 'restore-item' : 'open-recovery-item';
 			var actions = mode === 'trash'
 				? '<button type="button" class="button button-primary" data-action="restore-item" data-row-key="' + escapeHtml( key ) + '">' + escapeHtml( __( 'Restore', 'floppy' ) ) + '</button>'
 				: '<button type="button" class="button" data-action="open-recovery-item" data-row-key="' + escapeHtml( key ) + '">' + escapeHtml( __( 'Open', 'floppy' ) ) + '</button>';
 
-			return '<tr class="floppy-file-row" tabindex="0" data-row-key="' + escapeHtml( key ) + '" data-kind="' + escapeHtml( item.kind ) + '" data-id="' + escapeHtml( String( item.id ) ) + '">' +
-				'<td class="floppy-file-name-cell"><button type="button" class="floppy-file-open" data-open-item="' + escapeHtml( key ) + '"><span class="dashicons dashicons-' + icon + '" aria-hidden="true"></span><span><strong>' + escapeHtml( item.name ) + '</strong><small>' + escapeHtml( itemSubtitle( item ) ) + '</small></span></button></td>' +
+			return '<tr class="floppy-file-row" tabindex="0" data-recovery-mode="' + escapeHtml( mode ) + '" data-row-key="' + escapeHtml( key ) + '" data-kind="' + escapeHtml( item.kind ) + '" data-id="' + escapeHtml( String( item.id ) ) + '">' +
+				'<td class="floppy-file-name-cell"><button type="button" class="floppy-file-open" data-action="' + escapeHtml( primaryAction ) + '" data-row-key="' + escapeHtml( key ) + '" aria-label="' + escapeHtml( primary ) + '"><span class="dashicons dashicons-' + icon + '" aria-hidden="true"></span><span><strong>' + escapeHtml( item.name ) + '</strong><small>' + escapeHtml( itemSubtitle( item ) ) + '</small></span></button></td>' +
 				'<td>' + escapeHtml( kindLabel( item ) ) + '</td>' +
 				'<td class="is-number">' + escapeHtml( size ) + '</td>' +
 				'<td>' + escapeHtml( updated || '-' ) + '</td>' +
@@ -2002,10 +2007,16 @@
 			}
 			if ( event.key === 'Enter' ) {
 				event.preventDefault();
-				openItemByKey( row.getAttribute( 'data-row-key' ) );
+				if ( row.getAttribute( 'data-recovery-mode' ) === 'trash' ) {
+					restoreItem( itemByKey( row.getAttribute( 'data-row-key' ) ) );
+				} else {
+					openItemByKey( row.getAttribute( 'data-row-key' ) );
+				}
 			} else if ( event.key === ' ' ) {
 				event.preventDefault();
-				toggleSelectedItem( row.getAttribute( 'data-row-key' ) );
+				if ( row.hasAttribute( 'data-selectable-row' ) ) {
+					toggleSelectedItem( row.getAttribute( 'data-row-key' ) );
+				}
 			} else if ( event.key === 'ArrowDown' || event.key === 'ArrowUp' ) {
 				event.preventDefault();
 				focusSiblingRow( row, event.key === 'ArrowDown' ? 1 : -1 );
@@ -2094,7 +2105,7 @@
 			}
 
 			var row = event.target.closest( '.floppy-file-row' );
-			if ( row && ! event.target.closest( 'button,input,a' ) ) {
+			if ( row && row.hasAttribute( 'data-selectable-row' ) && ! event.target.closest( 'button,input,a' ) ) {
 				toggleSelectedItem( row.getAttribute( 'data-row-key' ) );
 				return;
 			}
@@ -2111,7 +2122,11 @@
 			currentMount = container;
 			var row = event.target.closest( '.floppy-file-row' );
 			if ( row && ! event.target.closest( 'button,input,a' ) ) {
-				openItemByKey( row.getAttribute( 'data-row-key' ) );
+				if ( row.getAttribute( 'data-recovery-mode' ) === 'trash' ) {
+					restoreItem( itemByKey( row.getAttribute( 'data-row-key' ) ) );
+				} else {
+					openItemByKey( row.getAttribute( 'data-row-key' ) );
+				}
 			}
 		} );
 
@@ -2585,7 +2600,7 @@
 	function setVisibleSelection( selected ) {
 		var state = appFileState();
 		state.selected = state.selected || {};
-		visibleFileItems().forEach( function ( item ) {
+		visibleFileItems().slice( 0, FILE_RENDER_LIMIT ).forEach( function ( item ) {
 			var key = targetKey( item );
 			if ( selected ) {
 				state.selected[ key ] = true;

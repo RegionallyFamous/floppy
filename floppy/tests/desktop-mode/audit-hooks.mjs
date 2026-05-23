@@ -139,7 +139,11 @@ const checks = {
 		{ label: 'app status updates are announced politely', pass: /data-floppy-status aria-live="polite" aria-atomic="true"/.test( source ) },
 		{ label: 'loading panel is a live status region', pass: /floppy-loading-panel" role="status" aria-live="polite" aria-atomic="true"/.test( source ) },
 		{ label: 'inline panel errors use an alert role', pass: /floppy-error-state" role="alert"/.test( source ) },
-		{ label: 'file search has an accessible label', pass: /<label class="floppy-search"><span class="screen-reader-text">[\s\S]*data-file-search/.test( source ) }
+		{ label: 'file search has an accessible label', pass: /<label class="floppy-search"><span class="screen-reader-text">[\s\S]*data-file-search/.test( source ) },
+		{ label: 'select all is bounded to rendered rows', pass: /visibleFileItems\(\)\.slice\( 0, FILE_RENDER_LIMIT \)/.test( source ) },
+		{ label: 'selectable rows are explicit', pass: /data-selectable-row="1"/.test( source ) },
+		{ label: 'recovery rows carry mode semantics', pass: /data-recovery-mode=/.test( source ) },
+		{ label: 'trash rows restore before opening', pass: /mode === 'trash'/.test( source ) && /data-action="restore-item"/.test( source ) && /getAttribute\( 'data-recovery-mode' \) === 'trash'/.test( source ) && /restoreItem\( itemByKey/.test( source ) }
 	],
 	asyncRaces: [
 		{ label: 'panel error handlers are request-token guarded', pass: /function showPanelError/.test( source ) && ( source.match( /\.catch\( showPanelError\( token \) \)/g ) || [] ).length >= 8 }

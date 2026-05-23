@@ -189,6 +189,39 @@ final class Floppy_Diagnostics {
 	}
 
 	/**
+	 * Summarize upload quota reservations without exposing session storage keys.
+	 */
+	public static function quota_reservation_summary( int $user_id = 0 ): array {
+		global $wpdb;
+
+		$user_sql = $user_id > 0 ? $wpdb->prepare( ' AND user_id = %d', $user_id ) : '';
+		$now = current_time( 'mysql', true );
+		$row = $wpdb->get_row(
+			$wpdb->prepare(
+				'SELECT COUNT(*) AS open_sessions, COALESCE(SUM(reserved_bytes),0) AS reserved_bytes, MIN(expires_at_gmt) AS oldest_expires_at_gmt FROM ' . Floppy_Schema::table( 'upload_sessions' ) . " WHERE status = 'open' AND expires_at_gmt >= %s $user_sql", // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared
+				$now
+			),
+			ARRAY_A
+		);
+		$expired_open = (int) $wpdb->get_var(
+			$wpdb->prepare(
+				'SELECT COUNT(*) FROM ' . Floppy_Schema::table( 'upload_sessions' ) . " WHERE status = 'open' AND expires_at_gmt < %s $user_sql", // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared
+				$now
+			)
+		);
+		$failed = (int) $wpdb->get_var( 'SELECT COUNT(*) FROM ' . Floppy_Schema::table( 'upload_sessions' ) . " WHERE status = 'failed'" . $user_sql ); // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared
+
+		return array(
+			'scope'                 => $user_id > 0 ? 'user' : 'site',
+			'open_sessions'         => (int) ( $row['open_sessions'] ?? 0 ),
+			'open_reserved_bytes'   => (int) ( $row['reserved_bytes'] ?? 0 ),
+			'expired_open_sessions' => $expired_open,
+			'failed_sessions'       => $failed,
+			'oldest_expires_at_gmt' => (string) ( $row['oldest_expires_at_gmt'] ?? '' ),
+		);
+	}
+
+	/**
 	 * Redact credentials/query fragments while preserving the origin/path.
 	 */
 	public static function redact_url( string $url ): string {
@@ -364,6 +397,7 @@ final class Floppy_Diagnostics {
 			'retained_versions'       => self::version_summary(),
 			'recent_restore_actions'  => (int) $wpdb->get_var( "SELECT COUNT(*) FROM " . Floppy_Schema::table( 'audit_log' ) . " WHERE action IN ($restore_actions)" ), // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared
 			'recent_export_actions'   => (int) $wpdb->get_var( "SELECT COUNT(*) FROM " . Floppy_Schema::table( 'audit_log' ) . " WHERE action IN ($export_actions)" ), // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared
+			'quota_reservations'      => self::quota_reservation_summary(),
 			'public_links_enabled'    => false,
 			'backup_product_lane'     => 'future',
 			'private_storage_fresh'   => ! empty( Floppy_Storage::private_storage_status()['checked_at_gmt'] ),

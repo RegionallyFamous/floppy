@@ -700,6 +700,9 @@ final class Floppy_Rest {
 			'exports'      => array(
 				'latest' => array_map( array( __CLASS__, 'serialize_job' ), $export_jobs ),
 			),
+			'quota'        => array(
+				'reservations' => Floppy_Diagnostics::quota_reservation_summary( $user_id ),
+			),
 			'trust'        => array(
 				'no_external_services'        => true,
 				'preserve_local_bytes_first'  => true,
@@ -2910,9 +2913,14 @@ final class Floppy_Rest {
 		global $wpdb;
 
 		$rows = $wpdb->get_results(
-			'SELECT * FROM ' . Floppy_Schema::table( 'jobs' ) . " WHERE job_type = 'export' ORDER BY id DESC LIMIT 100",
+			$wpdb->prepare(
+				'SELECT * FROM ' . Floppy_Schema::table( 'jobs' ) . " WHERE job_type = 'export' AND (payload_json LIKE %s OR payload_json LIKE %s) ORDER BY id DESC LIMIT %d",
+				'%"user_id":' . $user_id . ',%',
+				'%"user_id":' . $user_id . '}%',
+				max( 1, min( 100, $limit ) )
+			),
 			ARRAY_A
-		); // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared
+		);
 
 		$out = array();
 		foreach ( $rows as $row ) {
@@ -4169,11 +4177,12 @@ final class Floppy_Rest {
 	 * Serialize a recovery-center file/folder row.
 	 */
 	private static function serialize_recovery_item( array $row ): array {
-		if ( 'folder' === (string) $row['kind'] ) {
-			return self::serialize_folder( $row );
+		$item = 'folder' === (string) $row['kind'] ? self::serialize_folder( $row ) : self::serialize_file( $row );
+		if ( 'active' !== (string) ( $row['status'] ?? '' ) ) {
+			unset( $item['download_url'] );
 		}
 
-		return self::serialize_file( $row );
+		return $item;
 	}
 
 	/**

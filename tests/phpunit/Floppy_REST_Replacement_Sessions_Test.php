@@ -229,6 +229,24 @@ final class Floppy_REST_Replacement_Sessions_Test extends WP_UnitTestCase {
 		$conflict->set_param( 'local_content_hash', hash( 'sha256', 'local edit' ) );
 		Floppy_Rest::record_conflict( $conflict );
 		Floppy_Rest::enqueue_export();
+		$other_user = self::factory()->user->create( array( 'role' => 'administrator' ) );
+		wp_set_current_user( $other_user );
+		Floppy_Rest::enqueue_export();
+		wp_set_current_user( $this->user_id );
+		$wpdb->insert(
+			Floppy_Schema::table( 'jobs' ),
+			array(
+				'job_uuid'       => wp_generate_uuid4(),
+				'job_type'       => 'export',
+				'status'         => 'queued',
+				'priority'       => 5,
+				'not_before_gmt' => current_time( 'mysql', true ),
+				'payload_json'   => wp_json_encode( array( 'user_id' => (int) ( (string) $this->user_id . '0' ) ) ),
+				'created_at_gmt' => current_time( 'mysql', true ),
+				'updated_at_gmt' => current_time( 'mysql', true ),
+			),
+			array( '%s', '%s', '%s', '%d', '%s', '%s', '%s', '%s' )
+		);
 
 		$wpdb->update(
 			Floppy_Schema::table( 'files' ),
@@ -252,10 +270,13 @@ final class Floppy_REST_Replacement_Sessions_Test extends WP_UnitTestCase {
 		$this->assertTrue( $data['trust']['trash_restore_available'] );
 		$this->assertSame( 1, $data['trash']['counts']['files'] );
 		$this->assertSame( 'hello.txt', $data['trash']['items'][0]['name'] );
+		$this->assertArrayNotHasKey( 'download_url', $data['trash']['items'][0] );
 		$this->assertSame( $active['id'], $data['recents']['items'][0]['id'] );
+		$this->assertArrayHasKey( 'download_url', $data['recents']['items'][0] );
 		$this->assertNotEmpty( $data['versions']['items'] );
 		$this->assertNotEmpty( $data['conflicts']['items'] );
-		$this->assertNotEmpty( $data['exports']['latest'] );
+		$this->assertCount( 1, $data['exports']['latest'] );
+		$this->assertSame( 0, $data['quota']['reservations']['open_reserved_bytes'] );
 		$this->assertStringNotContainsString( 'storage_key', $json );
 		$this->assertStringNotContainsString( $file['storage_key'], $json );
 		$this->assertStringNotContainsString( Floppy_Storage::path_for_key( $file['storage_key'] ), $json );

@@ -543,6 +543,16 @@ import Testing
     #expect(!json.contains(FileManager.default.homeDirectoryForCurrentUser.path))
 }
 
+@Test func floppyItemToleratesUnknownStoragePolicyValues() throws {
+    let json = sampleItemJSON(id: 12, uuid: "file-uuid", name: "hello.txt", size: 5)
+        .replacingOccurrences(of: "\"visibility\": \"private\",", with: "\"visibility\": \"private\", \"storage_policy\": \"future_native_mode\",")
+
+    let item = try JSONDecoder.floppy.decode(FloppyItem.self, from: Data(json.utf8))
+
+    #expect(item.storagePolicy == .onlineOnly)
+    #expect(item.withStoragePolicy(.excluded).storagePolicy == .excluded)
+}
+
 @Test func recoveryPlannerMapsDeterministicStatesToActions() throws {
     let noAccount = FloppyRecoveryPlanner.decision(for: FloppyRecoveryContext(
         lifecycleState: .unconfigured,
