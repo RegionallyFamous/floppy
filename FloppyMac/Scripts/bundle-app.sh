@@ -20,7 +20,13 @@ mkdir -p "$MACOS_DIR" "$RESOURCES_DIR"
 cp "$ROOT/.build/$CONFIGURATION/$EXECUTABLE_NAME" "$MACOS_DIR/$EXECUTABLE_NAME"
 cp "$ROOT/Packaging/Info.plist" "$CONTENTS_DIR/Info.plist"
 cp "$ROOT/Packaging/FloppyIcon.icns" "$RESOURCES_DIR/FloppyIcon.icns"
+cp "$ROOT/Packaging/FloppyMenuBarTemplate.pdf" "$RESOURCES_DIR/FloppyMenuBarTemplate.pdf"
 chmod +x "$MACOS_DIR/$EXECUTABLE_NAME"
+
+/usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString 0.1.0" "$CONTENTS_DIR/Info.plist"
+/usr/libexec/PlistBuddy -c "Set :CFBundleVersion 1" "$CONTENTS_DIR/Info.plist"
+/usr/libexec/PlistBuddy -c "Set :FloppyKeychainAccessGroup " "$CONTENTS_DIR/Info.plist"
+/usr/libexec/PlistBuddy -c "Set :FloppyAppGroupIdentifier group.com.floppy.mac" "$CONTENTS_DIR/Info.plist"
 
 if command -v codesign > /dev/null; then
     codesign --force --deep --sign - "$APP_DIR" > /dev/null

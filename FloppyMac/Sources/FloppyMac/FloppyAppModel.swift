@@ -2,6 +2,7 @@ import AppKit
 import FloppyCore
 import Foundation
 import SwiftUI
+import UniformTypeIdentifiers
 
 @MainActor
 final class FloppyAppModel: ObservableObject {
@@ -18,13 +19,25 @@ final class FloppyAppModel: ObservableObject {
     @Published var githubPluginZipURLText: String = "https://github.com/RegionallyFamous/floppy/releases/latest/download/floppy.zip"
     @Published var lastDownloadedPluginZipURL: URL?
     @Published var pendingPluginUploadURL: URL?
+    @Published var nativeFolderReadiness = FloppyNativeFolderReadiness.current()
 
     private let tokenStore: FloppyTokenStore = KeychainTokenStore.default()
     private var ledger: LocalLedger?
     private var pendingOnboarding: PendingOnboarding?
     private var onboardingTask: Task<Void, Never>?
 
+    var isOnboarding: Bool {
+        onboardingStep.isActiveSetupStep
+    }
+
+    var nativeFolderStatusText: String {
+        nativeFolderReadiness.isReady ? "Native Finder folder" : "Finder folder needs signed app"
+    }
+
     init() {
+        FloppyURLRouter.shared.setHandler { [weak self] url in
+            self?.handleCallback(url)
+        }
         Task { await load() }
     }
 
@@ -32,8 +45,13 @@ final class FloppyAppModel: ObservableObject {
         let ledger = LocalLedger()
         self.ledger = ledger
         restorePendingOnboarding()
+        nativeFolderReadiness = FloppyNativeFolderReadiness.current()
         accounts = await ledger.accounts()
+        await prepareNativeDomainsIfAvailable(for: accounts)
         selectedAccountID = accounts.first?.id
+        if let selectedAccountID {
+            items = await ledger.items(accountID: selectedAccountID)
+        }
         FloppyDiagnostics.app.info("Loaded \(self.accounts.count, privacy: .public) account(s) from local ledger")
         await refreshSelectedAccount()
     }
@@ -46,8 +64,8 @@ final class FloppyAppModel: ObservableObject {
             return
         }
 
-        guard siteURL.normalizedScheme == "https" else {
-            status = "Use an HTTPS WordPress site URL."
+        guard siteURL.usesSecureSchemeForOnboarding else {
+            status = "Use an HTTPS WordPress site URL, or http://localhost for local Studio testing."
             return
         }
 
@@ -147,6 +165,16 @@ final class FloppyAppModel: ObservableObject {
                     let approval = try FloppyAPIClient.parseApprovalCallback(url)
                     try validatePendingOnboarding(state: approval.state, siteURL: approval.siteURL)
                     await finishDeviceApproval(approval)
+                    return
+                }
+
+                if url.host == "open-folder" {
+                    openNativeFolder()
+                    return
+                }
+
+                if url.host == "settings" {
+                    openSettingsWindow()
                     return
                 }
 
@@ -298,14 +326,33 @@ final class FloppyAppModel: ObservableObject {
     }
 
     private func saveConnectedAccount(account: FloppyAccount, token: String) async throws {
-        try tokenStore.save(token: token, accountID: account.id)
-        try tokenStore.save(token: token, accountID: FloppyDomainRegistry.domainIdentifier(for: account))
+        let tokenStore = self.tokenStore
+        let domainIdentifier = FloppyDomainRegistry.domainIdentifier(for: account)
+        try await performTokenOperation {
+            try tokenStore.save(token: token, accountID: account.id)
+            try tokenStore.save(token: token, accountID: domainIdentifier)
+        }
         try await ledger?.upsert(account: account)
         try await FileProviderDomainController.register(account: account)
+        nativeFolderReadiness = FileProviderDomainController.readiness()
         accounts = await ledger?.accounts() ?? []
         selectedAccountID = account.id
         await refreshSelectedAccount()
         FloppyDiagnostics.app.info("Saved connected account for \(FloppyDiagnostics.redactedURL(account.siteURL), privacy: .public)")
+    }
+
+    private func prepareNativeDomainsIfAvailable(for accounts: [FloppyAccount]) async {
+        guard nativeFolderReadiness.isReady else {
+            return
+        }
+
+        for account in accounts {
+            do {
+                try await FileProviderDomainController.register(account: account)
+            } catch {
+                FloppyDiagnostics.fileProvider.error("Native domain preparation failed: \(error.localizedDescription, privacy: .public)")
+            }
+        }
     }
 
     private func pluginInstallState(client: FloppyAPIClient) async throws -> PluginInstallState {
@@ -340,7 +387,7 @@ final class FloppyAppModel: ObservableObject {
         defer { isWorking = false }
 
         do {
-            let client = try client(for: account)
+            let client = try await client(for: account)
             let list = try await client.listFiles()
             try await ledger?.merge(items: list.items, accountID: account.id)
             items = list.items
@@ -360,7 +407,7 @@ final class FloppyAppModel: ObservableObject {
         defer { isWorking = false }
 
         do {
-            let client = try client(for: account)
+            let client = try await client(for: account)
             let changes = try await client.syncChanges(cursor: account.lastCursor)
             try await ledger?.apply(changes: changes.events, accountID: account.id)
             try await ledger?.record(changeFeed: changes, accountID: account.id)
@@ -386,6 +433,100 @@ final class FloppyAppModel: ObservableObject {
         }
     }
 
+    func chooseFilesForUpload() {
+        guard selectedAccount != nil else {
+            status = "Connect a WordPress site before adding files."
+            return
+        }
+
+        let panel = NSOpenPanel()
+        panel.allowsMultipleSelection = true
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = true
+        panel.canCreateDirectories = false
+        panel.prompt = "Add"
+        panel.message = "Choose files or folders to add to your Floppy folder."
+
+        guard panel.runModal() == .OK, !panel.urls.isEmpty else {
+            return
+        }
+
+        uploadFileURLs(panel.urls)
+    }
+
+    @discardableResult
+    func uploadDroppedProviders(_ providers: [NSItemProvider]) -> Bool {
+        let fileProviders = providers.filter { $0.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier) }
+        guard !fileProviders.isEmpty else {
+            status = "Drop files or folders to add them to Floppy."
+            return false
+        }
+
+        guard selectedAccount != nil else {
+            status = "Connect a WordPress site before adding files."
+            return true
+        }
+
+        Task {
+            do {
+                let urls = try await Self.fileURLs(from: fileProviders)
+                guard !urls.isEmpty else {
+                    status = "Could not read the dropped file URLs."
+                    return
+                }
+                await uploadFileURLsAsync(urls)
+            } catch {
+                status = error.localizedDescription
+            }
+        }
+
+        return true
+    }
+
+    func uploadFileURLs(_ urls: [URL]) {
+        guard !urls.isEmpty else {
+            return
+        }
+
+        Task {
+            await uploadFileURLsAsync(urls)
+        }
+    }
+
+    func openSettingsWindow() {
+        FloppySettingsWindowController.shared.show(model: self)
+    }
+
+    func openNativeFolder() {
+        guard let account = selectedAccount else {
+            status = "Connect a WordPress site before opening the Floppy folder."
+            return
+        }
+
+        Task {
+            do {
+                nativeFolderReadiness = FileProviderDomainController.readiness()
+                try await FileProviderDomainController.register(account: account, strict: true)
+                let folderURL = try await FileProviderDomainController.userVisibleRootURL(account: account)
+                try revealInFinder(folderURL)
+                status = "Opened the native Floppy folder in Finder."
+            } catch {
+                status = error.localizedDescription
+            }
+        }
+    }
+
+    private func revealInFinder(_ url: URL) throws {
+        if NSWorkspace.shared.selectFile(nil, inFileViewerRootedAtPath: url.path) {
+            return
+        }
+
+        let openTool = Process()
+        openTool.executableURL = URL(fileURLWithPath: "/usr/bin/open")
+        openTool.arguments = [url.path]
+        try openTool.run()
+    }
+
     func exportDiagnostics() {
         Task {
             do {
@@ -396,6 +537,105 @@ final class FloppyAppModel: ObservableObject {
                 status = error.localizedDescription
             }
         }
+    }
+
+    private func uploadFileURLsAsync(_ urls: [URL]) async {
+        guard let account = selectedAccount else {
+            status = "Connect a WordPress site before adding files."
+            return
+        }
+
+        isWorking = true
+        var addedCount = 0
+
+        do {
+            let client = try await client(for: account)
+            status = urls.count == 1 ? "Adding \(urls[0].lastPathComponent)..." : "Adding \(urls.count) items..."
+
+            for url in urls {
+                try Task.checkCancellation()
+                addedCount += try await uploadURL(url, parentID: 0, account: account, client: client)
+            }
+
+            let list = try await client.listFiles()
+            try await ledger?.merge(items: list.items, accountID: account.id)
+            items = list.items
+            await FileProviderDomainController.signal(account: account)
+            status = "Added \(addedCount) item\(addedCount == 1 ? "" : "s") to Floppy."
+        } catch {
+            status = addedCount > 0
+                ? "Added \(addedCount) item\(addedCount == 1 ? "" : "s"), then stopped: \(error.localizedDescription)"
+                : error.localizedDescription
+            items = await ledger?.items(accountID: account.id) ?? items
+        }
+
+        isWorking = false
+    }
+
+    private func uploadURL(_ url: URL, parentID: Int64, account: FloppyAccount, client: FloppyAPIClient) async throws -> Int {
+        let didAccess = url.startAccessingSecurityScopedResource()
+        defer {
+            if didAccess {
+                url.stopAccessingSecurityScopedResource()
+            }
+        }
+
+        let resourceValues = try url.resourceValues(forKeys: [.isDirectoryKey, .isRegularFileKey])
+        let displayName = url.lastPathComponent.isEmpty ? url.deletingPathExtension().lastPathComponent : url.lastPathComponent
+
+        if resourceValues.isDirectory == true {
+            status = "Creating folder \(displayName)..."
+            let folder = try await client.createFolder(name: displayName, parentID: parentID)
+            try await ledger?.merge(items: [folder], accountID: account.id)
+
+            let children = try FileManager.default.contentsOfDirectory(
+                at: url,
+                includingPropertiesForKeys: [.isDirectoryKey, .isRegularFileKey],
+                options: [.skipsHiddenFiles]
+            )
+            .sorted { $0.lastPathComponent.localizedCaseInsensitiveCompare($1.lastPathComponent) == .orderedAscending }
+
+            var count = 1
+            for child in children {
+                try Task.checkCancellation()
+                count += try await uploadURL(child, parentID: folder.id, account: account, client: client)
+            }
+            return count
+        }
+
+        guard resourceValues.isRegularFile != false else {
+            return 0
+        }
+
+        status = "Uploading \(displayName)..."
+        let item = try await client.uploadFile(
+            at: url,
+            filename: displayName,
+            parentID: parentID,
+            mimeType: Self.mimeType(for: url)
+        )
+        try await ledger?.merge(items: [item], accountID: account.id)
+        return 1
+    }
+
+    private static func mimeType(for url: URL) -> String {
+        guard !url.pathExtension.isEmpty,
+              let type = UTType(filenameExtension: url.pathExtension),
+              let mimeType = type.preferredMIMEType else {
+            return "application/octet-stream"
+        }
+
+        return mimeType
+    }
+
+    private static func fileURLs(from providers: [NSItemProvider]) async throws -> [URL] {
+        var urls: [URL] = []
+        for provider in providers {
+            if let url = try await provider.floppyFileURL() {
+                urls.append(url)
+            }
+        }
+        return urls
     }
 
     private func makeDiagnosticsBundle() async throws -> URL {
@@ -432,7 +672,9 @@ final class FloppyAppModel: ObservableObject {
         ]
         let keychainInfo: [String: Any] = [
             "available_for_selected_account": keychainAvailable,
-            "access_group_configured": KeychainTokenStore.defaultAccessGroup() != nil
+            "access_group_configured": KeychainTokenStore.defaultAccessGroup() != nil,
+            "data_protection_keychain": true,
+            "interactive_prompts_disabled": true
         ]
         let onboardingInfo: [String: Any] = [
             "step": String(describing: onboardingStep),
@@ -470,7 +712,7 @@ final class FloppyAppModel: ObservableObject {
 
             var revokeError: Error?
             do {
-                let client = try client(for: account)
+                let client = try await client(for: account)
                 try await client.revokeDevice(deviceUUID: account.deviceUUID)
                 FloppyDiagnostics.app.info("Revoked device token for \(FloppyDiagnostics.redactedURL(account.siteURL), privacy: .public)")
             } catch {
@@ -479,9 +721,13 @@ final class FloppyAppModel: ObservableObject {
             }
 
             do {
-                try tokenStore.delete(accountID: account.id)
+                let tokenStore = self.tokenStore
+                let domainIdentifier = FloppyDomainRegistry.domainIdentifier(for: account)
+                try await performTokenOperation {
+                    try tokenStore.delete(accountID: account.id)
+                    try? tokenStore.delete(accountID: domainIdentifier)
+                }
                 try? await FileProviderDomainController.remove(account: account)
-                try? tokenStore.delete(accountID: FloppyDomainRegistry.domainIdentifier(for: account))
                 try await ledger?.removeAccount(id: account.id)
                 accounts = await ledger?.accounts() ?? []
                 selectedAccountID = accounts.first?.id
@@ -501,11 +747,45 @@ final class FloppyAppModel: ObservableObject {
         accounts.first { $0.id == selectedAccountID }
     }
 
-    private func client(for account: FloppyAccount) throws -> FloppyAPIClient {
-        guard let token = try tokenStore.load(accountID: account.id) else {
+    private func client(for account: FloppyAccount) async throws -> FloppyAPIClient {
+        guard let token = try await loadToken(accountID: account.id) else {
             throw FloppyAPIError.missingToken
         }
         return FloppyAPIClient(siteURL: account.siteURL, restURL: account.restURL, token: token)
+    }
+
+    private func loadToken(accountID: String) async throws -> String? {
+        let tokenStore = self.tokenStore
+        return try await withCheckedThrowingContinuation { continuation in
+            let gate = TokenLoadContinuationGate()
+            DispatchQueue.global(qos: .userInitiated).async {
+                do {
+                    gate.resume(continuation, with: .success(try tokenStore.load(accountID: accountID)))
+                } catch {
+                    gate.resume(continuation, with: .failure(error))
+                }
+            }
+            DispatchQueue.global().asyncAfter(deadline: .now() + 15) {
+                gate.resume(continuation, with: .failure(FloppyTokenStoreError.timeout))
+            }
+        }
+    }
+
+    private func performTokenOperation(_ operation: @escaping @Sendable () throws -> Void) async throws {
+        try await withCheckedThrowingContinuation { continuation in
+            let gate = TokenOperationContinuationGate()
+            DispatchQueue.global(qos: .userInitiated).async {
+                do {
+                    try operation()
+                    gate.resume(continuation, with: .success(()))
+                } catch {
+                    gate.resume(continuation, with: .failure(error))
+                }
+            }
+            DispatchQueue.global().asyncAfter(deadline: .now() + 15) {
+                gate.resume(continuation, with: .failure(FloppyTokenStoreError.timeout))
+            }
+        }
     }
 
     func resetAdvancedOnboardingFields() {
@@ -563,6 +843,86 @@ final class FloppyAppModel: ObservableObject {
 
     private func clearPendingOnboarding() {
         UserDefaults.standard.removeObject(forKey: PendingOnboarding.defaultsKey)
+    }
+}
+
+private final class TokenLoadContinuationGate: @unchecked Sendable {
+    private let lock = NSLock()
+    private var didResume = false
+
+    func resume(_ continuation: CheckedContinuation<String?, Error>, with result: Result<String?, Error>) {
+        lock.lock()
+        defer { lock.unlock() }
+
+        guard !didResume else {
+            return
+        }
+
+        didResume = true
+        switch result {
+        case .success(let value):
+            continuation.resume(returning: value)
+        case .failure(let error):
+            continuation.resume(throwing: error)
+        }
+    }
+}
+
+private final class TokenOperationContinuationGate: @unchecked Sendable {
+    private let lock = NSLock()
+    private var didResume = false
+
+    func resume(_ continuation: CheckedContinuation<Void, Error>, with result: Result<Void, Error>) {
+        lock.lock()
+        defer { lock.unlock() }
+
+        guard !didResume else {
+            return
+        }
+
+        didResume = true
+        switch result {
+        case .success:
+            continuation.resume()
+        case .failure(let error):
+            continuation.resume(throwing: error)
+        }
+    }
+}
+
+private extension NSItemProvider {
+    @MainActor
+    func floppyFileURL() async throws -> URL? {
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<URL?, Error>) in
+            loadItem(forTypeIdentifier: UTType.fileURL.identifier, options: nil) { item, error in
+                if let error {
+                    continuation.resume(throwing: error)
+                    return
+                }
+
+                if let url = item as? URL {
+                    continuation.resume(returning: url)
+                    return
+                }
+
+                if let url = item as? NSURL {
+                    continuation.resume(returning: url as URL)
+                    return
+                }
+
+                if let data = item as? Data {
+                    continuation.resume(returning: URL(dataRepresentation: data, relativeTo: nil))
+                    return
+                }
+
+                if let string = item as? String {
+                    continuation.resume(returning: URL(string: string))
+                    return
+                }
+
+                continuation.resume(returning: nil)
+            }
+        }
     }
 }
 
@@ -719,6 +1079,19 @@ private extension URL {
 
     var normalizedScheme: String {
         (URLComponents(url: self, resolvingAgainstBaseURL: false)?.scheme ?? "https").lowercased()
+    }
+
+    var usesSecureSchemeForOnboarding: Bool {
+        if normalizedScheme == "https" {
+            return true
+        }
+
+        guard normalizedScheme == "http" else {
+            return false
+        }
+
+        let normalizedHost = (host ?? "").lowercased()
+        return normalizedHost == "localhost" || normalizedHost == "127.0.0.1" || normalizedHost == "::1"
     }
 
     var normalizedForDisplay: URL {

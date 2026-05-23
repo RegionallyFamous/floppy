@@ -18,7 +18,7 @@ public enum FloppyAPIError: Error, Equatable, LocalizedError {
         case .httpStatus(let status, let message):
             "Floppy request failed with HTTP \(status): \(message)"
         case .missingToken:
-            "No device token is stored for this Floppy account."
+            "No device token is stored for this Floppy account. Reconnect the site once to create a new Keychain token."
         case .unsupportedCallback:
             "The approval callback was not a Floppy device approval URL."
         case .duplicateCallbackParameter(let name):
@@ -149,7 +149,7 @@ public struct FloppyAPIClient: Sendable {
     }
 
     public func getPlugin(plugin: String) async throws -> WordPressPlugin {
-        try await wordpressRequest(path: "plugins/\(plugin)", method: "GET")
+        try await wordpressRequest(path: Self.wordpressPluginPath(for: plugin), method: "GET")
     }
 
     public func installPlugin(slug: String, status: WordPressPluginStatus = .active) async throws -> WordPressPlugin {
@@ -166,7 +166,7 @@ public struct FloppyAPIClient: Sendable {
             let status: WordPressPluginStatus = .active
         }
 
-        return try await wordpressRequest(path: "plugins/\(plugin)", method: "POST", body: Body())
+        return try await wordpressRequest(path: Self.wordpressPluginPath(for: plugin), method: "POST", body: Body())
     }
 
     public func deleteCurrentApplicationPassword() async {
@@ -532,10 +532,7 @@ public struct FloppyAPIClient: Sendable {
             throw FloppyAPIError.missingToken
         }
 
-        var url = siteURL.appendingPathComponent("wp-json/wp/v2")
-        for component in path.split(separator: "/") {
-            url.appendPathComponent(String(component))
-        }
+        let url = Self.wordPressURL(siteURL: siteURL, path: path)
 
         var request = URLRequest(url: url)
         request.httpMethod = method
@@ -546,6 +543,32 @@ public struct FloppyAPIClient: Sendable {
             request.setValue(authorizationHeader, forHTTPHeaderField: "Authorization")
         }
         return request
+    }
+
+    static func wordpressPluginPath(for plugin: String) -> String {
+        let normalizedPlugin = plugin.hasSuffix(".php") ? String(plugin.dropLast(4)) : plugin
+        let encodedPlugin = normalizedPlugin
+            .split(separator: "/", omittingEmptySubsequences: false)
+            .map { percentEncodeWordPressPathComponent(String($0)) }
+            .joined(separator: "/")
+        return "plugins/\(encodedPlugin)"
+    }
+
+    static func wordPressURL(siteURL: URL, path: String) -> URL {
+        var components = URLComponents(url: siteURL.appendingPathComponent("wp-json/wp/v2"), resolvingAgainstBaseURL: false)!
+        let basePath = components.percentEncodedPath.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        let encodedPath = path
+            .split(separator: "/", omittingEmptySubsequences: true)
+            .map { percentEncodeWordPressPathComponent(String($0)) }
+            .joined(separator: "/")
+        components.percentEncodedPath = "/" + [basePath, encodedPath].filter { !$0.isEmpty }.joined(separator: "/")
+        return components.url ?? siteURL.appendingPathComponent("wp-json/wp/v2").appendingPathComponent(path)
+    }
+
+    private static func percentEncodeWordPressPathComponent(_ component: String) -> String {
+        var allowed = CharacterSet.alphanumerics
+        allowed.insert(charactersIn: "-._~%")
+        return component.addingPercentEncoding(withAllowedCharacters: allowed) ?? component
     }
 
     private func decode<Response: Decodable>(_ result: (Data, URLResponse)) async throws -> Response {

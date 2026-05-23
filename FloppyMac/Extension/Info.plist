@@ -18,6 +18,8 @@
 	<string>$(PRODUCT_BUNDLE_PACKAGE_TYPE)</string>
 	<key>FloppyKeychainAccessGroup</key>
 	<string>$(AppIdentifierPrefix)com.floppy.mac</string>
+	<key>FloppyAppGroupIdentifier</key>
+	<string>$(TeamIdentifierPrefix)com.floppy.mac.sync</string>
 	<key>CFBundleShortVersionString</key>
 	<string>$(MARKETING_VERSION)</string>
 	<key>CFBundleVersion</key>
@@ -25,7 +27,7 @@
 	<key>NSExtension</key>
 	<dict>
 		<key>NSExtensionFileProviderDocumentGroup</key>
-		<string>group.com.floppy.mac</string>
+		<string>$(TeamIdentifierPrefix)com.floppy.mac.sync</string>
 		<key>NSExtensionFileProviderSupportsEnumeration</key>
 		<true/>
 		<key>NSExtensionPointIdentifier</key>

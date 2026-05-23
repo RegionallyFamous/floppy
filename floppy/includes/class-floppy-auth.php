@@ -254,7 +254,21 @@ final class Floppy_Auth {
 	 * Require HTTPS for bearer tokens.
 	 */
 	private static function is_secure_request(): bool {
-		return is_ssl();
+		return is_ssl() || self::is_loopback_request();
+	}
+
+	/**
+	 * Allow local Studio smoke tests to use device tokens over loopback HTTP.
+	 */
+	private static function is_loopback_request(): bool {
+		$host = isset( $_SERVER['HTTP_HOST'] ) ? strtolower( (string) wp_unslash( $_SERVER['HTTP_HOST'] ) ) : ''; // phpcs:ignore WordPress.Security.ValidatedSanitizedInput.InputNotSanitized
+		$host = preg_replace( '/:\\d+$/', '', $host );
+		if ( in_array( $host, array( 'localhost', '127.0.0.1', '::1', '[::1]' ), true ) ) {
+			return true;
+		}
+
+		$remote_addr = isset( $_SERVER['REMOTE_ADDR'] ) ? (string) wp_unslash( $_SERVER['REMOTE_ADDR'] ) : ''; // phpcs:ignore WordPress.Security.ValidatedSanitizedInput.InputNotSanitized
+		return in_array( $remote_addr, array( '127.0.0.1', '::1' ), true );
 	}
 
 	/**

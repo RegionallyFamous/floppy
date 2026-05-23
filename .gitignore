@@ -4,9 +4,11 @@
 .build/
 FloppyMac/.build/
 FloppyMac/.swiftpm/
+FloppyMac/FloppyMac.xcodeproj/
 DerivedData/
 dist/
 vendor/
+.phpunit.cache/
 
 # Local editor and OS noise
 *.swp

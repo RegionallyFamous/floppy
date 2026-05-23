@@ -1,4 +1,5 @@
 import Foundation
+import Security
 
 public struct FloppyDomainRecord: Codable, Equatable, Sendable {
     public let domainIdentifier: String
@@ -17,7 +18,23 @@ public struct FloppyDomainRecord: Codable, Equatable, Sendable {
 }
 
 public enum FloppyDomainRegistry {
-    public static let appGroupIdentifier = "group.com.floppy.mac"
+    public static let defaultAppGroupIdentifier = "group.com.floppy.mac"
+
+    public static var appGroupIdentifier: String {
+        appGroupIdentifier(bundle: .main)
+    }
+
+    public static func appGroupIdentifier(bundle: Bundle) -> String {
+        guard
+            let value = bundle.object(forInfoDictionaryKey: "FloppyAppGroupIdentifier") as? String,
+            !value.isEmpty,
+            !value.contains("$(")
+        else {
+            return defaultAppGroupIdentifier
+        }
+
+        return value
+    }
 
     public static func domainIdentifier(for account: FloppyAccount) -> String {
         "floppy-\(account.deviceUUID)"
@@ -61,6 +78,14 @@ public enum FloppyDomainRegistry {
         }.sorted { ($0["domainIdentifier"] ?? "") < ($1["domainIdentifier"] ?? "") }
     }
 
+    public static func sharedContainerBaseURL(appGroupIdentifier: String = Self.appGroupIdentifier) -> URL {
+        if let url = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: appGroupIdentifier) {
+            return url
+        }
+
+        return FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
+    }
+
     private static func loadAll() throws -> [String: FloppyDomainRecord] {
         let url = registryURL()
         guard FileManager.default.fileExists(atPath: url.path) else {
@@ -78,8 +103,18 @@ public enum FloppyDomainRegistry {
     }
 
     private static func registryURL() -> URL {
-        let base = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: appGroupIdentifier)
-            ?? FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
+        let base = sharedContainerBaseURL()
         return base.appendingPathComponent("FloppyMac", isDirectory: true).appendingPathComponent("domains.json")
+    }
+
+    public static func hasAppGroupEntitlement(_ appGroupIdentifier: String) -> Bool {
+        guard
+            let task = SecTaskCreateFromSelf(nil),
+            let value = SecTaskCopyValueForEntitlement(task, "com.apple.security.application-groups" as CFString, nil)
+        else {
+            return false
+        }
+
+        return (value as? [String])?.contains(appGroupIdentifier) == true
     }
 }

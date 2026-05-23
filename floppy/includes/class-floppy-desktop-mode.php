@@ -14,6 +14,7 @@ final class Floppy_Desktop_Mode {
 	public const WINDOW_ID = 'floppy-drive';
 	public const SCRIPT_HANDLE = 'floppy-desktop-mode';
 	public const STYLE_HANDLE = 'floppy-desktop-mode';
+	public const DESKTOP_ICON = 'dashicons-archive';
 
 	/**
 	 * Register hooks.
@@ -83,18 +84,18 @@ final class Floppy_Desktop_Mode {
 		if ( function_exists( 'desktop_mode_register_window' ) ) {
 			desktop_mode_register_window(
 				self::WINDOW_ID,
-					array(
-						'title'       => __( 'Floppy', 'floppy' ),
-						'icon'        => FLOPPY_URL . 'assets/images/floppy-icon-256.png',
-						'capabilities' => array( 'read' ),
-					'template'    => array( __CLASS__, 'render_window' ),
-					'script'      => self::SCRIPT_HANDLE,
-					'style'       => self::STYLE_HANDLE,
+				array(
+					'title'          => __( 'Floppy', 'floppy' ),
+					'icon'           => self::DESKTOP_ICON,
+					'capabilities'   => array( 'read' ),
+					'template'       => array( __CLASS__, 'render_window' ),
+					'script'         => self::SCRIPT_HANDLE,
+					'style'          => self::STYLE_HANDLE,
 					'main_tab_label' => __( 'Files', 'floppy' ),
-					'width'       => 980,
-					'height'      => 680,
-					'min_width'   => 720,
-					'min_height'  => 480,
+					'width'          => 980,
+					'height'         => 680,
+					'min_width'      => 720,
+					'min_height'     => 480,
 				)
 			);
 		}
@@ -102,11 +103,12 @@ final class Floppy_Desktop_Mode {
 		if ( function_exists( 'desktop_mode_register_icon' ) ) {
 			desktop_mode_register_icon(
 				self::WINDOW_ID,
-					array(
-						'title'      => __( 'Floppy', 'floppy' ),
-						'icon'       => FLOPPY_URL . 'assets/images/floppy-icon-256.png',
-					'window'     => self::WINDOW_ID,
+				array(
+					'title'        => __( 'Floppy', 'floppy' ),
+					'icon'         => self::DESKTOP_ICON,
+					'window'       => self::WINDOW_ID,
 					'capabilities' => array( 'read' ),
+					'position'     => 82,
 				)
 			);
 		}

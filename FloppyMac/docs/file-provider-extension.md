@@ -9,7 +9,8 @@ This scaffold adds the macOS replicated File Provider extension surface for Flop
 - `FloppyMac/Sources/FloppyFileProvider/FloppyItemAdapter.swift`: adapter from `FloppyItem` to `NSFileProviderItem` using stable UUID-backed item identifiers.
 - `FloppyMac/Sources/FloppyFileProvider/FloppyFileProviderConfiguration.swift`: shared App Group, Keychain group, API client, and ledger construction.
 - `FloppyMac/Extension/Info.plist`: extension metadata and principal class declaration.
-- `FloppyMac/Extension/FloppyFileProvider.entitlements`: sandbox, App Group, and Keychain sharing.
+- `FloppyMac/Packaging/FloppyMac.entitlements`: Developer ID containing-app entitlements. The menu app is intentionally not sandboxed so it can reveal the user-visible CloudStorage folder in Finder.
+- `FloppyMac/Extension/FloppyFileProvider.entitlements`: sandbox, App Group, and Keychain sharing for the File Provider helper.
 
 ## Xcode Target Wiring
 
@@ -20,11 +21,12 @@ This scaffold adds the macOS replicated File Provider extension surface for Flop
 5. Set the extension target entitlements file to `FloppyMac/Extension/FloppyFileProvider.entitlements`.
 6. Link the extension target against `FileProvider.framework`, `UniformTypeIdentifiers.framework`, and the `FloppyCore` module.
 7. Keep the app and extension identifiers aligned:
-   - App Group: `group.com.floppy.mac`
+   - App Group: `$(TeamIdentifierPrefix)com.floppy.mac.sync`
    - Keychain group: `$(AppIdentifierPrefix)com.floppy.mac`
    - Extension bundle ID: `com.floppy.mac.FileProvider`
 8. Add the same App Group and Keychain access group to the containing macOS app target.
 9. In the app target, register one `NSFileProviderDomain` per connected WordPress site/account after `TokenStore` and `LocalLedger` are initialized for that account.
+10. Keep the File Provider extension sandboxed. Keep the containing Developer ID app unsandboxed unless a future Finder-opening path uses security-scoped folder access; a sandboxed menu app cannot reliably reveal its own CloudStorage domain.
 
 ## Expected FloppyCore Surface
 
@@ -65,6 +67,7 @@ The extension does not create or remove domains by itself.
 ## Production Notes
 
 - Add `com.apple.developer.fileprovider.testing-mode` only to a local debug entitlement override if the team needs development-only File Provider reset tooling.
+- The containing app must be the signed Xcode app bundle with the extension embedded under `Contents/PlugIns/`. The SwiftPM test app does not include an extension, and macOS will surface that as a helper communication failure if the app tries to open the native folder.
 - Keep File Provider item identifiers stable and filename-free: `floppy:item:{uuid}`. Legacy numeric identifiers are accepted only so existing local state can resolve during migration.
 - Treat `NSFileProviderPage` and `NSFileProviderSyncAnchor` values as opaque UTF-8 tokens produced by the server.
 - Map expired server anchors to `NSFileProviderError.Code.syncAnchorExpired` so macOS can reimport.

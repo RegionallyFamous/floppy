@@ -47,6 +47,13 @@
 	color: #b32d2e;
 }
 
+.floppy-brand > .dashicons {
+	color: var( --desktop-mode-icon-fg, #50575e );
+	font-size: 22px;
+	width: 22px;
+	height: 22px;
+}
+
 .floppy-nav {
 	display: flex;
 	align-items: center;
@@ -596,8 +603,100 @@
 	gap: 14px;
 }
 
-.floppy-dock-tile {
-	--floppy-dock-accent: #008a5b;
+.floppy-desktop-icon {
+	color: var( --desktop-mode-tile-fg, var( --desktop-mode-fg, #fff ) );
+}
+
+.floppy-desktop-icon .desktop-mode-icon__image {
+	position: relative;
+	opacity: 0.9;
+	filter: drop-shadow( 0 1px 2px rgba( 0, 0, 0, 0.42 ) );
+}
+
+.floppy-desktop-icon .desktop-mode-icon__image::after {
+	content: '';
+	position: absolute;
+	right: 4px;
+	bottom: 5px;
+	width: 9px;
+	height: 9px;
+	border: 1.5px solid rgba( 0, 0, 0, 0.45 );
+	border-radius: 999px;
+	background: #72aee6;
+	box-shadow: 0 1px 2px rgba( 0, 0, 0, 0.3 );
+	opacity: 0;
+}
+
+.floppy-desktop-icon[ data-floppy-state="busy" ] .desktop-mode-icon__image::after {
+	opacity: 1;
+}
+
+.floppy-desktop-icon[ data-floppy-state="error" ] .desktop-mode-icon__image::after {
+	background: #d63638;
+	opacity: 1;
+}
+
+.floppy-desktop-file-tile .desktop-mode-file-tile__visual {
+	position: relative;
+	filter: drop-shadow( 0 1px 2px rgba( 0, 0, 0, 0.42 ) );
+}
+
+.floppy-desktop-file-tile .desktop-mode-file-tile__icon {
+	color: var( --desktop-mode-tile-fg, var( --desktop-mode-fg, #fff ) );
+	opacity: 0.9;
+}
+
+.floppy-desktop-file-tile .desktop-mode-file-tile__visual::after {
+	content: '';
+	position: absolute;
+	right: 4px;
+	bottom: 5px;
+	width: 9px;
+	height: 9px;
+	border: 1.5px solid rgba( 0, 0, 0, 0.45 );
+	border-radius: 999px;
+	background: #72aee6;
+	box-shadow: 0 1px 2px rgba( 0, 0, 0, 0.3 );
+	opacity: 0;
+}
+
+.floppy-desktop-file-tile[ data-floppy-state="busy" ] .desktop-mode-file-tile__visual::after {
+	opacity: 1;
+}
+
+.floppy-desktop-file-tile[ data-floppy-state="error" ] .desktop-mode-file-tile__visual::after {
+	background: #d63638;
+	opacity: 1;
+}
+
+.floppy-dock-tile .desktop-mode-dock__item-primary {
+	color: rgba( 255, 255, 255, 0.72 );
+}
+
+.floppy-dock-tile .desktop-mode-dock__item-primary:hover,
+.floppy-dock-tile .desktop-mode-dock__item-primary:focus-visible {
+	color: #fff;
+}
+
+.floppy-dock-tile .dashicons {
+	opacity: 0.95;
+}
+
+.floppy-dock-tile[ data-floppy-state="busy" ] .desktop-mode-dock__item-primary::after,
+.floppy-dock-tile[ data-floppy-state="error" ] .desktop-mode-dock__item-primary::after {
+	content: '';
+	position: absolute;
+	right: 7px;
+	bottom: 7px;
+	width: 6px;
+	height: 6px;
+	border-radius: 999px;
+	background: #72aee6;
+	box-shadow: 0 0 0 1px rgba( 0, 0, 0, 0.38 );
+}
+
+.floppy-dock-tile[ data-floppy-state="error" ] .desktop-mode-dock__item-primary::after {
+	background: #d63638;
 }
 
 .floppy-admin-grid {

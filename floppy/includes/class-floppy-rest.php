@@ -415,9 +415,9 @@ final class Floppy_Rest {
 		$grant_sql = implode( ' OR ', $grant_clauses );
 
 		$sql = $wpdb->prepare(
-			"(SELECT 'folder' AS kind, 0 AS kind_order, f.id, f.uuid, 0 AS attachment_id, f.owner_id, f.parent_id, f.name, f.normalized_name, '' AS mime_type, 0 AS size_bytes, '' AS content_hash, '' AS storage_key, '' AS content_version, f.metadata_version, f.status, 'private' AS visibility, f.created_at_gmt, f.updated_at_gmt FROM " . Floppy_Schema::table( 'acl_grants' ) . ' g INNER JOIN ' . Floppy_Schema::table( 'folders' ) . " f ON g.target_type = 'folder' AND g.target_id = f.id WHERE g.state = 'accepted' AND ($grant_sql) AND f.status = 'active' AND f.id > %d)
+			"SELECT 'folder' AS kind, 0 AS kind_order, f.id, f.uuid, 0 AS attachment_id, f.owner_id, f.parent_id, f.name, f.normalized_name, '' AS mime_type, 0 AS size_bytes, '' AS content_hash, '' AS storage_key, '' AS content_version, f.metadata_version, f.status, 'private' AS visibility, f.created_at_gmt, f.updated_at_gmt FROM " . Floppy_Schema::table( 'acl_grants' ) . ' g INNER JOIN ' . Floppy_Schema::table( 'folders' ) . " f ON g.target_type = 'folder' AND g.target_id = f.id WHERE g.state = 'accepted' AND ($grant_sql) AND f.status = 'active' AND f.id > %d
 			UNION ALL
-			(SELECT 'file' AS kind, 1 AS kind_order, f.id, f.uuid, f.attachment_id, f.owner_id, f.parent_id, f.name, f.normalized_name, f.mime_type, f.size_bytes, f.content_hash, f.storage_key, f.content_version, f.metadata_version, f.status, f.visibility, f.created_at_gmt, f.updated_at_gmt FROM " . Floppy_Schema::table( 'acl_grants' ) . ' g INNER JOIN ' . Floppy_Schema::table( 'files' ) . " f ON g.target_type = 'file' AND g.target_id = f.id WHERE g.state = 'accepted' AND ($grant_sql) AND f.status = 'active' AND f.id > %d)
+			SELECT 'file' AS kind, 1 AS kind_order, f.id, f.uuid, f.attachment_id, f.owner_id, f.parent_id, f.name, f.normalized_name, f.mime_type, f.size_bytes, f.content_hash, f.storage_key, f.content_version, f.metadata_version, f.status, f.visibility, f.created_at_gmt, f.updated_at_gmt FROM " . Floppy_Schema::table( 'acl_grants' ) . ' g INNER JOIN ' . Floppy_Schema::table( 'files' ) . " f ON g.target_type = 'file' AND g.target_id = f.id WHERE g.state = 'accepted' AND ($grant_sql) AND f.status = 'active' AND f.id > %d
 			ORDER BY kind_order ASC, id ASC LIMIT %d",
 			array_merge( $grant_values, array( $folder_after ), $grant_values, array( $file_after, $limit + 1 ) )
 		); // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared
@@ -1925,9 +1925,9 @@ final class Floppy_Rest {
 		$file_owner_sql = $parent_id ? '' : $wpdb->prepare( ' AND owner_id = %d', $user_id );
 
 		$sql = $wpdb->prepare(
-			"(SELECT 'folder' AS kind, 0 AS kind_order, id, uuid, 0 AS attachment_id, owner_id, parent_id, name, normalized_name, '' AS mime_type, 0 AS size_bytes, '' AS content_hash, '' AS storage_key, '' AS content_version, metadata_version, status, 'private' AS visibility, created_at_gmt, updated_at_gmt FROM " . Floppy_Schema::table( 'folders' ) . " WHERE parent_id = %d AND status = 'active' AND id > %d $folder_owner_sql)
+			"SELECT 'folder' AS kind, 0 AS kind_order, id, uuid, 0 AS attachment_id, owner_id, parent_id, name, normalized_name, '' AS mime_type, 0 AS size_bytes, '' AS content_hash, '' AS storage_key, '' AS content_version, metadata_version, status, 'private' AS visibility, created_at_gmt, updated_at_gmt FROM " . Floppy_Schema::table( 'folders' ) . " WHERE parent_id = %d AND status = 'active' AND id > %d $folder_owner_sql
 			UNION ALL
-			(SELECT 'file' AS kind, 1 AS kind_order, id, uuid, attachment_id, owner_id, parent_id, name, normalized_name, mime_type, size_bytes, content_hash, storage_key, content_version, metadata_version, status, visibility, created_at_gmt, updated_at_gmt FROM " . Floppy_Schema::table( 'files' ) . " WHERE parent_id = %d AND status = 'active' AND id > %d $file_owner_sql)
+			SELECT 'file' AS kind, 1 AS kind_order, id, uuid, attachment_id, owner_id, parent_id, name, normalized_name, mime_type, size_bytes, content_hash, storage_key, content_version, metadata_version, status, visibility, created_at_gmt, updated_at_gmt FROM " . Floppy_Schema::table( 'files' ) . " WHERE parent_id = %d AND status = 'active' AND id > %d $file_owner_sql
 			ORDER BY kind_order ASC, id ASC LIMIT %d",
 			$parent_id,
 			$folder_after,

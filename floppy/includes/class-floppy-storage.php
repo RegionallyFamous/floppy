@@ -95,9 +95,24 @@ final class Floppy_Storage {
 		$code = (int) wp_remote_retrieve_response_code( $response );
 		$seen = wp_remote_retrieve_body( $response );
 		$ok   = 200 !== $code || $seen !== $body;
+		if ( ! $ok && self::allows_unprotected_storage_for_local_development() ) {
+			$result = array(
+				'ok'      => true,
+				'status'  => 'warn',
+				'code'    => $code,
+				'label'   => __( 'Local development storage', 'floppy' ),
+				'message' => __( 'Private storage is directly reachable, but this loopback site is allowed for local Studio testing only. Production sites must block direct access to wp-content/uploads/floppy-private/.', 'floppy' ),
+			);
+			update_option( 'floppy_private_probe', $result, false );
+
+			return $result;
+		}
+
 		$result = array(
 			'ok'      => $ok,
+			'status'  => $ok ? 'pass' : 'fail',
 			'code'    => $code,
+			'label'   => $ok ? __( 'Private storage probe passed.', 'floppy' ) : __( 'Private storage directly reachable', 'floppy' ),
 			'message' => $ok
 				? __( 'Private storage probe passed.', 'floppy' )
 				: __( 'Private storage is directly reachable. Floppy private mode must not be used until the server blocks this path.', 'floppy' ),
@@ -108,13 +123,36 @@ final class Floppy_Storage {
 	}
 
 	/**
+	 * Return cached private storage status with local-development allowances applied.
+	 */
+	public static function private_storage_status(): array {
+		$probe = get_option( 'floppy_private_probe' );
+		if ( ! is_array( $probe ) ) {
+			return self::direct_access_probe();
+		}
+
+		if ( empty( $probe['ok'] ) && self::allows_unprotected_storage_for_local_development() ) {
+			return array(
+				'ok'      => true,
+				'status'  => 'warn',
+				'code'    => isset( $probe['code'] ) ? (int) $probe['code'] : 0,
+				'label'   => __( 'Local development storage', 'floppy' ),
+				'message' => __( 'Private storage is directly reachable, but this loopback site is allowed for local Studio testing only. Production sites must block direct access to wp-content/uploads/floppy-private/.', 'floppy' ),
+			);
+		}
+
+		if ( empty( $probe['status'] ) ) {
+			$probe['status'] = empty( $probe['ok'] ) ? 'fail' : 'pass';
+		}
+
+		return $probe;
+	}
+
+	/**
 	 * Return a WP_Error when private storage is not enforceable.
 	 */
 	public static function require_private_mode() {
-		$probe = get_option( 'floppy_private_probe' );
-		if ( ! is_array( $probe ) ) {
-			$probe = self::direct_access_probe();
-		}
+		$probe = self::private_storage_status();
 
 		if ( empty( $probe['ok'] ) ) {
 			return new WP_Error(
@@ -125,6 +163,33 @@ final class Floppy_Storage {
 		}
 
 		return true;
+	}
+
+	/**
+	 * Check whether this site is a loopback development site.
+	 */
+	public static function is_loopback_site(): bool {
+		$host = strtolower( (string) wp_parse_url( home_url(), PHP_URL_HOST ) );
+		if ( in_array( $host, array( 'localhost', '127.0.0.1', '::1' ), true ) ) {
+			return true;
+		}
+
+		return filter_var( $host, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4 | FILTER_FLAG_IPV6 | FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE ) === false
+			&& filter_var( $host, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4 | FILTER_FLAG_IPV6 ) !== false
+			&& in_array( inet_pton( $host ), array( inet_pton( '127.0.0.1' ), inet_pton( '::1' ) ), true );
+	}
+
+	/**
+	 * Allow direct storage only for explicit local development contexts.
+	 */
+	private static function allows_unprotected_storage_for_local_development(): bool {
+		$allowed = self::is_loopback_site();
+
+		if ( defined( 'FLOPPY_ALLOW_UNPROTECTED_LOCAL_STORAGE' ) ) {
+			$allowed = (bool) FLOPPY_ALLOW_UNPROTECTED_LOCAL_STORAGE;
+		}
+
+		return (bool) apply_filters( 'floppy_allow_unprotected_local_storage', $allowed );
 	}
 
 	/**

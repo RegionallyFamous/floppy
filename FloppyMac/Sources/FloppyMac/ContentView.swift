@@ -1,10 +1,12 @@
 import AppKit
 import FloppyCore
 import SwiftUI
+import UniformTypeIdentifiers
 
 struct ContentView: View {
     @ObservedObject var model: FloppyAppModel
     @State private var showsAdvancedOnboarding = false
+    @State private var isDropTargeted = false
 
     var body: some View {
         NavigationSplitView {
@@ -41,6 +43,9 @@ struct ContentView: View {
         }
         .task {
             await model.refreshSelectedAccount()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            Task { await model.refreshSelectedAccount() }
         }
     }
 
@@ -197,6 +202,18 @@ struct ContentView: View {
             }
             Spacer()
             Button {
+                model.chooseFilesForUpload()
+            } label: {
+                Label("Add Files", systemImage: "plus")
+            }
+            .disabled(model.selectedAccount == nil || model.isWorking)
+            Button {
+                model.openNativeFolder()
+            } label: {
+                Label("Open Folder", systemImage: "folder")
+            }
+            .disabled(model.selectedAccount == nil)
+            Button {
                 Task { await model.refreshSelectedAccount() }
             } label: {
                 Label("Refresh", systemImage: "arrow.clockwise")
@@ -222,20 +239,47 @@ struct ContentView: View {
     }
 
     private var fileList: some View {
-        Table(model.items) {
-            TableColumn("Name") { item in
-                Label(item.name, systemImage: item.kind == .folder ? "folder" : "doc")
+        ZStack {
+            Table(model.items) {
+                TableColumn("Name") { item in
+                    Label(item.name, systemImage: item.kind == .folder ? "folder" : "doc")
+                }
+                TableColumn("Kind") { item in
+                    Text(item.kind.rawValue)
+                }
+                TableColumn("Size") { item in
+                    Text(item.sizeBytes.map(ByteCountFormatter.string) ?? "-")
+                }
+                TableColumn("Updated") { item in
+                    Text(item.updatedAtGMT)
+                        .foregroundStyle(.secondary)
+                }
             }
-            TableColumn("Kind") { item in
-                Text(item.kind.rawValue)
+
+            if model.items.isEmpty {
+                ContentUnavailableView("Drop files here", systemImage: "tray.and.arrow.down", description: Text("Add files to your WordPress-owned Floppy folder."))
+                    .allowsHitTesting(false)
             }
-            TableColumn("Size") { item in
-                Text(item.sizeBytes.map(ByteCountFormatter.string) ?? "-")
+
+            if isDropTargeted {
+                RoundedRectangle(cornerRadius: 12)
+                    .fill(.tint.opacity(0.12))
+                    .overlay {
+                        RoundedRectangle(cornerRadius: 12)
+                            .stroke(.tint, style: StrokeStyle(lineWidth: 2, dash: [8, 6]))
+                    }
+                    .padding(18)
+                    .overlay {
+                        Label("Drop to add to Floppy", systemImage: "arrow.down.doc")
+                            .font(.title3.bold())
+                            .padding(12)
+                            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 10))
+                    }
+                    .allowsHitTesting(false)
             }
-            TableColumn("Updated") { item in
-                Text(item.updatedAtGMT)
-                    .foregroundStyle(.secondary)
-            }
+        }
+        .onDrop(of: [UTType.fileURL.identifier], isTargeted: $isDropTargeted) { providers in
+            model.uploadDroppedProviders(providers)
         }
     }
 
@@ -256,12 +300,6 @@ struct ContentView: View {
         .font(.caption)
         .padding(.horizontal)
         .padding(.vertical, 8)
-    }
-}
-
-private extension FloppyAppModel {
-    var isOnboarding: Bool {
-        onboardingStep.isActiveSetupStep
     }
 }
 

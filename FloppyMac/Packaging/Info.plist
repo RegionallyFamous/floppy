@@ -18,8 +18,12 @@
 	<string>APPL</string>
 	<key>FloppyKeychainAccessGroup</key>
 	<string>$(AppIdentifierPrefix)com.floppy.mac</string>
+	<key>FloppyAppGroupIdentifier</key>
+	<string>$(TeamIdentifierPrefix)com.floppy.mac.sync</string>
 	<key>CFBundleShortVersionString</key>
-	<string>0.1.0</string>
+	<string>$(MARKETING_VERSION)</string>
+	<key>CFBundleVersion</key>
+	<string>$(CURRENT_PROJECT_VERSION)</string>
 	<key>CFBundleURLTypes</key>
 	<array>
 		<dict>
@@ -33,6 +37,8 @@
 	</array>
 	<key>LSMinimumSystemVersion</key>
 	<string>14.0</string>
+	<key>LSUIElement</key>
+	<true/>
 	<key>NSHumanReadableCopyright</key>
 	<string>Copyright Floppy Contributors. Licensed GPL-2.0-or-later where applicable.</string>
 </dict>

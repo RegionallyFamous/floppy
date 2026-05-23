@@ -9,6 +9,34 @@ The WordPress plugin is the authoritative storage and permissions system for Flo
 - Media Library attachments are retained for WordPress interoperability.
 - Custom Floppy tables are used for hot file-system queries, sync state, device tokens, jobs, audit logs, upload sessions, and tombstones.
 
+## Private Storage Protection
+
+Floppy writes private blobs under `wp-content/uploads/floppy-private/` and then serves files only through authenticated REST endpoints. Production servers must block direct HTTP access to that directory.
+
+Apache-compatible hosts usually honor the `.htaccess` file Floppy writes automatically:
+
+```apache
+Require all denied
+Deny from all
+```
+
+Nginx hosts need an explicit server rule:
+
+```nginx
+location ^~ /wp-content/uploads/floppy-private/ {
+    deny all;
+    return 403;
+}
+```
+
+Local loopback Studio sites may show a warning instead of a hard failure so upload/sync smoke tests can run on `localhost`. That exception must not be used for production or LAN-accessible sites.
+
+## Desktop Mode And HTTPS Checks
+
+- Desktop Mode is optional for the WordPress browser-native surface. The Finder-native Mac app does not require Desktop Mode.
+- HTTPS is required for production device tokens and private file sync.
+- `http://localhost` and loopback IPs are allowed only for local Studio smoke tests.
+
 ## Filesystem Tables
 
 - `floppy_files`: file metadata, content versions, storage keys, and attachment links.

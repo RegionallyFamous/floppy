@@ -1,4 +1,5 @@
 import Foundation
+import LocalAuthentication
 import Security
 
 public protocol FloppyTokenStore: Sendable {
@@ -9,11 +10,14 @@ public protocol FloppyTokenStore: Sendable {
 
 public enum FloppyTokenStoreError: Error, LocalizedError {
     case keychain(OSStatus)
+    case timeout
 
     public var errorDescription: String? {
         switch self {
         case .keychain(let status):
             "Keychain operation failed with status \(status)."
+        case .timeout:
+            "Keychain operation timed out."
         }
     }
 }
@@ -21,14 +25,20 @@ public enum FloppyTokenStoreError: Error, LocalizedError {
 public struct KeychainTokenStore: FloppyTokenStore {
     private let service: String
     private let accessGroup: String?
+    private let useDataProtectionKeychain: Bool
 
-    public init(service: String = "com.floppy.mac.token", accessGroup: String? = KeychainTokenStore.defaultAccessGroup()) {
+    public init(
+        service: String = "com.floppy.mac.token",
+        accessGroup: String? = KeychainTokenStore.defaultAccessGroup(),
+        useDataProtectionKeychain: Bool = true
+    ) {
         self.service = service
         self.accessGroup = accessGroup
+        self.useDataProtectionKeychain = useDataProtectionKeychain
     }
 
     public static func `default`(service: String = "com.floppy.mac.token") -> KeychainTokenStore {
-        KeychainTokenStore(service: service, accessGroup: defaultAccessGroup())
+        KeychainTokenStore(service: service, accessGroup: defaultAccessGroup(), useDataProtectionKeychain: true)
     }
 
     public static func defaultAccessGroup(bundle: Bundle = .main) -> String? {
@@ -53,6 +63,8 @@ public struct KeychainTokenStore: FloppyTokenStore {
             kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly,
             kSecValueData as String: Data(token.utf8)
         ]
+        addNonInteractiveAuthenticationContext(to: &query)
+        addDataProtectionKeychain(to: &query)
         addAccessGroup(to: &query)
 
         let status = SecItemAdd(query as CFDictionary, nil)
@@ -69,6 +81,8 @@ public struct KeychainTokenStore: FloppyTokenStore {
             kSecReturnData as String: true,
             kSecMatchLimit as String: kSecMatchLimitOne
         ]
+        addNonInteractiveAuthenticationContext(to: &query)
+        addDataProtectionKeychain(to: &query)
         addAccessGroup(to: &query)
 
         var result: CFTypeRef?
@@ -88,6 +102,8 @@ public struct KeychainTokenStore: FloppyTokenStore {
             kSecAttrService as String: service,
             kSecAttrAccount as String: accountID
         ]
+        addNonInteractiveAuthenticationContext(to: &query)
+        addDataProtectionKeychain(to: &query)
         addAccessGroup(to: &query)
 
         let status = SecItemDelete(query as CFDictionary)
@@ -102,6 +118,20 @@ public struct KeychainTokenStore: FloppyTokenStore {
         }
 
         query[kSecAttrAccessGroup as String] = accessGroup
+    }
+
+    private func addDataProtectionKeychain(to query: inout [String: Any]) {
+        guard useDataProtectionKeychain else {
+            return
+        }
+
+        query[kSecUseDataProtectionKeychain as String] = true
+    }
+
+    private func addNonInteractiveAuthenticationContext(to query: inout [String: Any]) {
+        let context = LAContext()
+        context.interactionNotAllowed = true
+        query[kSecUseAuthenticationContext as String] = context
     }
 }
 

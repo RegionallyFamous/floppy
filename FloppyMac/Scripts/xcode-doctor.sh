@@ -45,6 +45,16 @@ if [[ "$ACTIVE_DEVELOPER_DIR" != "$XCODE_DEVELOPER_DIR" ]]; then
 fi
 echo
 
+echo "Code signing identities:"
+IDENTITIES="$(security find-identity -v -p codesigning 2>/dev/null || true)"
+echo "$IDENTITIES"
+if echo "$IDENTITIES" | grep -q "0 valid identities found"; then
+    echo
+    echo "No local code-signing identity was found. The SwiftPM app can run, but the Finder-native File Provider helper will not work until Xcode has a signing Team/certificate." >&2
+    echo "Open Xcode > Settings > Accounts, add your Apple ID, then select a Team for both FloppyMac targets." >&2
+fi
+echo
+
 echo "Swift package:"
 run_xcode_command swift build --package-path "$ROOT"
 run_xcode_command swift test --package-path "$ROOT"
@@ -77,8 +87,8 @@ if ! /usr/libexec/PlistBuddy -c "Print :NSExtension:NSExtensionPointIdentifier" 
     exit 1
 fi
 for entitlement in "$ROOT/Packaging/FloppyMac.entitlements" "$ROOT/Extension/FloppyFileProvider.entitlements"; do
-    if ! grep -q "group.com.floppy.mac" "$entitlement"; then
-        echo "App Group group.com.floppy.mac is missing from ${entitlement#"$ROOT"/}." >&2
+    if ! grep -q "com.floppy.mac.sync" "$entitlement"; then
+        echo "App Group com.floppy.mac.sync is missing from ${entitlement#"$ROOT"/}." >&2
         exit 1
     fi
 done

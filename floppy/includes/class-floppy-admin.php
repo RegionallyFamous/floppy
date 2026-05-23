@@ -202,9 +202,20 @@ final class Floppy_Admin {
 					<table class="widefat striped">
 						<tbody>
 						<?php foreach ( $summary['checks'] as $key => $check ) : ?>
+							<?php $status = Floppy_Compatibility::check_status( $check ); ?>
 							<tr>
 								<td><strong><?php echo esc_html( ucwords( str_replace( '_', ' ', $key ) ) ); ?></strong></td>
-								<td><?php echo ! empty( $check['ok'] ) ? esc_html__( 'Pass', 'floppy' ) : esc_html__( 'Fail', 'floppy' ); ?></td>
+								<td>
+									<?php
+									if ( 'warn' === $status ) {
+										esc_html_e( 'Warn', 'floppy' );
+									} elseif ( 'fail' === $status ) {
+										esc_html_e( 'Fail', 'floppy' );
+									} else {
+										esc_html_e( 'Pass', 'floppy' );
+									}
+									?>
+								</td>
 								<td><?php echo esc_html( $check['label'] ?? '' ); ?></td>
 								<td><?php echo esc_html( $check['message'] ?? '' ); ?></td>
 							</tr>

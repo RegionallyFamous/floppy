@@ -30,6 +30,18 @@ import Testing
     #expect(items["reject_url"] == "floppy://wordpress-rejected?state=abc")
 }
 
+@Test func wordpressPluginRoutesUseCoreRestPluginIdentifiers() throws {
+    #expect(FloppyAPIClient.wordpressPluginPath(for: "floppy/floppy.php") == "plugins/floppy/floppy")
+    #expect(FloppyAPIClient.wordpressPluginPath(for: "hello.php") == "plugins/hello")
+
+    let url = FloppyAPIClient.wordPressURL(
+        siteURL: URL(string: "http://localhost:8892")!,
+        path: FloppyAPIClient.wordpressPluginPath(for: "floppy/floppy.php")
+    )
+
+    #expect(url.absoluteString == "http://localhost:8892/wp-json/wp/v2/plugins/floppy/floppy")
+}
+
 @Test func parsesApplicationPasswordCallback() throws {
     let url = URL(string: "floppy://wordpress-authorized?state=abc&site_url=https%3A%2F%2Fexample.com&user_login=admin&password=abcdEFGH1234")!
     let credential = try FloppyAPIClient.parseApplicationPasswordCallback(url)
@@ -281,6 +293,38 @@ import Testing
     #expect(conflictCount == 1)
     #expect(activeEnumerators == ["floppy:item:folder-uuid"])
     #expect(storedURL?.path == materializedURL.path)
+}
+
+@Test func nativeFolderReadinessRequiresEmbeddedExtensionAndAppGroupEntitlement() throws {
+    let pluginRoot = URL(fileURLWithPath: "/tmp/FloppyPlugIns", isDirectory: true)
+    let extensionURL = pluginRoot.appendingPathComponent(FloppyNativeFolderReadiness.fileProviderExtensionBundleName, isDirectory: true)
+
+    let missingExtension = FloppyNativeFolderReadiness.inspect(
+        builtInPlugInsURL: pluginRoot,
+        appGroupIdentifier: "TEAMID.com.floppy.mac.sync",
+        hasAppGroupEntitlement: true,
+        fileExists: { _ in false }
+    )
+    #expect(missingExtension.status == .missingEmbeddedExtension)
+    #expect(!missingExtension.isReady)
+
+    let missingEntitlement = FloppyNativeFolderReadiness.inspect(
+        builtInPlugInsURL: pluginRoot,
+        appGroupIdentifier: "TEAMID.com.floppy.mac.sync",
+        hasAppGroupEntitlement: false,
+        fileExists: { $0 == extensionURL }
+    )
+    #expect(missingEntitlement.status == .missingAppGroupEntitlement)
+    #expect(!missingEntitlement.isReady)
+
+    let ready = FloppyNativeFolderReadiness.inspect(
+        builtInPlugInsURL: pluginRoot,
+        appGroupIdentifier: "TEAMID.com.floppy.mac.sync",
+        hasAppGroupEntitlement: true,
+        fileExists: { $0 == extensionURL }
+    )
+    #expect(ready.status == .ready)
+    #expect(ready.isReady)
 }
 
 private func sampleItem(uuid: String, id: Int64, name: String, parentID: Int64 = 0) -> FloppyItem {

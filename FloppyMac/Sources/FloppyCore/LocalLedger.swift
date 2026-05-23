@@ -91,8 +91,7 @@ public actor LocalLedger {
     }
 
     public init(appGroupIdentifier: String, domainIdentifier: String) {
-        let base = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: appGroupIdentifier)
-            ?? FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
+        let base = FloppyDomainRegistry.sharedContainerBaseURL(appGroupIdentifier: appGroupIdentifier)
         let directory = base.appendingPathComponent("FloppyMac", isDirectory: true)
         let name = domainIdentifier.safePathComponent + "-ledger"
         let databaseURL = directory.appendingPathComponent(name + ".sqlite")
@@ -302,7 +301,22 @@ public actor LocalLedger {
             return try SQLiteLedgerStore(databaseURL: databaseURL, legacyJSONURL: legacyJSONURL)
         } catch {
             FloppyDiagnostics.ledger.fault("Unable to open SQLite ledger at \(databaseURL.path, privacy: .private): \(error.localizedDescription, privacy: .public)")
-            preconditionFailure("Unable to open Floppy SQLite ledger: \(error.localizedDescription)")
+        }
+
+        let fallbackURL = fallbackLedgerURL(for: databaseURL)
+        do {
+            FloppyDiagnostics.ledger.error("Using fallback SQLite ledger at \(fallbackURL.path, privacy: .private)")
+            return try SQLiteLedgerStore(databaseURL: fallbackURL, legacyJSONURL: nil)
+        } catch {
+            FloppyDiagnostics.ledger.fault("Unable to open fallback SQLite ledger at \(fallbackURL.path, privacy: .private): \(error.localizedDescription, privacy: .public)")
+        }
+
+        do {
+            FloppyDiagnostics.ledger.error("Using in-memory SQLite ledger fallback")
+            return try SQLiteLedgerStore.inMemory()
+        } catch {
+            FloppyDiagnostics.ledger.fault("Unable to open in-memory SQLite ledger: \(error.localizedDescription, privacy: .public)")
+            preconditionFailure("Unable to open any Floppy SQLite ledger: \(error.localizedDescription)")
         }
     }
 
@@ -311,6 +325,16 @@ public actor LocalLedger {
             return explicitURL
         }
         return databaseURL.deletingPathExtension().appendingPathExtension("json")
+    }
+
+    private static func fallbackLedgerURL(for databaseURL: URL) -> URL {
+        let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
+            ?? FileManager.default.temporaryDirectory
+        let name = databaseURL.deletingPathExtension().lastPathComponent.safePathComponent
+        return base
+            .appendingPathComponent("FloppyMac", isDirectory: true)
+            .appendingPathComponent("LedgerFallback", isDirectory: true)
+            .appendingPathComponent(name + ".sqlite")
     }
 }
 
@@ -336,11 +360,37 @@ private final class SQLiteLedgerStore {
         }
 
         database = handle
+        try configureDatabase()
+        try migrateLegacyJSONIfNeeded()
+    }
+
+    static func inMemory() throws -> SQLiteLedgerStore {
+        try SQLiteLedgerStore(inMemoryName: "floppy-ledger")
+    }
+
+    private init(inMemoryName: String) throws {
+        self.databaseURL = URL(fileURLWithPath: inMemoryName)
+        self.legacyJSONURL = nil
+
+        var handle: OpaquePointer?
+        let flags = SQLITE_OPEN_CREATE | SQLITE_OPEN_READWRITE | SQLITE_OPEN_FULLMUTEX | SQLITE_OPEN_MEMORY
+        guard sqlite3_open_v2(inMemoryName, &handle, flags, nil) == SQLITE_OK, let handle else {
+            let message = handle.map { String(cString: sqlite3_errmsg($0)) } ?? "could not allocate SQLite handle"
+            if let handle {
+                sqlite3_close(handle)
+            }
+            throw LocalLedgerError.sqlite(message)
+        }
+
+        database = handle
+        try configureDatabase()
+    }
+
+    private func configureDatabase() throws {
         try execute("PRAGMA journal_mode=WAL")
         try execute("PRAGMA foreign_keys=ON")
         try execute("PRAGMA busy_timeout=5000")
         try migrateSchema()
-        try migrateLegacyJSONIfNeeded()
     }
 
     deinit {
@@ -680,12 +730,12 @@ private final class SQLiteLedgerStore {
                 created_at REAL NOT NULL
             )
             """)
-        try? execute("ALTER TABLE conflicts ADD COLUMN display_name TEXT NOT NULL DEFAULT ''")
-        try? execute("ALTER TABLE conflicts ADD COLUMN parent_id INTEGER NOT NULL DEFAULT 0")
-        try? execute("ALTER TABLE conflicts ADD COLUMN parent_uuid TEXT NOT NULL DEFAULT ''")
-        try? execute("ALTER TABLE conflicts ADD COLUMN materialized_path TEXT NOT NULL DEFAULT ''")
-        try? execute("ALTER TABLE conflicts ADD COLUMN original_content_version TEXT NOT NULL DEFAULT ''")
-        try? execute("ALTER TABLE conflicts ADD COLUMN state TEXT NOT NULL DEFAULT 'open'")
+        try addColumnIfMissing(table: "conflicts", column: "display_name", definition: "display_name TEXT NOT NULL DEFAULT ''")
+        try addColumnIfMissing(table: "conflicts", column: "parent_id", definition: "parent_id INTEGER NOT NULL DEFAULT 0")
+        try addColumnIfMissing(table: "conflicts", column: "parent_uuid", definition: "parent_uuid TEXT NOT NULL DEFAULT ''")
+        try addColumnIfMissing(table: "conflicts", column: "materialized_path", definition: "materialized_path TEXT NOT NULL DEFAULT ''")
+        try addColumnIfMissing(table: "conflicts", column: "original_content_version", definition: "original_content_version TEXT NOT NULL DEFAULT ''")
+        try addColumnIfMissing(table: "conflicts", column: "state", definition: "state TEXT NOT NULL DEFAULT 'open'")
         try execute("""
             CREATE TABLE IF NOT EXISTS active_enumerators (
                 identifier TEXT PRIMARY KEY,
@@ -702,6 +752,25 @@ private final class SQLiteLedgerStore {
             INSERT OR IGNORE INTO schema_migrations (version, applied_at)
             VALUES (1, ?)
             """, .double(Date().timeIntervalSinceReferenceDate))
+    }
+
+    private func addColumnIfMissing(table: String, column: String, definition: String) throws {
+        guard try !columnNames(in: table).contains(column) else {
+            return
+        }
+
+        try execute("ALTER TABLE \(table) ADD COLUMN \(definition)")
+    }
+
+    private func columnNames(in table: String) throws -> Set<String> {
+        let statement = try prepare("PRAGMA table_info(\(table))")
+        defer { sqlite3_finalize(statement) }
+
+        var names = Set<String>()
+        while try step(statement) == SQLITE_ROW {
+            names.insert(columnText(statement, 1))
+        }
+        return names
     }
 
     private func migrateLegacyJSONIfNeeded() throws {

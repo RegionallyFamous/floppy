@@ -17,8 +17,10 @@
 		devices: 0,
 		failingChecks: 0,
 		lastSyncCursor: 0,
-		lastStatus: __( 'Ready', 'floppy' )
+		lastStatus: __( 'Ready', 'floppy' ),
+		lastState: 'ready'
 	};
+	var decoratedLauncherNodes = [];
 	var FALLBACK_HOOKS = {
 		WINDOW_FOCUSED: 'desktop-mode.window.focused',
 		WINDOW_CLOSING: 'desktop-mode.window.closing',
@@ -34,7 +36,10 @@
 		DOCK_TILE_ELEMENT: 'desktop-mode.dock.tile-element',
 		DOCK_TILE_RENDERED: 'desktop-mode.dock.tile-rendered',
 		DOCK_TILE_TOOLTIP: 'desktop-mode.dock.tile-tooltip',
-		DESKTOP_ICON_CLICKED: 'desktop-mode.desktop-icon.clicked'
+		DESKTOP_ICON_CLICKED: 'desktop-mode.desktop-icon.clicked',
+		DESKTOP_ICONS_RENDERED: 'desktop-mode.desktop-icons.rendered',
+		FILES_TILE_CLASS: 'desktop-mode.files.tile-class',
+		FILES_TILE_RENDERED: 'desktop-mode.files.tile-rendered'
 	};
 	var PANEL_LABELS = {
 		files: __( 'My Drive', 'floppy' ),
@@ -138,6 +143,90 @@
 		}
 	}
 
+	function decorateLauncherElement( element, surface ) {
+		if ( ! element || ! element.classList ) {
+			return element;
+		}
+		element.classList.add( surface === 'desktop' ? 'floppy-desktop-icon' : 'floppy-dock-tile' );
+		element.setAttribute( 'data-floppy-launcher', 'drive' );
+		updateLauncherElementState( element );
+		if ( decoratedLauncherNodes.indexOf( element ) === -1 ) {
+			decoratedLauncherNodes.push( element );
+		}
+		return element;
+	}
+
+	function updateLauncherElementState( element ) {
+		if ( ! element || typeof element.setAttribute !== 'function' ) {
+			return;
+		}
+		element.setAttribute( 'data-floppy-status', appSummary.lastStatus );
+		element.setAttribute( 'data-floppy-state', appSummary.lastState || 'ready' );
+	}
+
+	function updateDecoratedLaunchers() {
+		decoratedLauncherNodes = decoratedLauncherNodes.filter( function ( element ) {
+			return element && element.isConnected;
+		} );
+		decoratedLauncherNodes.forEach( updateLauncherElementState );
+	}
+
+	function addClassValue( classes, className ) {
+		var list = Array.isArray( classes ) ? classes.slice() : String( classes || '' ).split( /\s+/ ).filter( Boolean );
+		if ( list.indexOf( className ) === -1 ) {
+			list.push( className );
+		}
+		return list;
+	}
+
+	function addClassString( classes, className ) {
+		return addClassValue( classes, className ).join( ' ' );
+	}
+
+	function placementMatchesFloppy( placement ) {
+		var file = placement && placement.file ? placement.file : {};
+		var meta = placement && placement.meta && typeof placement.meta === 'object' ? placement.meta : {};
+		var refs = [
+			file.ref,
+			file.shortcutWindow,
+			file.window,
+			file.windowId,
+			meta.__synthFromDockItem,
+			meta.shortcutWindow,
+			meta.windowId
+		];
+		return refs.some( function ( ref ) {
+			return ref === WINDOW_ID || ref === 'desktop:' + WINDOW_ID || ref === 'dock:' + WINDOW_ID || ref === 'dock-promoted:' + WINDOW_ID;
+		} );
+	}
+
+	function decorateFileTile( tile, placement ) {
+		if ( ! tile || ! placementMatchesFloppy( placement ) ) {
+			return tile;
+		}
+		tile.classList.add( 'floppy-desktop-file-tile' );
+		tile.setAttribute( 'data-floppy-launcher', 'drive' );
+		updateLauncherElementState( tile );
+		if ( decoratedLauncherNodes.indexOf( tile ) === -1 ) {
+			decoratedLauncherNodes.push( tile );
+		}
+		if ( tile.getAttribute( 'thumbnail' ) ) {
+			tile.removeAttribute( 'thumbnail' );
+		}
+		if ( tile.getAttribute( 'icon' ) !== 'dashicons-archive' ) {
+			tile.setAttribute( 'icon', 'dashicons-archive' );
+		}
+		var visual = tile.querySelector( ':scope > .desktop-mode-file-tile__visual' );
+		if ( visual ) {
+			visual.replaceChildren();
+			var icon = document.createElement( 'span' );
+			icon.className = 'dashicons dashicons-archive desktop-mode-file-tile__icon';
+			icon.setAttribute( 'aria-hidden', 'true' );
+			visual.appendChild( icon );
+		}
+		return tile;
+	}
+
 	function mount( container, ctx ) {
 		refreshHostApis();
 
@@ -166,7 +255,7 @@
 		container.innerHTML = [
 			'<div class="floppy-shell">',
 				'<aside class="floppy-sidebar">',
-					'<div class="floppy-brand"><span class="dashicons dashicons-portfolio"></span><div><strong>Floppy</strong><span data-floppy-status>Ready</span></div></div>',
+					'<div class="floppy-brand"><span class="dashicons dashicons-archive"></span><div><strong>Floppy</strong><span data-floppy-status>Ready</span></div></div>',
 					renderNavButton( 'files', 'media-default', true ),
 					renderNavButton( 'shared', 'groups' ),
 					renderNavButton( 'sync', 'update' ),
@@ -207,6 +296,8 @@
 
 		function setStatus( message, type ) {
 			appSummary.lastStatus = message || __( 'Ready', 'floppy' );
+			appSummary.lastState = type || 'ready';
+			updateDecoratedLaunchers();
 			if ( statusNode ) {
 				statusNode.textContent = appSummary.lastStatus;
 				statusNode.className = type ? 'is-' + type : '';
@@ -1225,6 +1316,9 @@
 			payload.iconId,
 			payload.tileId,
 			payload.targetId,
+			payload.item && payload.item.id,
+			payload.item && payload.item.window,
+			payload.item && payload.item.baseId,
 			payload.window && payload.window.id,
 			payload.window && payload.window.config && payload.window.config.id,
 			payload.window && payload.window.config && payload.window.config.baseId,
@@ -1352,8 +1446,25 @@
 				setActivityBadge( 0 );
 			}
 		} );
+		addHookAction( 'DESKTOP_ICONS_RENDERED', 'floppy/desktop-icon-rendered', function ( payload ) {
+			var tile = payload && payload.tiles && typeof payload.tiles.get === 'function' ? payload.tiles.get( WINDOW_ID ) : null;
+			if ( tile ) {
+				decorateLauncherElement( tile, 'desktop' );
+			}
+		} );
+		addHookFilter( 'FILES_TILE_CLASS', 'floppy/files-tile-class', function ( classes, placement ) {
+			return placementMatchesFloppy( placement ) ? addClassString( classes, 'floppy-desktop-file-tile' ) : classes;
+		} );
+		addHookAction( 'FILES_TILE_RENDERED', 'floppy/files-tile-rendered', function ( payload ) {
+			if ( payload && payload.tile ) {
+				decorateFileTile( payload.tile, payload.placement );
+			}
+		} );
 		addHookFilter( 'DOCK_TILE_CLASS', 'floppy/dock-class', function ( classes, payload ) {
-			return payloadMatchesWindow( payload ) ? String( classes || '' ) + ' floppy-dock-tile' : classes;
+			return payloadMatchesWindow( payload ) ? addClassValue( classes, 'floppy-dock-tile' ) : classes;
+		} );
+		addHookFilter( 'DOCK_TILE_ELEMENT', 'floppy/dock-element', function ( element, payload ) {
+			return payloadMatchesWindow( payload ) ? decorateLauncherElement( element, 'dock' ) : element;
 		} );
 		addHookFilter( 'DOCK_TILE_TOOLTIP', 'floppy/dock-tooltip', function ( tooltip, payload ) {
 			if ( ! payloadMatchesWindow( payload ) ) {
@@ -1362,8 +1473,9 @@
 			return __( 'Floppy', 'floppy' ) + ' · ' + appSummary.lastStatus;
 		} );
 		addHookAction( 'DOCK_TILE_RENDERED', 'floppy/dock-rendered', function ( payload ) {
-			if ( payloadMatchesWindow( payload ) && payload && payload.element && typeof payload.element.setAttribute === 'function' ) {
-				payload.element.setAttribute( 'data-floppy-status', appSummary.lastStatus );
+			var element = payload && ( payload.el || payload.element );
+			if ( payloadMatchesWindow( payload ) && element ) {
+				decorateLauncherElement( element, 'dock' );
 			}
 		} );
 

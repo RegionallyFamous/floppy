@@ -16,6 +16,8 @@ xcodegen generate
 
 Open `FloppyMac.xcodeproj`, set `DEVELOPMENT_TEAM`, and confirm the generated targets match the wiring below.
 
+The SwiftPM bundle created by `Scripts/bundle-app.sh` is useful for testing onboarding and REST upload flows, but it cannot provide the Dropbox-style Finder folder because it does not embed or sign the File Provider extension. If macOS reports that it “couldn’t communicate with a helper application,” you are almost always running an unsigned build, a SwiftPM bundle, or targets whose App Group/Team values do not match.
+
 ## Required Target Wiring
 
 App target:
@@ -25,6 +27,7 @@ App target:
 - Entitlements: `Packaging/FloppyMac.entitlements`.
 - Icon: `Packaging/FloppyIcon.icns`.
 - Hardened runtime: enabled for Developer ID distribution.
+- Sandbox: off for the containing app. The menu app needs to reveal the user-visible File Provider folder in Finder, and a sandboxed containing app can hit `permErr` when opening `~/Library/CloudStorage/...`.
 
 File Provider extension target:
 
@@ -33,12 +36,15 @@ File Provider extension target:
 - Entitlements: `Extension/FloppyFileProvider.entitlements`.
 - Extension point: `com.apple.fileprovider-nonui`.
 - Embedded in the containing app.
+- Sandbox: on for the extension.
 
 Both targets must share:
 
-- App Group: `group.com.floppy.mac`.
+- App Group: `$(TeamIdentifierPrefix)com.floppy.mac.sync`.
 - Keychain access group: `$(AppIdentifierPrefix)com.floppy.mac`.
 - The same Developer Team.
+
+For local development, add your Apple ID in Xcode Settings > Accounts, then select the same Team for both the `FloppyMac` app target and the `FloppyFileProviderExtension` target. Xcode must produce real entitlements; ad-hoc signing is not enough for the Finder-native File Provider helper.
 
 ## Doctor
 
