@@ -62,6 +62,10 @@ final class Floppy_Diagnostics {
 			'sync'           => self::sync_summary(),
 			'storage'        => self::storage_summary(),
 			'queues'         => self::job_summary(),
+			'conflicts'      => self::conflict_summary(),
+			'versions'       => self::version_summary(),
+			'thumbnails'     => self::thumbnail_summary(),
+			'release_evidence' => self::release_evidence_summary(),
 			'rate_limits'    => Floppy_Rate_Limiter::diagnostics(),
 		);
 	}
@@ -82,6 +86,10 @@ final class Floppy_Diagnostics {
 				'version'    => FLOPPY_VERSION,
 				'db_version' => FLOPPY_DB_VERSION,
 				'namespace'  => Floppy_Rest::NAMESPACE,
+			),
+			'privacy'        => array(
+				'no_external_services' => true,
+				'statement'            => __( 'Floppy does not send file data, diagnostics, telemetry, crash logs, or sync metadata to any hosted service.', 'floppy' ),
 			),
 			'site'           => array(
 				'home_url'    => self::redact_url( home_url( '/' ) ),
@@ -108,12 +116,58 @@ final class Floppy_Diagnostics {
 				'site_quota_bytes'         => (int) ( $settings['site_quota_bytes'] ?? 0 ),
 				'sync_retention_days'      => (int) ( $settings['sync_retention_days'] ?? 45 ),
 				'tombstone_retention_days' => (int) ( $settings['tombstone_retention_days'] ?? 90 ),
+				'version_retention_limit'  => (int) ( $settings['version_retention_limit'] ?? 10 ),
 			),
 			'devices'        => self::device_summary(),
 			'jobs'           => self::job_summary(),
 			'sync'           => self::sync_summary(),
 			'storage'        => self::storage_summary(),
+			'conflicts'      => self::conflict_summary(),
+			'versions'       => self::version_summary(),
+			'thumbnails'     => self::thumbnail_summary(),
+			'release_evidence' => self::release_evidence_summary(),
 			'audit_actions'  => self::keyed_counts( $audit_counts, 'action' ),
+		);
+	}
+
+	/**
+	 * Build the admin-only beta evidence payload.
+	 */
+	public static function release_evidence(): array {
+		return array(
+			'format'            => 'floppy-beta-evidence-v1',
+			'support'           => self::support_block(),
+			'plugin'            => array(
+				'version'    => FLOPPY_VERSION,
+				'db_version' => FLOPPY_DB_VERSION,
+				'namespace'  => Floppy_Rest::NAMESPACE,
+			),
+			'privacy'           => array(
+				'no_external_services' => true,
+				'distribution_only'    => 'github',
+				'statement'            => __( 'Floppy does not send file data, diagnostics, telemetry, crash logs, or sync metadata to any hosted service. GitHub is used only for release distribution.', 'floppy' ),
+			),
+			'compatibility'     => Floppy_Compatibility::summary(),
+			'schema'            => array(
+				'missing' => Floppy_Schema::validate(),
+				'repair'  => Floppy_Schema::repair( false ),
+			),
+			'conflicts'         => self::conflict_summary(),
+			'versions'          => self::version_summary(),
+			'thumbnails'        => self::thumbnail_summary(),
+			'release_gates'     => array(
+				'php_lint'                  => 'ci-required',
+				'phpcs'                     => 'ci-required',
+				'phpunit_wordpress'         => 'ci-required',
+				'plugin_zip_shape'          => 'ci-required',
+				'swift_build_tests'         => 'ci-required',
+				'xcode_doctor'              => 'ci-required',
+				'desktop_mode_hook_audit'   => 'ci-required',
+				'developer_id_notarization' => 'manual-required',
+				'load_100k'                 => 'manual-required',
+				'load_1m_stress'            => 'manual-required',
+				'redaction_checks'          => 'ci-required',
+			),
 		);
 	}
 
@@ -210,6 +264,62 @@ final class Floppy_Diagnostics {
 			'folders_by_status' => self::keyed_counts( $folder_counts, 'status' ),
 			'file_bytes'        => $bytes,
 		);
+	}
+
+	/**
+	 * Summarize server-side conflicts.
+	 */
+	private static function conflict_summary(): array {
+		return array(
+			'by_status' => self::count_rows_by_status( Floppy_Schema::table( 'conflicts' ) ),
+		);
+	}
+
+	/**
+	 * Summarize retained versions and quota impact.
+	 */
+	private static function version_summary(): array {
+		global $wpdb;
+
+		return array(
+			'total'           => (int) $wpdb->get_var( 'SELECT COUNT(*) FROM ' . Floppy_Schema::table( 'file_versions' ) ), // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared
+			'bytes'           => (int) $wpdb->get_var( 'SELECT COALESCE(SUM(size_bytes),0) FROM ' . Floppy_Schema::table( 'file_versions' ) ), // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared
+			'retention_limit' => (int) Floppy_Settings::get_value( 'version_retention_limit', 10 ),
+		);
+	}
+
+	/**
+	 * Summarize private thumbnail/cache state.
+	 */
+	private static function thumbnail_summary(): array {
+		return array(
+			'by_status' => self::count_rows_by_status( Floppy_Schema::table( 'thumbnails' ) ),
+		);
+	}
+
+	/**
+	 * Include a compact beta-readiness view inside support bundles.
+	 */
+	private static function release_evidence_summary(): array {
+		$missing_schema = Floppy_Schema::validate();
+
+		return array(
+			'format'               => 'floppy-beta-evidence-summary-v1',
+			'schema_ready'         => empty( $missing_schema ),
+			'missing_schema_items' => count( $missing_schema ),
+			'no_external_services' => true,
+			'required_manual_gates' => array( 'developer_id_notarization', 'load_100k', 'load_1m_stress' ),
+		);
+	}
+
+	/**
+	 * Count rows by status in a redacted support-safe table.
+	 */
+	private static function count_rows_by_status( string $table ): array {
+		global $wpdb;
+
+		$rows = $wpdb->get_results( "SELECT status, COUNT(*) AS total FROM $table GROUP BY status", ARRAY_A ); // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared
+		return self::keyed_counts( $rows, 'status' );
 	}
 
 	/**

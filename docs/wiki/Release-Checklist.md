@@ -8,11 +8,14 @@
 - Run `composer lint:all` for PHP syntax, PHP compatibility, and WordPress API checks.
 - Run Composer PHPUnit integration tests against the WordPress test suite and MySQL.
 - Run `php floppy/tests/load/run-query-budget.php --scenario=10k --format=json` and keep the JSON report with the release notes.
+- Run `node floppy/tests/desktop-mode/audit-hooks.mjs --format=json` and keep the hook-audit report with the release notes.
+- Run `node floppy/tests/release/build-evidence-sidecar.mjs --load-report=dist/evidence/load-10k.json --hook-audit=dist/evidence/desktop-mode-hook-audit.json --output=dist/floppy-release-evidence.json`.
 - Validate `.distignore` release ZIP shape so Composer, PHPUnit, GitHub, and test artifacts stay out of the plugin ZIP.
 - Run WordPress Plugin Check before WordPress.org submission.
 - Verify activation, deactivation, reinstall, and uninstall behavior.
 - Verify HTTPS, REST API, upload limits, cron health, private storage, and DB table/index diagnostics.
 - Download a repair dry run and debug bundle from the admin screen and confirm they do not leak `storage_key` or private paths.
+- Download a Release Evidence JSON sidecar from the Desktop Mode Evidence panel and confirm it contains the support correlation ID, hook smoke, endpoint availability, repair dry-run status, and no tokens or private paths.
 - Run the 100k load budget before public beta tagging and fail the tag if hot-path query plans full-scan metadata tables.
 - Run the private-storage probe matrix for Studio, Apache, Nginx, and the target host. Production/LAN sites must block direct access before release.
 - Run an export/restore drill and confirm restored metadata, blobs, checksums, tombstones, and attachment links match the source site.
@@ -35,6 +38,7 @@
 ## GitHub Release
 
 - Confirm the `Floppy Beta Checks` workflow is green.
+- Confirm `dist/floppy-release-evidence.json` exists in the workflow artifacts or release issue evidence bundle.
 - Attach the plugin ZIP.
 - Attach the Mac build artifact only when signing/notarization status is explicit.
 - Link this wiki from the release notes.

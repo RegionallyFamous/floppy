@@ -108,6 +108,19 @@ public struct FloppyAPIClient: Sendable {
         try await request(path: "devices")
     }
 
+    public func listConflicts(cursor: String = "", limit: Int = 100) async throws -> FloppyServerConflictListResponse {
+        var components = URLComponents()
+        components.queryItems = [URLQueryItem(name: "limit", value: String(limit))]
+        if !cursor.isEmpty {
+            components.queryItems?.append(URLQueryItem(name: "cursor", value: cursor))
+        }
+        return try await request(path: "conflicts?\(components.percentEncodedQuery ?? "")")
+    }
+
+    public func applyConflictAction(conflictID: String, request actionRequest: FloppyConflictActionRequest) async throws -> FloppyConflictActionResponse {
+        try await request(path: "conflicts/\(conflictID)/actions", method: "POST", body: actionRequest)
+    }
+
     public func revokeDevice(deviceUUID: String) async throws {
         do {
             let _: EmptyResponse = try await request(path: "devices/\(deviceUUID)/revoke", method: "POST", body: EmptyRequestBody())
@@ -460,6 +473,53 @@ public struct FloppyAPIClient: Sendable {
     }
 
     public func download(file: FloppyItem, to url: URL) async throws {
+        _ = try await downloadValidated(file: file, to: url)
+    }
+
+    @discardableResult
+    public func downloadValidated(
+        file: FloppyItem,
+        to url: URL,
+        retryPolicy: FloppyTransferRetryPolicy = .default
+    ) async throws -> FloppyMaterializationResult {
+        var attempt = 0
+        var checksumFailures = 0
+        var lastError: Error?
+        var lastQuarantineURL: URL?
+
+        while attempt < retryPolicy.maximumAttempts {
+            try Task.checkCancellation()
+            attempt += 1
+            do {
+                let result = try await downloadOnce(file: file, to: url, attempt: attempt)
+                return FloppyMaterializationResult(
+                    destinationPath: result.destination.path,
+                    retries: attempt - 1,
+                    checksumValidated: result.checksumValidated,
+                    checksumFailures: checksumFailures,
+                    partialFileQuarantinePath: lastQuarantineURL?.path
+                )
+            } catch FloppyTransferError.checksumMismatch(let expected, let actual) {
+                checksumFailures += 1
+                lastError = FloppyTransferError.checksumMismatch(expected: expected, actual: actual)
+                lastQuarantineURL = FloppyPartialFileQuarantine.quarantineURL(for: url, reason: "checksum")
+            } catch {
+                lastError = error
+            }
+
+            if attempt < retryPolicy.maximumAttempts, retryPolicy.initialDelaySeconds > 0 {
+                let delay = UInt64(retryPolicy.initialDelaySeconds * Double(NSEC_PER_SEC) * pow(2.0, Double(attempt - 1)))
+                try await Task.sleep(nanoseconds: delay)
+            }
+        }
+
+        if let lastError {
+            throw lastError
+        }
+        throw FloppyTransferError.retryLimitExceeded(attempts: attempt)
+    }
+
+    private func downloadOnce(file: FloppyItem, to url: URL, attempt: Int) async throws -> (destination: URL, checksumValidated: Bool) {
         guard let downloadURL = file.downloadURL else {
             throw FloppyAPIError.invalidResponse
         }
@@ -474,10 +534,28 @@ public struct FloppyAPIClient: Sendable {
         let (temporaryURL, response) = try await session.download(for: request, delegate: FloppyDownloadRedirectDelegate(policy: policy))
         try policy.validate(response: response)
         try validate(response: response, data: Data())
+        let checksumValidated: Bool
+        if let expectedHash = file.contentHash, !expectedHash.isEmpty {
+            let actualHash = try Self.sha256HexDigest(for: temporaryURL)
+            guard actualHash.caseInsensitiveCompare(expectedHash) == .orderedSame else {
+                let quarantineURL = FloppyPartialFileQuarantine.quarantineURL(for: url, reason: "checksum-\(attempt)")
+                try FileManager.default.createDirectory(at: quarantineURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+                try? FileManager.default.removeItem(at: quarantineURL)
+                try? FileManager.default.moveItem(at: temporaryURL, to: quarantineURL)
+                FloppyDiagnostics.api.error("Downloaded checksum mismatch for \(FloppyDiagnostics.redactedFilePath(url.path), privacy: .public)")
+                throw FloppyTransferError.checksumMismatch(expected: expectedHash, actual: actualHash)
+            }
+            checksumValidated = true
+        } else {
+            checksumValidated = false
+        }
+
+        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
         if FileManager.default.fileExists(atPath: url.path) {
             try FileManager.default.removeItem(at: url)
         }
         try FileManager.default.moveItem(at: temporaryURL, to: url)
+        return (url, checksumValidated)
     }
 
     public func request<Response: Decodable, Body: Encodable>(path: String, method: String = "GET", body: Body? = Optional<Data>.none, requiresToken: Bool = true) async throws -> Response {
@@ -587,7 +665,7 @@ public struct FloppyAPIClient: Sendable {
         }
     }
 
-    private static func sha256HexDigest(for fileURL: URL) throws -> String {
+    public static func sha256HexDigest(for fileURL: URL) throws -> String {
         let handle = try FileHandle(forReadingFrom: fileURL)
         defer { try? handle.close() }
 

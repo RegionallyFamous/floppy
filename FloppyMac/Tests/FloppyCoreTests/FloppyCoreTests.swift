@@ -260,6 +260,143 @@ import Testing
     #expect(!json.contains(FileManager.default.homeDirectoryForCurrentUser.path))
 }
 
+@Test func diagnosticsBundleV3IncludesSyncConflictMaterializationAndReleaseFields() throws {
+    let account = FloppyAccount(
+        siteURL: URL(string: "https://user:password@example.com/wp?token=secret#fragment")!,
+        restURL: URL(string: "https://example.com/wp-json/floppy/v1?token=secret")!,
+        userHint: "admin@example.com",
+        deviceUUID: "device-secret-uuid",
+        scope: "files:read,files:write",
+        lastCursor: 42
+    )
+    let decision = FloppyRecoveryDecision(
+        state: .conflict,
+        message: "Resolve conflicts.",
+        actions: [.resolveConflicts, .retrySync]
+    )
+    let bundle = FloppyMacDiagnosticsBundleV3(
+        createdAt: "2026-05-22T00:00:00Z",
+        support: FloppyDiagnostics.supportCorrelation(account: account, domainIdentifier: "floppy-device-secret-uuid"),
+        app: FloppyMacDiagnosticsAppInfo(version: "dev", bundleID: "com.floppy.mac"),
+        selectedAccount: FloppyMacDiagnosticsSelectedAccount(account: account, lastSyncAt: "2026-05-22T01:00:00Z"),
+        ledger: FloppyMacDiagnosticsLedgerInfo(
+            path: FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support/FloppyMac/ledger.sqlite").path,
+            accounts: 1,
+            items: 2,
+            pendingOperations: 1,
+            conflicts: 1,
+            activeEnumerators: ["floppy:item:folder-uuid"],
+            conflictDiagnostics: FloppyLedgerConflictDiagnostics(
+                accountFingerprint: FloppyDiagnostics.redactedFingerprint(account.id),
+                totalCount: 1,
+                openCount: 1,
+                resolvedCount: 0,
+                materializedOpenCount: 1,
+                missingMaterializedOpenCount: 0,
+                missingItemRecordCount: 0,
+                reasons: [FloppyConflictReasonCount(reason: "HTTP 409", count: 1)]
+            ),
+            integrity: .empty(accountID: account.id)
+        ),
+        domains: [],
+        keychain: FloppyMacDiagnosticsKeychainInfo(
+            availableForSelectedAccount: true,
+            accessGroupConfigured: true,
+            dataProtectionKeychain: true,
+            interactivePromptsDisabled: true
+        ),
+        onboarding: FloppyMacDiagnosticsOnboardingInfo(step: "idle", hasPendingState: false, pluginMainFile: "floppy/floppy.php"),
+        fileProvider: FloppyFileProviderLifecycleDiagnostic(
+            state: .configured,
+            message: "ready",
+            domainIdentifierFingerprint: FloppyDiagnostics.redactedFingerprint("floppy-device-secret-uuid"),
+            displayName: "Floppy - example.com",
+            readinessStatus: "ready",
+            registeredInLocalRegistry: true,
+            keychainTokenAvailable: true,
+            ledgerOK: true,
+            activeEnumeratorCount: 1
+        ),
+        finderSync: FloppyMacDiagnosticsFinderSyncInfo(
+            decision: decision,
+            pendingOperations: 1,
+            openConflicts: 1,
+            activeEnumerators: 1,
+            lastCursor: "42",
+            lastSyncAt: "2026-05-22T01:00:00Z"
+        ),
+        conflictCenter: FloppyMacDiagnosticsConflictCenterInfo(
+            summary: FloppyConflictCenterSummary(total: 1, open: 1, resolved: 0, missingLocalCopies: 0),
+            recent: []
+        ),
+        materialization: FloppyMacDiagnosticsMaterializationInfo(retries: 2, checksumFailures: 1, partialFileQuarantineCount: 1, lastFailure: "checksum mismatch"),
+        versionRestores: FloppyMacDiagnosticsVersionRestoreInfo(supportedByServer: "unknown", restoresAttempted: 0),
+        releaseBuild: FloppyReleaseBuildIdentity(version: "0.1.0", build: "1", bundleID: "com.floppy.mac", appGroupIdentifier: "group.com.floppy.mac", executablePath: FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Floppy.app/Contents/MacOS/Floppy").path, isSwiftPMBundle: false),
+        releaseEvidence: FloppyReleaseEvidenceSummary(passed: 8, warnings: 0, failed: 0, skipped: 0, readyForPublicBeta: true),
+        lastStatus: "Ready"
+    )
+
+    let data = try JSONEncoder.floppy.encode(bundle)
+    let json = String(data: data, encoding: .utf8) ?? ""
+
+    #expect(json.contains("\"format\":\"floppy-mac-diagnostics-v3\""))
+    #expect(json.contains("finder_sync"))
+    #expect(json.contains("conflict_center"))
+    #expect(json.contains("checksum_failures"))
+    #expect(json.contains("version_restores"))
+    #expect(json.contains("release_build"))
+    #expect(json.contains("release_evidence"))
+    #expect(!json.contains("device-secret-uuid"))
+    #expect(!json.contains("password"))
+    #expect(!json.contains("token=secret"))
+    #expect(!json.contains(FileManager.default.homeDirectoryForCurrentUser.path))
+}
+
+@Test func recoveryPlannerMapsDeterministicStatesToActions() throws {
+    let noAccount = FloppyRecoveryPlanner.decision(for: FloppyRecoveryContext(
+        lifecycleState: .unconfigured,
+        hasSelectedAccount: false,
+        keychainTokenAvailable: false
+    ))
+    #expect(noAccount.state == .unconfigured)
+    #expect(noAccount.actions == [.connectAccount])
+
+    let revoked = FloppyRecoveryPlanner.decision(for: FloppyRecoveryContext(
+        lifecycleState: .revokedToken,
+        hasSelectedAccount: true,
+        keychainTokenAvailable: false
+    ))
+    #expect(revoked.state == .authNeeded)
+    #expect(revoked.actions.contains(.reconnectSite))
+
+    let corruptLedger = FloppyRecoveryPlanner.decision(for: FloppyRecoveryContext(
+        lifecycleState: .needsLedgerRepair,
+        hasSelectedAccount: true,
+        keychainTokenAvailable: true,
+        materializationIssueCount: 1
+    ))
+    #expect(corruptLedger.state == .repairNeeded)
+    #expect(corruptLedger.actions.contains(.repairLedger))
+
+    let unreachable = FloppyRecoveryPlanner.decision(for: FloppyRecoveryContext(
+        lifecycleState: .configured,
+        hasSelectedAccount: true,
+        keychainTokenAvailable: true,
+        serverReachable: false,
+        lastError: "Server unreachable."
+    ))
+    #expect(unreachable.state == .offline)
+    #expect(unreachable.actions.contains(.waitForNetwork))
+
+    let current = FloppyRecoveryPlanner.decision(for: FloppyRecoveryContext(
+        lifecycleState: .configured,
+        hasSelectedAccount: true,
+        keychainTokenAvailable: true
+    ))
+    #expect(current.state == .current)
+    #expect(current.actions.isEmpty)
+}
+
 @Test func downloadOriginPolicyRejectsForeignHosts() throws {
     let policy = FloppyDownloadOriginPolicy(
         siteURL: URL(string: "https://example.com")!,
@@ -418,6 +555,128 @@ import Testing
     #expect(integrity.issues.contains { $0.code == "missing_conflict_files" })
 }
 
+@Test func sqliteLedgerListsConflictCenterItemsAndResolvesLocalConflicts() async throws {
+    let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: directory) }
+
+    let account = FloppyAccount(
+        siteURL: URL(string: "https://example.com")!,
+        restURL: URL(string: "https://example.com/wp-json/floppy/v1")!,
+        userHint: "admin",
+        deviceUUID: "device-uuid",
+        scope: "files:read,files:write"
+    )
+    let ledger = LocalLedger(fileURL: directory.appendingPathComponent("ledger.sqlite"))
+    try await ledger.upsert(account: account)
+
+    let conflictItem = sampleItem(uuid: "local-conflict-\(UUID().uuidString)", id: -1, name: "hello conflict.txt")
+    let materializedURL = try await ledger.conflictFileURL(uuid: conflictItem.uuid, filename: conflictItem.name)
+    try "edited".data(using: .utf8)!.write(to: materializedURL)
+    let conflictID = UUID()
+    let conflict = FloppyConflict(
+        id: conflictID,
+        accountID: "",
+        itemUUID: conflictItem.uuid,
+        message: "HTTP 428 while replacing a stale Finder edit.",
+        displayName: conflictItem.name,
+        parentID: conflictItem.parentID,
+        parentUUID: conflictItem.parentUUID,
+        materializedPath: materializedURL.path,
+        originalContentVersion: "server-secret-version",
+        state: "open"
+    )
+
+    try await ledger.recordConflict(conflict: conflict, item: conflictItem, localURL: materializedURL, accountID: account.id)
+    let centerItems = await ledger.conflictCenterItems(accountID: account.id)
+    #expect(centerItems.count == 1)
+    #expect(centerItems[0].displayName == "hello conflict.txt")
+    #expect(centerItems[0].materializedFileExists)
+    #expect(centerItems[0].availableActions.contains(.retryUpload))
+    #expect(centerItems[0].availableActions.contains(.discardLocalCopy))
+    #expect(!centerItems[0].originalContentVersionFingerprint.contains("server-secret-version"))
+
+    try await ledger.discardLocalConflictCopy(id: conflictID, accountID: account.id)
+    let resolved = await ledger.conflictDiagnostics(accountID: account.id)
+    await ledger.close()
+
+    #expect(resolved.openCount == 0)
+    #expect(resolved.resolvedCount == 1)
+    #expect(!FileManager.default.fileExists(atPath: materializedURL.path))
+}
+
+@Test func conflictApiHelpersUseFutureCompatibleRoutes() async throws {
+    var requested: [(method: String, path: String, body: String)] = []
+    ConflictURLProtocolStub.handler = { request in
+        requested.append((
+            method: request.httpMethod ?? "",
+            path: request.url?.path ?? "",
+            body: String(data: requestBodyData(request), encoding: .utf8) ?? ""
+        ))
+        if request.url?.path.hasSuffix("/conflicts") == true {
+            return httpJSON(request, body: #"{"conflicts":[],"next_cursor":null,"has_more":false}"#)
+        }
+        if request.url?.path.hasSuffix("/conflicts/conflict-1/actions") == true {
+            return httpJSON(request, body: #"{"conflict":{"id":"conflict-1","reason":"stale","state":"resolved"}}"#)
+        }
+        return httpJSON(request, status: 404, body: "{}")
+    }
+    defer { ConflictURLProtocolStub.handler = nil }
+
+    let configuration = URLSessionConfiguration.ephemeral
+    configuration.protocolClasses = [ConflictURLProtocolStub.self]
+    let client = FloppyAPIClient(siteURL: URL(string: "https://example.com")!, token: "secret", session: URLSession(configuration: configuration))
+
+    let conflicts = try await client.listConflicts(cursor: "cursor-1", limit: 20)
+    let response = try await client.applyConflictAction(conflictID: "conflict-1", request: FloppyConflictActionRequest(action: .markResolved))
+
+    #expect(conflicts.conflicts.isEmpty)
+    #expect(response.conflict.state == "resolved")
+    #expect(requested.contains { $0.method == "GET" && $0.path.hasSuffix("/conflicts") })
+    #expect(requested.contains { $0.method == "POST" && $0.path.hasSuffix("/conflicts/conflict-1/actions") && $0.body.contains("mark_resolved") })
+}
+
+@Test func releaseEvidenceSummaryAndReportRedactLocalPaths() throws {
+    let checks = [
+        FloppyReleaseEvidenceCheck(id: "xcodebuild", status: .pass, message: "ok"),
+        FloppyReleaseEvidenceCheck(id: "notary", status: .warn, message: "missing local profile"),
+        FloppyReleaseEvidenceCheck(id: "codesign", status: .skipped, message: "no APP_PATH")
+    ]
+    let report = FloppyReleaseEvidenceReport(
+        generatedAt: "2026-05-22T00:00:00Z",
+        projectPath: FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Documents/GitHub/floppy/FloppyMac").path,
+        appPath: FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Desktop/Floppy.app").path,
+        zipPath: FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Desktop/Floppy.zip").path,
+        checks: checks
+    )
+
+    let json = String(data: try JSONEncoder.floppy.encode(report), encoding: .utf8) ?? ""
+    #expect(report.summary.passed == 1)
+    #expect(report.summary.warnings == 1)
+    #expect(report.summary.skipped == 1)
+    #expect(!report.summary.readyForPublicBeta)
+    #expect(json.contains("floppy-mac-release-evidence-v1"))
+    #expect(!json.contains(FileManager.default.homeDirectoryForCurrentUser.path))
+}
+
+@Test func materializationResultAndQuarantinePathsAreRedacted() throws {
+    let destination = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Floppy/hello.txt")
+    let quarantine = FloppyPartialFileQuarantine.quarantineURL(for: destination, reason: "checksum mismatch", date: Date(timeIntervalSince1970: 1_800_000_000))
+    let result = FloppyMaterializationResult(
+        destinationPath: destination.path,
+        retries: 2,
+        checksumValidated: true,
+        checksumFailures: 1,
+        partialFileQuarantinePath: quarantine.path
+    )
+    let json = String(data: try JSONEncoder.floppy.encode(result), encoding: .utf8) ?? ""
+
+    #expect(quarantine.lastPathComponent.contains("checksum-mismatch"))
+    #expect(result.retries == 2)
+    #expect(result.checksumFailures == 1)
+    #expect(!json.contains(FileManager.default.homeDirectoryForCurrentUser.path))
+}
+
 @Test func nativeFolderReadinessRequiresEmbeddedExtensionAndAppGroupEntitlement() throws {
     let pluginRoot = URL(fileURLWithPath: "/tmp/FloppyPlugIns", isDirectory: true)
     let extensionURL = pluginRoot.appendingPathComponent(FloppyNativeFolderReadiness.fileProviderExtensionBundleName, isDirectory: true)
@@ -531,6 +790,34 @@ private func requestBodyData(_ request: URLRequest) -> Data {
 }
 
 private final class URLProtocolStub: URLProtocol {
+    nonisolated(unsafe) static var handler: ((URLRequest) throws -> (HTTPURLResponse, Data))?
+
+    override class func canInit(with request: URLRequest) -> Bool {
+        true
+    }
+
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest {
+        request
+    }
+
+    override func startLoading() {
+        do {
+            guard let handler = Self.handler else {
+                throw FloppyAPIError.invalidResponse
+            }
+            let (response, data) = try handler(request)
+            client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+            client?.urlProtocol(self, didLoad: data)
+            client?.urlProtocolDidFinishLoading(self)
+        } catch {
+            client?.urlProtocol(self, didFailWithError: error)
+        }
+    }
+
+    override func stopLoading() {}
+}
+
+private final class ConflictURLProtocolStub: URLProtocol {
     nonisolated(unsafe) static var handler: ((URLRequest) throws -> (HTTPURLResponse, Data))?
 
     override class func canInit(with request: URLRequest) -> Bool {

@@ -6,7 +6,7 @@
 
 .floppy-shell {
 	display: grid;
-	grid-template-columns: 204px minmax(0, 1fr);
+	grid-template-columns: 224px minmax(0, 1fr);
 	background: #f6f7f7;
 	color: #1d2327;
 	font-size: 13px;
@@ -16,6 +16,8 @@
 	display: flex;
 	flex-direction: column;
 	gap: 4px;
+	min-width: 0;
+	overflow-y: auto;
 	border-right: 1px solid #dcdcde;
 	background: #fff;
 	padding: 14px 10px;
@@ -68,6 +70,12 @@
 	color: #1d2327;
 	text-align: left;
 	cursor: pointer;
+}
+
+.floppy-nav span:last-child {
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
 }
 
 .floppy-nav:hover,
@@ -495,6 +503,17 @@
 	text-align: center;
 }
 
+.floppy-list-limit {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	padding: 10px 12px;
+	border-top: 1px solid #dcdcde;
+	background: #f6f7f7;
+	color: #50575e;
+	font-size: 12px;
+}
+
 .floppy-target:hover,
 .floppy-device:hover {
 	border-color: #008a5b;
@@ -565,6 +584,10 @@
 }
 
 .floppy-stat strong {
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
 	font-size: 18px;
 	line-height: 1.1;
 }
@@ -782,8 +805,72 @@
 	background: #f0fff8;
 }
 
+.floppy-callout.is-error {
+	border-left-color: #b32d2e;
+	background: #fcf0f1;
+}
+
 .floppy-callout span {
 	color: #646970;
+}
+
+.floppy-card-list,
+.floppy-gate-list {
+	display: grid;
+	gap: 8px;
+}
+
+.floppy-card,
+.floppy-gate {
+	display: grid;
+	gap: 10px;
+	min-width: 0;
+	padding: 12px;
+	border: 1px solid #dcdcde;
+	border-radius: 8px;
+	background: #fff;
+}
+
+.floppy-card > div:first-child,
+.floppy-gate {
+	display: grid;
+	grid-template-columns: 28px minmax(0, 1fr);
+	align-items: center;
+	gap: 10px;
+}
+
+.floppy-card .dashicons,
+.floppy-gate .dashicons {
+	color: #008a5b;
+}
+
+.floppy-card.is-warning .dashicons,
+.floppy-gate.is-warn .dashicons {
+	color: #dba617;
+}
+
+.floppy-gate.is-fail .dashicons {
+	color: #b32d2e;
+}
+
+.floppy-card p {
+	margin: 0;
+	color: #50575e;
+}
+
+.floppy-card strong,
+.floppy-gate strong,
+.floppy-card small,
+.floppy-gate small,
+.floppy-card dd,
+.floppy-gate dd {
+	overflow-wrap: anywhere;
+}
+
+.floppy-card small,
+.floppy-gate small {
+	color: #646970;
+	font-size: 11px;
 }
 
 .floppy-segmented {

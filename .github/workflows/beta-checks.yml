@@ -21,6 +21,8 @@ jobs:
         run: |
           find FloppyMac/Scripts -name '*.sh' -print0 | xargs -0 -n1 bash -n
           find FloppyMac/Scripts -name '*.sh' -print0 | xargs -0 shellcheck -x
+      - name: Desktop Mode hook audit
+        run: node floppy/tests/desktop-mode/audit-hooks.mjs --format=json
 
   wordpress-plugin:
     name: WordPress Plugin
@@ -56,7 +58,24 @@ jobs:
       - name: PHP lint
         run: composer lint:all
       - name: Load query budget smoke
-        run: php floppy/tests/load/run-query-budget.php --scenario=10k --format=json
+        run: |
+          mkdir -p dist/evidence
+          php floppy/tests/load/run-query-budget.php --scenario=10k --format=json | tee dist/evidence/load-10k.json
+      - name: Build release evidence sidecar
+        run: |
+          node floppy/tests/desktop-mode/audit-hooks.mjs --format=json | tee dist/evidence/desktop-mode-hook-audit.json
+          node floppy/tests/release/build-evidence-sidecar.mjs \
+            --load-report=dist/evidence/load-10k.json \
+            --hook-audit=dist/evidence/desktop-mode-hook-audit.json \
+            --output=dist/floppy-release-evidence.json
+      - name: Upload release evidence sidecar
+        uses: actions/upload-artifact@v4
+        with:
+          name: floppy-release-evidence
+          path: |
+            dist/floppy-release-evidence.json
+            dist/evidence/*.json
+          if-no-files-found: error
       - name: Install WordPress test suite
         run: |
           curl -fsSL https://raw.githubusercontent.com/wp-cli/scaffold-command/main/templates/install-wp-tests.sh \

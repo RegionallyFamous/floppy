@@ -215,6 +215,74 @@ final class Floppy_Schema {
 			KEY target_lookup (target_type,target_id,created_at_gmt)
 		) $charset;";
 
+		$sql[] = 'CREATE TABLE ' . self::table( 'file_versions' ) . " (
+			id bigint(20) unsigned NOT NULL AUTO_INCREMENT,
+			version_uuid char(36) NOT NULL,
+			file_id bigint(20) unsigned NOT NULL,
+			file_uuid char(36) NOT NULL,
+			owner_id bigint(20) unsigned NOT NULL,
+			name varchar(255) NOT NULL,
+			mime_type varchar(127) NOT NULL DEFAULT '',
+			size_bytes bigint(20) unsigned DEFAULT 0 NOT NULL,
+			content_hash char(64) NOT NULL DEFAULT '',
+			storage_key varchar(255) NOT NULL DEFAULT '',
+			content_version char(36) NOT NULL,
+			metadata_version char(36) NOT NULL DEFAULT '',
+			reason varchar(64) NOT NULL DEFAULT 'replace',
+			created_by bigint(20) unsigned DEFAULT 0 NOT NULL,
+			created_at_gmt datetime NOT NULL,
+			PRIMARY KEY  (id),
+			UNIQUE KEY version_uuid (version_uuid),
+			KEY file_created (file_id,created_at_gmt,id),
+			KEY owner_file (owner_id,file_id,id),
+			KEY content_hash (content_hash)
+		) $charset;";
+
+		$sql[] = 'CREATE TABLE ' . self::table( 'conflicts' ) . " (
+			id bigint(20) unsigned NOT NULL AUTO_INCREMENT,
+			conflict_uuid char(36) NOT NULL,
+			owner_id bigint(20) unsigned NOT NULL,
+			file_id bigint(20) unsigned DEFAULT 0 NOT NULL,
+			file_uuid char(36) NOT NULL DEFAULT '',
+			parent_id bigint(20) unsigned DEFAULT 0 NOT NULL,
+			status varchar(20) NOT NULL DEFAULT 'open',
+			reason varchar(64) NOT NULL DEFAULT 'stale_content',
+			local_name varchar(255) NOT NULL DEFAULT '',
+			server_content_version char(36) NOT NULL DEFAULT '',
+			local_content_hash char(64) NOT NULL DEFAULT '',
+			local_size_bytes bigint(20) unsigned DEFAULT 0 NOT NULL,
+			client_created_at_gmt datetime DEFAULT NULL,
+			resolved_at_gmt datetime DEFAULT NULL,
+			created_at_gmt datetime NOT NULL,
+			updated_at_gmt datetime NOT NULL,
+			PRIMARY KEY  (id),
+			UNIQUE KEY conflict_uuid (conflict_uuid),
+			KEY owner_status_id (owner_id,status,id),
+			KEY file_status (file_id,status,id),
+			KEY parent_status (parent_id,status,id)
+		) $charset;";
+
+		$sql[] = 'CREATE TABLE ' . self::table( 'thumbnails' ) . " (
+			id bigint(20) unsigned NOT NULL AUTO_INCREMENT,
+			file_id bigint(20) unsigned NOT NULL,
+			file_uuid char(36) NOT NULL,
+			content_version char(36) NOT NULL,
+			status varchar(20) NOT NULL DEFAULT 'queued',
+			storage_key varchar(255) NOT NULL DEFAULT '',
+			mime_type varchar(127) NOT NULL DEFAULT 'image/jpeg',
+			width int(10) unsigned DEFAULT 0 NOT NULL,
+			height int(10) unsigned DEFAULT 0 NOT NULL,
+			size_bytes bigint(20) unsigned DEFAULT 0 NOT NULL,
+			source_hash char(64) NOT NULL DEFAULT '',
+			error_message text,
+			created_at_gmt datetime NOT NULL,
+			updated_at_gmt datetime NOT NULL,
+			PRIMARY KEY  (id),
+			UNIQUE KEY file_version (file_id,content_version),
+			KEY file_status (file_id,status),
+			KEY status_updated (status,updated_at_gmt)
+		) $charset;";
+
 		$sql[] = 'CREATE TABLE ' . self::table( 'jobs' ) . " (
 			id bigint(20) unsigned NOT NULL AUTO_INCREMENT,
 			job_uuid char(36) NOT NULL,
@@ -252,7 +320,7 @@ final class Floppy_Schema {
 		global $wpdb;
 
 		$missing = array();
-		foreach ( array( 'files', 'folders', 'item_names', 'acl_grants', 'sync_events', 'devices', 'upload_sessions', 'tombstones', 'audit_log', 'jobs' ) as $name ) {
+		foreach ( array( 'files', 'folders', 'item_names', 'acl_grants', 'sync_events', 'devices', 'upload_sessions', 'tombstones', 'audit_log', 'file_versions', 'conflicts', 'thumbnails', 'jobs' ) as $name ) {
 			$table = self::table( $name );
 			$found = $wpdb->get_var( $wpdb->prepare( 'SHOW TABLES LIKE %s', $table ) );
 			if ( $found !== $table ) {
@@ -292,6 +360,9 @@ final class Floppy_Schema {
 			'upload_sessions' => array( 'session_uuid', 'user_status', 'target_operation', 'expires_at' ),
 			'tombstones'      => array( 'target_lookup', 'owner_expires', 'sync_seq' ),
 			'audit_log'       => array( 'actor_created', 'action_created', 'target_lookup' ),
+			'file_versions'   => array( 'version_uuid', 'file_created', 'owner_file', 'content_hash' ),
+			'conflicts'       => array( 'conflict_uuid', 'owner_status_id', 'file_status', 'parent_status' ),
+			'thumbnails'      => array( 'file_version', 'file_status', 'status_updated' ),
 			'jobs'            => array( 'job_uuid', 'queue_lookup', 'job_type_status' ),
 		);
 
@@ -308,6 +379,9 @@ final class Floppy_Schema {
 			'orphaned_name_reservations' => self::repair_orphaned_name_reservations( $apply ),
 			'orphaned_acl_grants'       => self::repair_orphaned_acl_grants( $apply ),
 			'stale_upload_sessions'     => self::repair_stale_upload_sessions( $apply ),
+			'stale_versions'            => self::repair_stale_versions( $apply ),
+			'stale_conflicts'           => self::repair_stale_conflicts( $apply ),
+			'stale_thumbnails'          => self::repair_stale_thumbnails( $apply ),
 			'attachment_links'          => self::repair_attachment_links( $apply ),
 			'missing_tombstones'        => self::repair_missing_tombstones( $apply ),
 			'blob_integrity'            => self::inspect_blob_integrity(),
@@ -537,6 +611,82 @@ final class Floppy_Schema {
 	}
 
 	/**
+	 * Remove version rows whose file no longer exists.
+	 */
+	private static function repair_stale_versions( bool $apply ): array {
+		global $wpdb;
+
+		$table = self::table( 'file_versions' );
+		$rows = $wpdb->get_results(
+			"SELECT v.id, v.storage_key FROM $table v LEFT JOIN " . self::table( 'files' ) . ' f ON f.id = v.file_id WHERE f.id IS NULL LIMIT 500',
+			ARRAY_A
+		); // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared
+		if ( $apply ) {
+			foreach ( $rows as $row ) {
+				self::delete_unreferenced_blob( (string) $row['storage_key'] );
+				$wpdb->delete( $table, array( 'id' => (int) $row['id'] ), array( '%d' ) );
+			}
+		}
+
+		return array(
+			'stale'        => count( $rows ),
+			'scan_limited' => count( $rows ) >= 500,
+		);
+	}
+
+	/**
+	 * Close conflict rows whose source file was deleted.
+	 */
+	private static function repair_stale_conflicts( bool $apply ): array {
+		global $wpdb;
+
+		$table = self::table( 'conflicts' );
+		$rows = $wpdb->get_results(
+			"SELECT c.id FROM $table c LEFT JOIN " . self::table( 'files' ) . " f ON f.id = c.file_id WHERE c.status = 'open' AND c.file_id > 0 AND (f.id IS NULL OR f.status = 'deleted') LIMIT 500",
+			ARRAY_A
+		); // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared
+		if ( $apply && $rows ) {
+			$ids = implode( ',', array_map( 'absint', wp_list_pluck( $rows, 'id' ) ) );
+			$wpdb->query(
+				$wpdb->prepare(
+					"UPDATE $table SET status = 'stale', resolved_at_gmt = %s, updated_at_gmt = %s WHERE id IN ($ids)", // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared
+					current_time( 'mysql', true ),
+					current_time( 'mysql', true )
+				)
+			);
+		}
+
+		return array(
+			'stale'        => count( $rows ),
+			'scan_limited' => count( $rows ) >= 500,
+		);
+	}
+
+	/**
+	 * Remove thumbnail rows whose file or content version no longer matches.
+	 */
+	private static function repair_stale_thumbnails( bool $apply ): array {
+		global $wpdb;
+
+		$table = self::table( 'thumbnails' );
+		$rows = $wpdb->get_results(
+			"SELECT t.id, t.storage_key FROM $table t LEFT JOIN " . self::table( 'files' ) . " f ON f.id = t.file_id WHERE f.id IS NULL OR f.status = 'deleted' OR f.content_version != t.content_version LIMIT 500",
+			ARRAY_A
+		); // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared
+		if ( $apply ) {
+			foreach ( $rows as $row ) {
+				self::delete_unreferenced_blob( (string) $row['storage_key'] );
+				$wpdb->delete( $table, array( 'id' => (int) $row['id'] ), array( '%d' ) );
+			}
+		}
+
+		return array(
+			'stale'        => count( $rows ),
+			'scan_limited' => count( $rows ) >= 500,
+		);
+	}
+
+	/**
 	 * Inspect private blob existence, size, and hashes without returning paths.
 	 */
 	private static function inspect_blob_integrity(): array {
@@ -608,6 +758,34 @@ final class Floppy_Schema {
 	}
 
 	/**
+	 * Delete a blob only when no active metadata row still references it.
+	 */
+	private static function delete_unreferenced_blob( string $storage_key ): void {
+		if ( '' === $storage_key ) {
+			return;
+		}
+
+		global $wpdb;
+		$references = (int) $wpdb->get_var(
+			$wpdb->prepare(
+				'SELECT (
+					(SELECT COUNT(*) FROM ' . self::table( 'files' ) . ' WHERE storage_key = %s) +
+					(SELECT COUNT(*) FROM ' . self::table( 'file_versions' ) . ' WHERE storage_key = %s) +
+					(SELECT COUNT(*) FROM ' . self::table( 'upload_sessions' ) . ' WHERE storage_key = %s) +
+					(SELECT COUNT(*) FROM ' . self::table( 'thumbnails' ) . ' WHERE storage_key = %s)
+				)',
+				$storage_key,
+				$storage_key,
+				$storage_key,
+				$storage_key
+			)
+		);
+		if ( 0 === $references ) {
+			@unlink( Floppy_Storage::path_for_key( $storage_key ) ); // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged
+		}
+	}
+
+	/**
 	 * Count unreferenced private blobs without returning private paths.
 	 */
 	private static function inspect_orphaned_blobs(): array {
@@ -622,7 +800,9 @@ final class Floppy_Schema {
 			array_filter(
 				array_merge(
 					$wpdb->get_col( 'SELECT storage_key FROM ' . self::table( 'files' ) . " WHERE storage_key != ''" ), // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared
-					$wpdb->get_col( 'SELECT storage_key FROM ' . self::table( 'upload_sessions' ) . " WHERE storage_key != ''" ) // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared
+					$wpdb->get_col( 'SELECT storage_key FROM ' . self::table( 'file_versions' ) . " WHERE storage_key != ''" ), // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared
+					$wpdb->get_col( 'SELECT storage_key FROM ' . self::table( 'upload_sessions' ) . " WHERE storage_key != ''" ), // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared
+					$wpdb->get_col( 'SELECT storage_key FROM ' . self::table( 'thumbnails' ) . " WHERE storage_key != ''" ) // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared
 				)
 			),
 			true

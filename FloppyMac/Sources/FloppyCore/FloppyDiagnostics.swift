@@ -136,6 +136,11 @@ public enum FloppyFileProviderLifecycleState: String, Codable, Sendable {
     case missingToken = "missing_token"
     case registryMissing = "registry_missing"
     case needsLedgerRepair = "needs_ledger_repair"
+    case serverUnreachable = "server_unreachable"
+    case reconnectFailed = "reconnect_failed"
+    case revokedToken = "revoked_token"
+    case domainUnavailable = "domain_unavailable"
+    case materializationStuck = "materialization_stuck"
     case configured
 }
 

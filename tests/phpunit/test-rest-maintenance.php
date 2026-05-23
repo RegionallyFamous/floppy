@@ -53,6 +53,25 @@ final class Floppy_REST_Maintenance_Test extends WP_UnitTestCase {
 		$this->assertArrayHasKey( 'private_storage', $data );
 		$this->assertArrayHasKey( 'sync', $data );
 		$this->assertArrayHasKey( 'storage', $data );
+		$this->assertArrayHasKey( 'conflicts', $data );
+		$this->assertArrayHasKey( 'versions', $data );
+		$this->assertArrayHasKey( 'thumbnails', $data );
+		$this->assertArrayHasKey( 'release_evidence', $data );
+		$this->assertTrue( $data['privacy']['no_external_services'] );
+		$this->assertStringNotContainsString( $file['storage_key'], $json );
+		$this->assertStringNotContainsString( Floppy_Storage::path_for_key( $file['storage_key'] ), $json );
+	}
+
+	public function test_release_evidence_is_redacted_and_has_beta_gates(): void {
+		$file = $this->insert_private_file( 'secret contents' );
+		$response = Floppy_Rest::release_evidence();
+		$data = $response->get_data();
+		$json = wp_json_encode( $data );
+
+		$this->assertSame( 'floppy-beta-evidence-v1', $data['format'] );
+		$this->assertTrue( $data['privacy']['no_external_services'] );
+		$this->assertSame( 'ci-required', $data['release_gates']['phpunit_wordpress'] );
+		$this->assertArrayHasKey( 'developer_id_notarization', $data['release_gates'] );
 		$this->assertStringNotContainsString( $file['storage_key'], $json );
 		$this->assertStringNotContainsString( Floppy_Storage::path_for_key( $file['storage_key'] ), $json );
 	}
@@ -106,7 +125,7 @@ final class Floppy_REST_Maintenance_Test extends WP_UnitTestCase {
 	private function truncate_floppy_tables(): void {
 		global $wpdb;
 
-		foreach ( array( 'jobs', 'audit_log', 'tombstones', 'upload_sessions', 'devices', 'sync_events', 'acl_grants', 'item_names', 'folders', 'files' ) as $table ) {
+		foreach ( array( 'jobs', 'thumbnails', 'conflicts', 'file_versions', 'audit_log', 'tombstones', 'upload_sessions', 'devices', 'sync_events', 'acl_grants', 'item_names', 'folders', 'files' ) as $table ) {
 			$wpdb->query( 'DELETE FROM ' . Floppy_Schema::table( $table ) ); // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared
 		}
 	}

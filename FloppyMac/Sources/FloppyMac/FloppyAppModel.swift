@@ -652,15 +652,34 @@ final class FloppyAppModel: ObservableObject {
         let activeEnumerators = await ledger?.activeEnumeratorIdentifiers() ?? []
         let conflictDiagnostics: FloppyLedgerConflictDiagnostics
         let integrity: FloppyLedgerIntegrityReport
+        let conflictCenterItems: [FloppyConflictCenterItem]
+        let pendingOperations: Int
         if let accountID {
             conflictDiagnostics = await ledger?.conflictDiagnostics(accountID: accountID) ?? .empty(accountID: accountID)
             integrity = await ledger?.integrityReport(accountID: accountID) ?? .empty(accountID: accountID)
+            conflictCenterItems = await ledger?.conflictCenterItems(accountID: accountID, limit: 10) ?? []
+            pendingOperations = await ledger?.pendingOperationCount(accountID: accountID) ?? 0
         } else {
             conflictDiagnostics = .empty()
             integrity = .empty()
+            conflictCenterItems = []
+            pendingOperations = 0
         }
         let domainIdentifier = account.map { FloppyDomainRegistry.domainIdentifier(for: $0) }
-        let bundle = FloppyMacDiagnosticsBundleV2(
+        let fileProviderDiagnostic = await FileProviderDomainController.lifecycleDiagnostic(account: account, keychainAvailable: keychainAvailable)
+        let recoveryDecision = FloppyRecoveryPlanner.decision(for: FloppyRecoveryContext(
+            lifecycleState: fileProviderDiagnostic.state,
+            hasSelectedAccount: account != nil,
+            keychainTokenAvailable: keychainAvailable,
+            serverReachable: !status.localizedCaseInsensitiveContains("unreachable"),
+            storageBlocked: status.localizedCaseInsensitiveContains("quota") || status.localizedCaseInsensitiveContains("storage"),
+            isSyncing: isWorking,
+            pendingOperationCount: pendingOperations,
+            openConflictCount: conflictDiagnostics.openCount,
+            materializationIssueCount: integrity.counts.missingMaterializedItems + conflictDiagnostics.missingMaterializedOpenCount,
+            lastError: status
+        ))
+        let bundle = FloppyMacDiagnosticsBundleV3(
             createdAt: formatter.string(from: Date()),
             support: FloppyDiagnostics.supportCorrelation(account: account, domainIdentifier: domainIdentifier),
             app: FloppyMacDiagnosticsAppInfo(
@@ -675,7 +694,7 @@ final class FloppyAppModel: ObservableObject {
                 path: ledger?.fileURL.path ?? "",
                 accounts: accounts.count,
                 items: items.count,
-                pendingOperations: await ledger?.pendingOperationCount(accountID: accountID) ?? 0,
+                pendingOperations: pendingOperations,
                 conflicts: await ledger?.conflictCount(accountID: accountID) ?? 0,
                 activeEnumerators: activeEnumerators,
                 conflictDiagnostics: conflictDiagnostics,
@@ -693,7 +712,31 @@ final class FloppyAppModel: ObservableObject {
                 hasPendingState: pendingOnboarding != nil,
                 pluginMainFile: pluginMainFile
             ),
-            fileProvider: await FileProviderDomainController.lifecycleDiagnostic(account: account, keychainAvailable: keychainAvailable),
+            fileProvider: fileProviderDiagnostic,
+            finderSync: FloppyMacDiagnosticsFinderSyncInfo(
+                decision: recoveryDecision,
+                pendingOperations: pendingOperations,
+                openConflicts: conflictDiagnostics.openCount,
+                activeEnumerators: activeEnumerators.count,
+                lastCursor: account.map { String($0.lastCursor) } ?? "0",
+                lastSyncAt: account?.lastSyncAt.map { formatter.string(from: $0) } ?? ""
+            ),
+            conflictCenter: FloppyMacDiagnosticsConflictCenterInfo(
+                summary: FloppyConflictCenterSummary(
+                    total: conflictDiagnostics.totalCount,
+                    open: conflictDiagnostics.openCount,
+                    resolved: conflictDiagnostics.resolvedCount,
+                    missingLocalCopies: conflictDiagnostics.missingMaterializedOpenCount
+                ),
+                recent: conflictCenterItems
+            ),
+            materialization: FloppyMacDiagnosticsMaterializationInfo(
+                partialFileQuarantineCount: conflictDiagnostics.missingMaterializedOpenCount,
+                lastFailure: integrity.issues.first?.message ?? ""
+            ),
+            versionRestores: FloppyMacDiagnosticsVersionRestoreInfo(),
+            releaseBuild: FloppyReleaseBuildIdentity.current(),
+            releaseEvidence: .empty,
             lastStatus: status
         )
 

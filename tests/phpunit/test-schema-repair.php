@@ -125,10 +125,75 @@ final class Floppy_Schema_Repair_Test extends WP_UnitTestCase {
 		$this->assertSame( 0, $acl_count );
 	}
 
+	public function test_repair_reports_stale_versions_conflicts_and_thumbnails(): void {
+		global $wpdb;
+
+		$now = current_time( 'mysql', true );
+		$wpdb->insert(
+			Floppy_Schema::table( 'file_versions' ),
+			array(
+				'version_uuid'     => wp_generate_uuid4(),
+				'file_id'          => 999999,
+				'file_uuid'        => wp_generate_uuid4(),
+				'owner_id'         => $this->user_id,
+				'name'             => 'stale.txt',
+				'mime_type'        => 'text/plain',
+				'size_bytes'       => 5,
+				'content_hash'     => hash( 'sha256', 'stale' ),
+				'storage_key'      => '',
+				'content_version'  => wp_generate_uuid4(),
+				'metadata_version' => wp_generate_uuid4(),
+				'reason'           => 'test',
+				'created_by'       => $this->user_id,
+				'created_at_gmt'   => $now,
+			),
+			array( '%s', '%d', '%s', '%d', '%s', '%s', '%d', '%s', '%s', '%s', '%s', '%s', '%d', '%s' )
+		);
+		$wpdb->insert(
+			Floppy_Schema::table( 'conflicts' ),
+			array(
+				'conflict_uuid'         => wp_generate_uuid4(),
+				'owner_id'              => $this->user_id,
+				'file_id'               => 999999,
+				'status'                => 'open',
+				'reason'                => 'stale_content',
+				'local_name'            => 'stale.txt',
+				'local_size_bytes'      => 5,
+				'created_at_gmt'        => $now,
+				'updated_at_gmt'        => $now,
+			),
+			array( '%s', '%d', '%d', '%s', '%s', '%s', '%d', '%s', '%s' )
+		);
+		$wpdb->insert(
+			Floppy_Schema::table( 'thumbnails' ),
+			array(
+				'file_id'         => 999999,
+				'file_uuid'       => wp_generate_uuid4(),
+				'content_version' => wp_generate_uuid4(),
+				'status'          => 'ready',
+				'storage_key'     => '',
+				'created_at_gmt'  => $now,
+				'updated_at_gmt'  => $now,
+			),
+			array( '%d', '%s', '%s', '%s', '%s', '%s', '%s' )
+		);
+
+		$dry_run = Floppy_Schema::repair( false );
+		$applied = Floppy_Schema::repair( true );
+
+		$this->assertGreaterThanOrEqual( 1, $dry_run['stale_versions']['stale'] );
+		$this->assertGreaterThanOrEqual( 1, $dry_run['stale_conflicts']['stale'] );
+		$this->assertGreaterThanOrEqual( 1, $dry_run['stale_thumbnails']['stale'] );
+		$this->assertSame( 0, (int) $wpdb->get_var( 'SELECT COUNT(*) FROM ' . Floppy_Schema::table( 'file_versions' ) ) ); // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared
+		$this->assertSame( 1, (int) $wpdb->get_var( "SELECT COUNT(*) FROM " . Floppy_Schema::table( 'conflicts' ) . " WHERE status = 'stale'" ) ); // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared
+		$this->assertSame( 0, (int) $wpdb->get_var( 'SELECT COUNT(*) FROM ' . Floppy_Schema::table( 'thumbnails' ) ) ); // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared
+		$this->assertTrue( $applied['apply'] );
+	}
+
 	private function truncate_floppy_tables(): void {
 		global $wpdb;
 
-		foreach ( array( 'jobs', 'audit_log', 'tombstones', 'upload_sessions', 'devices', 'sync_events', 'acl_grants', 'item_names', 'folders', 'files' ) as $table ) {
+		foreach ( array( 'jobs', 'thumbnails', 'conflicts', 'file_versions', 'audit_log', 'tombstones', 'upload_sessions', 'devices', 'sync_events', 'acl_grants', 'item_names', 'folders', 'files' ) as $table ) {
 			$wpdb->query( 'DELETE FROM ' . Floppy_Schema::table( $table ) ); // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared
 		}
 	}

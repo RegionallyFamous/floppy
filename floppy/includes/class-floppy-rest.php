@@ -76,6 +76,16 @@ final class Floppy_Rest {
 
 		register_rest_route(
 			self::NAMESPACE,
+			'/release-evidence',
+			array(
+				'methods'             => WP_REST_Server::READABLE,
+				'callback'            => array( __CLASS__, 'release_evidence' ),
+				'permission_callback' => array( __CLASS__, 'require_admin' ),
+			)
+		);
+
+		register_rest_route(
+			self::NAMESPACE,
 			'/files',
 			array(
 				'methods'             => WP_REST_Server::READABLE,
@@ -211,6 +221,77 @@ final class Floppy_Rest {
 				'callback'            => array( __CLASS__, 'preview_file' ),
 				'permission_callback' => array( __CLASS__, 'require_read' ),
 				'args'                => array( 'id' => array( 'sanitize_callback' => 'absint' ) ),
+			)
+		);
+
+		register_rest_route(
+			self::NAMESPACE,
+			'/files/(?P<id>[\d]+)/thumbnail',
+			array(
+				array(
+					'methods'             => WP_REST_Server::READABLE,
+					'callback'            => array( __CLASS__, 'thumbnail_file' ),
+					'permission_callback' => array( __CLASS__, 'require_read' ),
+					'args'                => array( 'id' => array( 'sanitize_callback' => 'absint' ) ),
+				),
+				array(
+					'methods'             => WP_REST_Server::CREATABLE,
+					'callback'            => array( __CLASS__, 'enqueue_thumbnail' ),
+					'permission_callback' => array( __CLASS__, 'require_read' ),
+					'args'                => array( 'id' => array( 'sanitize_callback' => 'absint' ) ),
+				),
+			)
+		);
+
+		register_rest_route(
+			self::NAMESPACE,
+			'/files/(?P<id>[\d]+)/versions',
+			array(
+				'methods'             => WP_REST_Server::READABLE,
+				'callback'            => array( __CLASS__, 'list_file_versions' ),
+				'permission_callback' => array( __CLASS__, 'require_read' ),
+				'args'                => array( 'id' => array( 'sanitize_callback' => 'absint' ) ),
+			)
+		);
+
+		register_rest_route(
+			self::NAMESPACE,
+			'/files/(?P<id>[\d]+)/versions/(?P<version_id>[\d]+)/restore',
+			array(
+				'methods'             => WP_REST_Server::CREATABLE,
+				'callback'            => array( __CLASS__, 'restore_file_version' ),
+				'permission_callback' => array( __CLASS__, 'require_write' ),
+				'args'                => array(
+					'id'         => array( 'sanitize_callback' => 'absint' ),
+					'version_id' => array( 'sanitize_callback' => 'absint' ),
+				),
+			)
+		);
+
+		register_rest_route(
+			self::NAMESPACE,
+			'/conflicts',
+			array(
+				array(
+					'methods'             => WP_REST_Server::READABLE,
+					'callback'            => array( __CLASS__, 'list_conflicts' ),
+					'permission_callback' => array( __CLASS__, 'require_read' ),
+				),
+				array(
+					'methods'             => WP_REST_Server::CREATABLE,
+					'callback'            => array( __CLASS__, 'record_conflict' ),
+					'permission_callback' => array( __CLASS__, 'require_write' ),
+				),
+			)
+		);
+
+		register_rest_route(
+			self::NAMESPACE,
+			'/conflicts/(?P<uuid>[a-f0-9-]+)/resolve',
+			array(
+				'methods'             => WP_REST_Server::CREATABLE,
+				'callback'            => array( __CLASS__, 'resolve_conflict' ),
+				'permission_callback' => array( __CLASS__, 'require_write' ),
 			)
 		);
 
@@ -402,6 +483,15 @@ final class Floppy_Rest {
 	public static function debug_bundle(): WP_REST_Response {
 		Floppy_Audit::log( 'maintenance.debug_bundle_downloaded', 'maintenance', 0, '', array( 'support_id' => Floppy_Diagnostics::correlation_id() ) );
 		return new WP_REST_Response( Floppy_Diagnostics::debug_bundle() );
+	}
+
+	/**
+	 * Admin-only public beta evidence summary.
+	 */
+	public static function release_evidence(): WP_REST_Response {
+		Floppy_Audit::log( 'release_evidence.downloaded', 'maintenance', 0 );
+
+		return new WP_REST_Response( Floppy_Diagnostics::release_evidence() );
 	}
 
 	/**
@@ -1232,6 +1322,7 @@ final class Floppy_Rest {
 			return $quota;
 		}
 
+		$version_id = self::record_file_version( $row, $user_id, 'replace_session' );
 		$next_content_version = wp_generate_uuid4();
 		$updated_at = current_time( 'mysql', true );
 		$updated = $wpdb->query(
@@ -1274,7 +1365,7 @@ final class Floppy_Rest {
 		$next['last_sync_seq'] = $seq;
 
 		$old_path = Floppy_Storage::path_for_key( $row['storage_key'] );
-		if ( $old_path !== $stored['path'] && file_exists( $old_path ) ) {
+		if ( ! $version_id && $old_path !== $stored['path'] && file_exists( $old_path ) ) {
 			@unlink( $old_path ); // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged
 		}
 
@@ -1358,6 +1449,7 @@ final class Floppy_Rest {
 			return $scan;
 		}
 
+		$version_id = self::record_file_version( $row, $user_id, 'multipart_replace' );
 		$next_content_version = wp_generate_uuid4();
 		$updated_at = current_time( 'mysql', true );
 		$updated = $wpdb->query(
@@ -1400,7 +1492,7 @@ final class Floppy_Rest {
 		$next['last_sync_seq'] = $seq;
 
 		$old_path = Floppy_Storage::path_for_key( $row['storage_key'] );
-		if ( $old_path !== $stored['path'] && file_exists( $old_path ) ) {
+		if ( ! $version_id && $old_path !== $stored['path'] && file_exists( $old_path ) ) {
 			@unlink( $old_path ); // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged
 		}
 
@@ -1474,6 +1566,366 @@ final class Floppy_Rest {
 	 */
 	public static function preview_file( WP_REST_Request $request ) {
 		return self::stream_file( absint( $request['id'] ), true );
+	}
+
+	/**
+	 * List retained content versions for a file.
+	 */
+	public static function list_file_versions( WP_REST_Request $request ): WP_REST_Response {
+		global $wpdb;
+
+		$id = absint( $request['id'] );
+		if ( ! Floppy_Permissions::can_read( 'file', $id ) ) {
+			return self::not_found_or_forbidden( 'file', $id, 'read' );
+		}
+
+		$limit = max( 1, min( 100, absint( $request->get_param( 'limit' ) ?: 50 ) ) );
+		$after_id = absint( $request->get_param( 'after_id' ) );
+		$after_sql = $after_id ? $wpdb->prepare( ' AND id < %d', $after_id ) : '';
+		$rows = $wpdb->get_results(
+			$wpdb->prepare(
+				'SELECT * FROM ' . Floppy_Schema::table( 'file_versions' ) . " WHERE file_id = %d $after_sql ORDER BY id DESC LIMIT %d", // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared
+				$id,
+				$limit + 1
+			),
+			ARRAY_A
+		);
+		$has_more = count( $rows ) > $limit;
+		if ( $has_more ) {
+			array_pop( $rows );
+		}
+
+		$last_row = $rows ? end( $rows ) : null;
+		$versions = array_map( array( __CLASS__, 'serialize_version' ), $rows );
+		return new WP_REST_Response(
+			array(
+				'versions'    => $versions,
+				'has_more'    => $has_more,
+				'next_cursor' => $has_more && is_array( $last_row ) ? (int) $last_row['id'] : 0,
+			)
+		);
+	}
+
+	/**
+	 * Restore one retained file version.
+	 */
+	public static function restore_file_version( WP_REST_Request $request ) {
+		global $wpdb;
+
+		$id = absint( $request['id'] );
+		$version_id = absint( $request['version_id'] );
+		$user_id = get_current_user_id();
+		if ( ! Floppy_Permissions::can_write( 'file', $id, $user_id ) ) {
+			return self::not_found_or_forbidden( 'file', $id, 'write' );
+		}
+
+		$row = Floppy_Permissions::get_target_row( 'file', $id );
+		if ( ! $row || 'active' !== $row['status'] ) {
+			return new WP_Error( 'floppy_file_not_found', __( 'File not found.', 'floppy' ), array( 'status' => 404 ) );
+		}
+
+		$known_version = (string) $request->get_param( 'content_version' );
+		if ( '' === $known_version ) {
+			return new WP_Error( 'floppy_content_version_required', __( 'A content version is required to restore file contents.', 'floppy' ), array( 'status' => 428, 'server' => self::serialize_file( $row ) ) );
+		}
+		if ( $known_version !== $row['content_version'] ) {
+			return new WP_Error( 'floppy_conflict', __( 'The file contents changed on the server. Refresh before restoring this version.', 'floppy' ), array( 'status' => 409, 'server' => self::serialize_file( $row ) ) );
+		}
+
+		$version = $wpdb->get_row(
+			$wpdb->prepare(
+				'SELECT * FROM ' . Floppy_Schema::table( 'file_versions' ) . ' WHERE id = %d AND file_id = %d LIMIT 1',
+				$version_id,
+				$id
+			),
+			ARRAY_A
+		);
+		if ( ! $version ) {
+			return new WP_Error( 'floppy_version_not_found', __( 'File version not found.', 'floppy' ), array( 'status' => 404 ) );
+		}
+
+		$restore_path = Floppy_Storage::path_for_key( (string) $version['storage_key'] );
+		if ( ! is_readable( $restore_path ) ) {
+			return new WP_Error( 'floppy_version_blob_missing', __( 'The retained version blob is missing from private storage.', 'floppy' ), array( 'status' => 500 ) );
+		}
+
+		self::record_file_version( $row, $user_id, 'restore_current', false );
+		$next_content_version = wp_generate_uuid4();
+		$updated_at = current_time( 'mysql', true );
+		$updated = $wpdb->query(
+			$wpdb->prepare(
+				'UPDATE ' . Floppy_Schema::table( 'files' ) . ' SET mime_type = %s, size_bytes = %d, content_hash = %s, storage_key = %s, content_version = %s, updated_at_gmt = %s WHERE id = %d AND content_version = %s',
+				(string) $version['mime_type'],
+				(int) $version['size_bytes'],
+				(string) $version['content_hash'],
+				(string) $version['storage_key'],
+				$next_content_version,
+				$updated_at,
+				$id,
+				$known_version
+			)
+		);
+		if ( 1 !== $updated ) {
+			$server = Floppy_Permissions::get_target_row( 'file', $id );
+			return new WP_Error( 'floppy_conflict', __( 'The file contents changed while this version was being restored.', 'floppy' ), array( 'status' => 409, 'server' => $server ? self::serialize_file( $server ) : null ) );
+		}
+
+		if ( ! empty( $row['attachment_id'] ) ) {
+			wp_update_post(
+				array(
+					'ID'             => (int) $row['attachment_id'],
+					'post_mime_type' => (string) $version['mime_type'],
+				)
+			);
+			update_attached_file( (int) $row['attachment_id'], $restore_path );
+			update_post_meta( (int) $row['attachment_id'], '_floppy_storage_key', (string) $version['storage_key'] );
+		}
+
+		self::prune_file_versions( $id, array( $version_id ) );
+		$next = Floppy_Permissions::get_target_row( 'file', $id );
+		$seq = Floppy_Sync::append_event( 'file.version_restored', 'file', $id, $next ?: array(), $user_id );
+		$next['last_sync_seq'] = $seq;
+		Floppy_Audit::log( 'file.version_restored', 'file', $id, $row['name'], array( 'version_id' => $version_id ), $user_id );
+
+		return new WP_REST_Response( self::serialize_file( $next ) + array( 'last_sync_seq' => $seq ) );
+	}
+
+	/**
+	 * List conflict records visible to the current user.
+	 */
+	public static function list_conflicts( WP_REST_Request $request ): WP_REST_Response {
+		global $wpdb;
+
+		$user_id = get_current_user_id();
+		$status = sanitize_key( (string) ( $request->get_param( 'status' ) ?: 'open' ) );
+		$limit = max( 1, min( 100, absint( $request->get_param( 'limit' ) ?: 50 ) ) );
+		$after_id = absint( $request->get_param( 'after_id' ) );
+		$after_sql = $after_id ? $wpdb->prepare( ' AND id > %d', $after_id ) : '';
+		$status_sql = 'all' === $status ? '' : $wpdb->prepare( ' AND status = %s', $status );
+		$rows = $wpdb->get_results(
+			$wpdb->prepare(
+				'SELECT * FROM ' . Floppy_Schema::table( 'conflicts' ) . " WHERE owner_id = %d $status_sql $after_sql ORDER BY id ASC LIMIT %d", // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared
+				$user_id,
+				$limit + 1
+			),
+			ARRAY_A
+		);
+		$has_more = count( $rows ) > $limit;
+		if ( $has_more ) {
+			array_pop( $rows );
+		}
+
+		$last_row = $rows ? end( $rows ) : null;
+		return new WP_REST_Response(
+			array(
+				'conflicts'   => array_map( array( __CLASS__, 'serialize_conflict' ), $rows ),
+				'has_more'    => $has_more,
+				'next_cursor' => $has_more && is_array( $last_row ) ? (int) $last_row['id'] : 0,
+			)
+		);
+	}
+
+	/**
+	 * Record a client-visible conflict without uploading private local bytes.
+	 */
+	public static function record_conflict( WP_REST_Request $request ) {
+		global $wpdb;
+
+		$file_id = absint( $request->get_param( 'file_id' ) );
+		$user_id = get_current_user_id();
+		if ( $file_id && ! Floppy_Permissions::can_write( 'file', $file_id, $user_id ) ) {
+			return self::not_found_or_forbidden( 'file', $file_id, 'write' );
+		}
+
+		$file = $file_id ? Floppy_Permissions::get_target_row( 'file', $file_id ) : null;
+		$hash = strtolower( sanitize_text_field( (string) $request->get_param( 'local_content_hash' ) ) );
+		if ( '' !== $hash && ! preg_match( '/^[a-f0-9]{64}$/', $hash ) ) {
+			return new WP_Error( 'floppy_invalid_content_hash', __( 'Conflict local_content_hash must be a SHA-256 hex digest.', 'floppy' ), array( 'status' => 400 ) );
+		}
+
+		$now = current_time( 'mysql', true );
+		$uuid = wp_generate_uuid4();
+		$reason = sanitize_key( (string) ( $request->get_param( 'reason' ) ?: 'stale_content' ) );
+		$local_name = Floppy_Storage::normalize_filename( (string) ( $request->get_param( 'local_name' ) ?: ( $file['name'] ?? __( 'Conflict copy', 'floppy' ) ) ) );
+		$inserted = $wpdb->insert(
+			Floppy_Schema::table( 'conflicts' ),
+			array(
+				'conflict_uuid'          => $uuid,
+				'owner_id'               => $user_id,
+				'file_id'                => $file_id,
+				'file_uuid'              => $file ? (string) $file['uuid'] : '',
+				'parent_id'              => $file ? (int) $file['parent_id'] : absint( $request->get_param( 'parent_id' ) ),
+				'status'                 => 'open',
+				'reason'                 => $reason,
+				'local_name'             => $local_name,
+				'server_content_version' => sanitize_text_field( (string) ( $request->get_param( 'server_content_version' ) ?: ( $file['content_version'] ?? '' ) ) ),
+				'local_content_hash'     => $hash,
+				'local_size_bytes'       => absint( $request->get_param( 'local_size_bytes' ) ),
+				'client_created_at_gmt'  => self::sanitize_mysql_datetime( (string) $request->get_param( 'client_created_at_gmt' ) ),
+				'created_at_gmt'         => $now,
+				'updated_at_gmt'         => $now,
+			),
+			array( '%s', '%d', '%d', '%s', '%d', '%s', '%s', '%s', '%s', '%s', '%d', '%s', '%s', '%s' )
+		);
+		if ( ! $inserted ) {
+			return new WP_Error( 'floppy_conflict_record_failed', __( 'Could not record the conflict.', 'floppy' ), array( 'status' => 500 ) );
+		}
+
+		$row = $wpdb->get_row( $wpdb->prepare( 'SELECT * FROM ' . Floppy_Schema::table( 'conflicts' ) . ' WHERE id = %d', (int) $wpdb->insert_id ), ARRAY_A );
+		Floppy_Sync::append_event( 'conflict.created', 'conflict', (int) $row['id'], self::serialize_conflict( $row ), $user_id );
+		Floppy_Audit::log( 'conflict.created', 'conflict', (int) $row['id'], $local_name, array( 'reason' => $reason, 'file_id' => $file_id ), $user_id );
+
+		return new WP_REST_Response( self::serialize_conflict( $row ), 201 );
+	}
+
+	/**
+	 * Resolve a conflict lifecycle record.
+	 */
+	public static function resolve_conflict( WP_REST_Request $request ) {
+		global $wpdb;
+
+		$uuid = sanitize_text_field( (string) $request['uuid'] );
+		$action = sanitize_key( (string) $request->get_param( 'action' ) );
+		$status_map = array(
+			'discard' => 'discarded',
+			'keep'    => 'kept',
+			'resolve' => 'resolved',
+			'retry'   => 'open',
+		);
+		if ( ! isset( $status_map[ $action ] ) ) {
+			return new WP_Error( 'floppy_invalid_conflict_action', __( 'Invalid conflict action.', 'floppy' ), array( 'status' => 400 ) );
+		}
+
+		$row = $wpdb->get_row(
+			$wpdb->prepare( 'SELECT * FROM ' . Floppy_Schema::table( 'conflicts' ) . ' WHERE conflict_uuid = %s LIMIT 1', $uuid ),
+			ARRAY_A
+		);
+		if ( ! $row || (int) $row['owner_id'] !== get_current_user_id() ) {
+			return new WP_Error( 'floppy_conflict_not_found', __( 'Conflict not found.', 'floppy' ), array( 'status' => 404 ) );
+		}
+
+		$next_status = $status_map[ $action ];
+		$now = current_time( 'mysql', true );
+		$wpdb->update(
+			Floppy_Schema::table( 'conflicts' ),
+			array(
+				'status'          => $next_status,
+				'resolved_at_gmt' => 'open' === $next_status ? null : $now,
+				'updated_at_gmt'  => $now,
+			),
+			array( 'id' => (int) $row['id'] ),
+			array( '%s', '%s', '%s' ),
+			array( '%d' )
+		);
+
+		$next = $wpdb->get_row( $wpdb->prepare( 'SELECT * FROM ' . Floppy_Schema::table( 'conflicts' ) . ' WHERE id = %d', (int) $row['id'] ), ARRAY_A );
+		Floppy_Sync::append_event( 'conflict.' . $action, 'conflict', (int) $row['id'], self::serialize_conflict( $next ), get_current_user_id() );
+		Floppy_Audit::log( 'conflict.' . $action, 'conflict', (int) $row['id'], (string) $row['local_name'], array( 'status' => $next_status ) );
+
+		return new WP_REST_Response( self::serialize_conflict( $next ) );
+	}
+
+	/**
+	 * Enqueue thumbnail generation.
+	 */
+	public static function enqueue_thumbnail( WP_REST_Request $request ) {
+		$id = absint( $request['id'] );
+		if ( ! Floppy_Permissions::can_read( 'file', $id ) ) {
+			return self::not_found_or_forbidden( 'file', $id, 'read' );
+		}
+
+		$job = Floppy_Background_Jobs::enqueue( 'thumbnail_generate', array( 'file_id' => $id, 'user_id' => get_current_user_id() ), 4 );
+		if ( is_wp_error( $job ) ) {
+			return $job;
+		}
+
+		return new WP_REST_Response(
+			array(
+				'ok'         => true,
+				'job_id'     => (int) $job['id'],
+				'job_uuid'   => $job['job_uuid'],
+				'status_url' => rest_url( self::NAMESPACE . '/jobs/' . $job['job_uuid'] ),
+			),
+			202
+		);
+	}
+
+	/**
+	 * Stream an authenticated thumbnail, generating it on demand for small images.
+	 */
+	public static function thumbnail_file( WP_REST_Request $request ) {
+		$id = absint( $request['id'] );
+		if ( ! Floppy_Permissions::can_read( 'file', $id ) ) {
+			return self::not_found_or_forbidden( 'file', $id, 'read' );
+		}
+
+		$rate = Floppy_Rate_Limiter::check( 'preview', 600, HOUR_IN_SECONDS );
+		if ( is_wp_error( $rate ) ) {
+			return $rate;
+		}
+
+		$row = Floppy_Permissions::get_target_row( 'file', $id );
+		if ( ! $row || 'active' !== $row['status'] ) {
+			return new WP_Error( 'floppy_file_not_found', __( 'File not found.', 'floppy' ), array( 'status' => 404 ) );
+		}
+		if ( 0 !== strpos( (string) $row['mime_type'], 'image/' ) ) {
+			return new WP_Error( 'floppy_thumbnail_not_available', __( 'Thumbnails are available for image files only.', 'floppy' ), array( 'status' => 415 ) );
+		}
+
+		$thumbnail = self::get_ready_thumbnail( $row );
+		if ( ! $thumbnail ) {
+			$inline_limit = (int) Floppy_Settings::get_value( 'thumbnail_inline_max_size', 20 * MB_IN_BYTES );
+			if ( (int) $row['size_bytes'] <= $inline_limit ) {
+				$generated = self::generate_thumbnail_for_file( $row );
+				if ( is_wp_error( $generated ) ) {
+					return $generated;
+				}
+				$thumbnail = $generated;
+			} else {
+				$job = self::enqueue_thumbnail( $request );
+				$data = $job instanceof WP_REST_Response ? $job->get_data() : array();
+				return new WP_REST_Response(
+					array(
+						'status' => 'queued',
+						'job'    => $data,
+					),
+					202
+				);
+			}
+		}
+
+		self::stream_thumbnail( $thumbnail, $row );
+		exit;
+	}
+
+	/**
+	 * Run a queued thumbnail job.
+	 */
+	public static function run_thumbnail_job( array $payload ): array {
+		$id = absint( $payload['file_id'] ?? 0 );
+		if ( $id <= 0 ) {
+			return array( 'ok' => false, 'message' => 'Missing file_id.' );
+		}
+
+		$row = Floppy_Permissions::get_target_row( 'file', $id );
+		if ( ! $row || 'active' !== $row['status'] ) {
+			return array( 'ok' => false, 'message' => 'File not found.' );
+		}
+
+		$result = self::generate_thumbnail_for_file( $row );
+		if ( is_wp_error( $result ) ) {
+			return array(
+				'ok'      => false,
+				'message' => $result->get_error_message(),
+				'code'    => $result->get_error_code(),
+			);
+		}
+
+		return array(
+			'ok'      => true,
+			'message' => 'Thumbnail generated.',
+			'file_id' => $id,
+		);
 	}
 
 	/**
@@ -2756,6 +3208,298 @@ final class Floppy_Rest {
 	}
 
 	/**
+	 * Sanitize an optional MySQL GMT datetime.
+	 */
+	private static function sanitize_mysql_datetime( string $value ): ?string {
+		$value = trim( $value );
+		if ( '' === $value ) {
+			return null;
+		}
+
+		$timestamp = strtotime( $value . ( false === strpos( $value, 'GMT' ) ? ' GMT' : '' ) );
+		if ( false === $timestamp ) {
+			return null;
+		}
+
+		return gmdate( 'Y-m-d H:i:s', $timestamp );
+	}
+
+	/**
+	 * Store the current content state as a retained version.
+	 */
+	private static function record_file_version( array $row, int $actor_id, string $reason = 'replace', bool $prune = true ) {
+		global $wpdb;
+
+		if ( empty( $row['id'] ) || empty( $row['storage_key'] ) ) {
+			return false;
+		}
+
+		$retention_limit = (int) Floppy_Settings::get_value( 'version_retention_limit', 10 );
+		if ( $retention_limit <= 0 ) {
+			return false;
+		}
+
+		$now = current_time( 'mysql', true );
+		$inserted = $wpdb->insert(
+			Floppy_Schema::table( 'file_versions' ),
+			array(
+				'version_uuid'     => wp_generate_uuid4(),
+				'file_id'          => (int) $row['id'],
+				'file_uuid'        => (string) $row['uuid'],
+				'owner_id'         => (int) $row['owner_id'],
+				'name'             => (string) $row['name'],
+				'mime_type'        => (string) $row['mime_type'],
+				'size_bytes'       => (int) $row['size_bytes'],
+				'content_hash'     => (string) $row['content_hash'],
+				'storage_key'      => (string) $row['storage_key'],
+				'content_version'  => (string) $row['content_version'],
+				'metadata_version' => (string) $row['metadata_version'],
+				'reason'           => sanitize_key( $reason ),
+				'created_by'       => $actor_id,
+				'created_at_gmt'   => $now,
+			),
+			array( '%s', '%d', '%s', '%d', '%s', '%s', '%d', '%s', '%s', '%s', '%s', '%s', '%d', '%s' )
+		);
+		if ( ! $inserted ) {
+			return false;
+		}
+
+		$version_id = (int) $wpdb->insert_id;
+		if ( $prune ) {
+			self::prune_file_versions( (int) $row['id'] );
+		}
+
+		return $version_id;
+	}
+
+	/**
+	 * Keep retained file versions inside the configured per-file limit.
+	 *
+	 * @param array<int> $keep_ids Version row ids that must not be pruned.
+	 */
+	private static function prune_file_versions( int $file_id, array $keep_ids = array() ): void {
+		global $wpdb;
+
+		$retention_limit = (int) Floppy_Settings::get_value( 'version_retention_limit', 10 );
+		if ( $retention_limit <= 0 ) {
+			return;
+		}
+
+		$rows = $wpdb->get_results(
+			$wpdb->prepare(
+				'SELECT id, storage_key FROM ' . Floppy_Schema::table( 'file_versions' ) . ' WHERE file_id = %d ORDER BY id DESC',
+				$file_id
+			),
+			ARRAY_A
+		);
+		$seen = 0;
+		foreach ( $rows as $row ) {
+			$id = (int) $row['id'];
+			if ( in_array( $id, $keep_ids, true ) ) {
+				continue;
+			}
+
+			++$seen;
+			if ( $seen <= $retention_limit ) {
+				continue;
+			}
+
+			$storage_key = (string) $row['storage_key'];
+			$wpdb->delete( Floppy_Schema::table( 'file_versions' ), array( 'id' => $id ), array( '%d' ) );
+			if ( ! self::storage_key_is_referenced( $storage_key ) ) {
+				@unlink( Floppy_Storage::path_for_key( $storage_key ) ); // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged
+			}
+		}
+	}
+
+	/**
+	 * Check if a private blob key is still referenced by active metadata.
+	 */
+	private static function storage_key_is_referenced( string $storage_key ): bool {
+		if ( '' === $storage_key ) {
+			return false;
+		}
+
+		global $wpdb;
+		$count = (int) $wpdb->get_var(
+			$wpdb->prepare(
+				'SELECT (
+					(SELECT COUNT(*) FROM ' . Floppy_Schema::table( 'files' ) . ' WHERE storage_key = %s) +
+					(SELECT COUNT(*) FROM ' . Floppy_Schema::table( 'file_versions' ) . ' WHERE storage_key = %s) +
+					(SELECT COUNT(*) FROM ' . Floppy_Schema::table( 'upload_sessions' ) . ' WHERE storage_key = %s) +
+					(SELECT COUNT(*) FROM ' . Floppy_Schema::table( 'thumbnails' ) . ' WHERE storage_key = %s)
+				)',
+				$storage_key,
+				$storage_key,
+				$storage_key,
+				$storage_key
+			)
+		);
+
+		return $count > 0;
+	}
+
+	/**
+	 * Return an existing ready thumbnail for a file row.
+	 */
+	private static function get_ready_thumbnail( array $row ) {
+		global $wpdb;
+
+		$thumb = $wpdb->get_row(
+			$wpdb->prepare(
+				'SELECT * FROM ' . Floppy_Schema::table( 'thumbnails' ) . " WHERE file_id = %d AND content_version = %s AND status = 'ready' LIMIT 1",
+				(int) $row['id'],
+				(string) $row['content_version']
+			),
+			ARRAY_A
+		);
+		if ( ! $thumb || empty( $thumb['storage_key'] ) || ! is_readable( Floppy_Storage::path_for_key( (string) $thumb['storage_key'] ) ) ) {
+			return false;
+		}
+
+		return $thumb;
+	}
+
+	/**
+	 * Generate a private thumbnail for an image file.
+	 */
+	private static function generate_thumbnail_for_file( array $row ) {
+		global $wpdb;
+
+		if ( 0 !== strpos( (string) $row['mime_type'], 'image/' ) ) {
+			return new WP_Error( 'floppy_thumbnail_not_available', __( 'Thumbnails are available for image files only.', 'floppy' ), array( 'status' => 415 ) );
+		}
+
+		$source_path = Floppy_Storage::path_for_key( (string) $row['storage_key'] );
+		if ( ! is_readable( $source_path ) ) {
+			return new WP_Error( 'floppy_blob_missing', __( 'The private blob is missing from storage.', 'floppy' ), array( 'status' => 500 ) );
+		}
+
+		require_once ABSPATH . 'wp-admin/includes/image.php';
+
+		$editor = wp_get_image_editor( $source_path );
+		if ( is_wp_error( $editor ) ) {
+			self::upsert_thumbnail_state( $row, 'failed', '', 0, 0, 0, $editor->get_error_message() );
+			return $editor;
+		}
+
+		$max_edge = (int) Floppy_Settings::get_value( 'thumbnail_max_edge', 512 );
+		$editor->resize( $max_edge, $max_edge, false );
+		if ( method_exists( $editor, 'set_quality' ) ) {
+			$editor->set_quality( 82 );
+		}
+
+		$thumb_uuid = wp_generate_uuid4();
+		$thumb_key = 'thumbnails/' . Floppy_Storage::storage_key( $thumb_uuid, 'jpg' );
+		$thumb_path = Floppy_Storage::path_for_key( $thumb_key );
+		if ( ! wp_mkdir_p( dirname( $thumb_path ) ) ) {
+			return new WP_Error( 'floppy_thumbnail_storage_failed', __( 'Could not create thumbnail storage.', 'floppy' ), array( 'status' => 500 ) );
+		}
+
+		$saved = $editor->save( $thumb_path, 'image/jpeg' );
+		if ( is_wp_error( $saved ) ) {
+			self::upsert_thumbnail_state( $row, 'failed', '', 0, 0, 0, $saved->get_error_message() );
+			return $saved;
+		}
+		@chmod( $thumb_path, 0640 ); // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged
+
+		$size = getimagesize( $thumb_path );
+		$thumb = self::upsert_thumbnail_state(
+			$row,
+			'ready',
+			$thumb_key,
+			is_array( $size ) ? (int) $size[0] : 0,
+			is_array( $size ) ? (int) $size[1] : 0,
+			(int) filesize( $thumb_path ),
+			''
+		);
+		Floppy_Audit::log( 'thumbnail.generated', 'file', (int) $row['id'], (string) $row['name'] );
+
+		return $thumb;
+	}
+
+	/**
+	 * Insert or update thumbnail metadata.
+	 */
+	private static function upsert_thumbnail_state( array $row, string $status, string $storage_key, int $width, int $height, int $size_bytes, string $error_message ) {
+		global $wpdb;
+
+		$existing = $wpdb->get_row(
+			$wpdb->prepare(
+				'SELECT * FROM ' . Floppy_Schema::table( 'thumbnails' ) . ' WHERE file_id = %d AND content_version = %s LIMIT 1',
+				(int) $row['id'],
+				(string) $row['content_version']
+			),
+			ARRAY_A
+		);
+		$now = current_time( 'mysql', true );
+		$data = array(
+			'file_id'         => (int) $row['id'],
+			'file_uuid'       => (string) $row['uuid'],
+			'content_version' => (string) $row['content_version'],
+			'status'          => $status,
+			'storage_key'     => $storage_key,
+			'mime_type'       => 'image/jpeg',
+			'width'           => $width,
+			'height'          => $height,
+			'size_bytes'      => $size_bytes,
+			'source_hash'     => (string) $row['content_hash'],
+			'error_message'   => $error_message,
+			'updated_at_gmt'  => $now,
+		);
+
+		if ( $existing ) {
+			$wpdb->update(
+				Floppy_Schema::table( 'thumbnails' ),
+				$data,
+				array( 'id' => (int) $existing['id'] ),
+				array( '%d', '%s', '%s', '%s', '%s', '%s', '%d', '%d', '%d', '%s', '%s', '%s' ),
+				array( '%d' )
+			);
+			if ( ! empty( $existing['storage_key'] ) && $existing['storage_key'] !== $storage_key && ! self::storage_key_is_referenced( (string) $existing['storage_key'] ) ) {
+				@unlink( Floppy_Storage::path_for_key( (string) $existing['storage_key'] ) ); // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged
+			}
+		} else {
+			$data['created_at_gmt'] = $now;
+			$wpdb->insert(
+				Floppy_Schema::table( 'thumbnails' ),
+				$data,
+				array( '%d', '%s', '%s', '%s', '%s', '%s', '%d', '%d', '%d', '%s', '%s', '%s', '%s' )
+			);
+		}
+
+		return $wpdb->get_row(
+			$wpdb->prepare(
+				'SELECT * FROM ' . Floppy_Schema::table( 'thumbnails' ) . ' WHERE file_id = %d AND content_version = %s LIMIT 1',
+				(int) $row['id'],
+				(string) $row['content_version']
+			),
+			ARRAY_A
+		);
+	}
+
+	/**
+	 * Stream a generated thumbnail.
+	 */
+	private static function stream_thumbnail( array $thumbnail, array $file ): void {
+		$path = Floppy_Storage::path_for_key( (string) $thumbnail['storage_key'] );
+		if ( ! is_readable( $path ) ) {
+			status_header( 500 );
+			return;
+		}
+
+		Floppy_Audit::log( 'thumbnail.viewed', 'file', (int) $file['id'], (string) $file['name'] );
+
+		nocache_headers();
+		header( 'Cache-Control: private, no-store, max-age=0' );
+		header( 'X-Content-Type-Options: nosniff' );
+		header( 'Content-Type: image/jpeg' );
+		header( 'Content-Disposition: inline; filename="' . str_replace( '"', '', (string) $file['name'] ) . '.jpg"' );
+		header( 'Content-Length: ' . filesize( $path ) );
+		readfile( $path ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_read_readfile,WordPress.Security.EscapeOutput.OutputNotEscaped
+	}
+
+	/**
 	 * Resolve a parent folder id to its stable UUID.
 	 */
 	public static function parent_uuid_for( int $parent_id ): string {
@@ -2769,6 +3513,58 @@ final class Floppy_Rest {
 				'SELECT uuid FROM ' . Floppy_Schema::table( 'folders' ) . ' WHERE id = %d LIMIT 1',
 				$parent_id
 			)
+		);
+	}
+
+	/**
+	 * Serialize a retained version without private storage details.
+	 */
+	private static function serialize_version( array $row ): array {
+		return array(
+			'id'               => (int) $row['id'],
+			'version_uuid'     => (string) $row['version_uuid'],
+			'file_id'          => (int) $row['file_id'],
+			'file_uuid'        => (string) $row['file_uuid'],
+			'name'             => (string) $row['name'],
+			'mime_type'        => (string) $row['mime_type'],
+			'size_bytes'       => (int) $row['size_bytes'],
+			'content_hash'     => (string) $row['content_hash'],
+			'content_version'  => (string) $row['content_version'],
+			'metadata_version' => (string) $row['metadata_version'],
+			'reason'           => (string) $row['reason'],
+			'created_by'       => (int) $row['created_by'],
+			'created_at_gmt'   => (string) $row['created_at_gmt'],
+		);
+	}
+
+	/**
+	 * Serialize a conflict lifecycle record without local paths or blobs.
+	 */
+	private static function serialize_conflict( array $row ): array {
+		$file = null;
+		$file_id = (int) $row['file_id'];
+		if ( $file_id && Floppy_Permissions::can_read( 'file', $file_id ) ) {
+			$file_row = Floppy_Permissions::get_target_row( 'file', $file_id );
+			$file = $file_row ? self::serialize_file( $file_row ) : null;
+		}
+
+		return array(
+			'id'                     => (int) $row['id'],
+			'conflict_uuid'          => (string) $row['conflict_uuid'],
+			'file_id'                => $file_id,
+			'file_uuid'              => (string) $row['file_uuid'],
+			'parent_id'              => (int) $row['parent_id'],
+			'status'                 => (string) $row['status'],
+			'reason'                 => (string) $row['reason'],
+			'local_name'             => (string) $row['local_name'],
+			'server_content_version' => (string) $row['server_content_version'],
+			'local_content_hash'     => (string) $row['local_content_hash'],
+			'local_size_bytes'       => (int) $row['local_size_bytes'],
+			'client_created_at_gmt'  => (string) $row['client_created_at_gmt'],
+			'resolved_at_gmt'        => (string) $row['resolved_at_gmt'],
+			'created_at_gmt'         => (string) $row['created_at_gmt'],
+			'updated_at_gmt'         => (string) $row['updated_at_gmt'],
+			'server_file'            => $file,
 		);
 	}
 

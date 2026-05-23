@@ -66,7 +66,9 @@ final class Floppy_REST_Replacement_Sessions_Test extends WP_UnitTestCase {
 		$this->assertArrayNotHasKey( 'storage_key', $response->get_error_data()['server'] );
 	}
 
-	public function test_complete_replace_session_updates_file_and_removes_old_blob(): void {
+	public function test_complete_replace_session_updates_file_and_retains_version(): void {
+		global $wpdb;
+
 		$file = $this->insert_private_file( 'hello' );
 		$old_path = Floppy_Storage::path_for_key( $file['storage_key'] );
 		$session = $this->create_replace_session_row( $file, 'updated' );
@@ -80,8 +82,39 @@ final class Floppy_REST_Replacement_Sessions_Test extends WP_UnitTestCase {
 		$this->assertSame( 'file', $data['kind'] );
 		$this->assertSame( 7, $data['size_bytes'] );
 		$this->assertArrayNotHasKey( 'storage_key', $data );
-		$this->assertFileDoesNotExist( $old_path );
+		$this->assertFileExists( $old_path );
+		$this->assertSame( 1, (int) $wpdb->get_var( 'SELECT COUNT(*) FROM ' . Floppy_Schema::table( 'file_versions' ) ) ); // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared
 		$this->assertSame( 'updated', file_get_contents( Floppy_Storage::path_for_key( $this->current_storage_key( $file['id'] ) ) ) );
+	}
+
+	public function test_list_and_restore_retained_version(): void {
+		$file = $this->insert_private_file( 'hello' );
+		$session = $this->create_replace_session_row( $file, 'updated' );
+
+		$complete = new WP_REST_Request( 'POST', '/floppy/v1/upload-sessions/' . $session['session_uuid'] . '/complete' );
+		$complete->set_param( 'uuid', $session['session_uuid'] );
+		$complete_response = Floppy_Rest::complete_upload_session( $complete );
+		$current = $complete_response->get_data();
+
+		$list = new WP_REST_Request( 'GET', '/floppy/v1/files/' . $file['id'] . '/versions' );
+		$list->set_param( 'id', $file['id'] );
+		$list_response = Floppy_Rest::list_file_versions( $list );
+		$versions = $list_response->get_data()['versions'];
+
+		$this->assertCount( 1, $versions );
+		$this->assertSame( 'hello', file_get_contents( Floppy_Storage::path_for_key( $file['storage_key'] ) ) );
+		$this->assertArrayNotHasKey( 'storage_key', $versions[0] );
+
+		$restore = new WP_REST_Request( 'POST', '/floppy/v1/files/' . $file['id'] . '/versions/' . $versions[0]['id'] . '/restore' );
+		$restore->set_param( 'id', $file['id'] );
+		$restore->set_param( 'version_id', $versions[0]['id'] );
+		$restore->set_param( 'content_version', $current['content_version'] );
+		$restore_response = Floppy_Rest::restore_file_version( $restore );
+		$restored = $restore_response->get_data();
+
+		$this->assertSame( 5, $restored['size_bytes'] );
+		$this->assertSame( 'hello', file_get_contents( Floppy_Storage::path_for_key( $this->current_storage_key( $file['id'] ) ) ) );
+		$this->assertArrayNotHasKey( 'storage_key', $restored );
 	}
 
 	public function test_complete_replace_session_respects_malware_scan_hook(): void {
@@ -124,10 +157,51 @@ final class Floppy_REST_Replacement_Sessions_Test extends WP_UnitTestCase {
 		$this->assertArrayHasKey( 'download_url', $payload );
 	}
 
+	public function test_conflict_lifecycle_is_redacted(): void {
+		$file = $this->insert_private_file( 'hello' );
+		$request = new WP_REST_Request( 'POST', '/floppy/v1/conflicts' );
+		$request->set_param( 'file_id', $file['id'] );
+		$request->set_param( 'reason', 'stale_content' );
+		$request->set_param( 'local_name', 'hello (Floppy conflict).txt' );
+		$request->set_param( 'server_content_version', $file['content_version'] );
+		$request->set_param( 'local_content_hash', hash( 'sha256', 'local edit' ) );
+		$request->set_param( 'local_size_bytes', 10 );
+
+		$response = Floppy_Rest::record_conflict( $request );
+		$data = $response->get_data();
+		$json = wp_json_encode( $data );
+
+		$this->assertSame( 201, $response->get_status() );
+		$this->assertSame( 'open', $data['status'] );
+		$this->assertStringNotContainsString( $file['storage_key'], $json );
+		$this->assertStringNotContainsString( Floppy_Storage::path_for_key( $file['storage_key'] ), $json );
+
+		$list = new WP_REST_Request( 'GET', '/floppy/v1/conflicts' );
+		$list_response = Floppy_Rest::list_conflicts( $list );
+		$this->assertCount( 1, $list_response->get_data()['conflicts'] );
+
+		$resolve = new WP_REST_Request( 'POST', '/floppy/v1/conflicts/' . $data['conflict_uuid'] . '/resolve' );
+		$resolve->set_param( 'uuid', $data['conflict_uuid'] );
+		$resolve->set_param( 'action', 'resolve' );
+		$resolved = Floppy_Rest::resolve_conflict( $resolve )->get_data();
+		$this->assertSame( 'resolved', $resolved['status'] );
+	}
+
+	public function test_thumbnail_for_non_image_is_rejected_privately(): void {
+		$file = $this->insert_private_file( 'hello' );
+		$request = new WP_REST_Request( 'GET', '/floppy/v1/files/' . $file['id'] . '/thumbnail' );
+		$request->set_param( 'id', $file['id'] );
+
+		$response = Floppy_Rest::thumbnail_file( $request );
+
+		$this->assertWPError( $response );
+		$this->assertSame( 415, $response->get_error_data()['status'] );
+	}
+
 	private function truncate_floppy_tables(): void {
 		global $wpdb;
 
-		foreach ( array( 'jobs', 'audit_log', 'tombstones', 'upload_sessions', 'devices', 'sync_events', 'acl_grants', 'item_names', 'folders', 'files' ) as $table ) {
+		foreach ( array( 'jobs', 'thumbnails', 'conflicts', 'file_versions', 'audit_log', 'tombstones', 'upload_sessions', 'devices', 'sync_events', 'acl_grants', 'item_names', 'folders', 'files' ) as $table ) {
 			$wpdb->query( 'DELETE FROM ' . Floppy_Schema::table( $table ) ); // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared
 		}
 	}

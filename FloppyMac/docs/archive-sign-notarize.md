@@ -67,6 +67,16 @@ FloppyMac/Scripts/archive-notarize.sh
 
 The script submits the ZIP, waits for notarization, staples the exported app, verifies signing, and rebuilds the ZIP around the stapled app.
 
+After export, create the beta evidence report:
+
+```bash
+APP_PATH=.build/export/Floppy.app \
+ZIP_PATH=.build/FloppyMac-notarization.zip \
+FloppyMac/Scripts/release-evidence.sh
+```
+
+The evidence report should have no failures or skipped checks before a public beta artifact is published.
+
 ## Manual Checks
 
 ```bash

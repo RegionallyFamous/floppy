@@ -7,6 +7,7 @@
 	var __ = wp && wp.i18n ? wp.i18n.__ : function ( text ) { return text; };
 	var WINDOW_ID = config.windowId || 'floppy-drive';
 	var OWNER = 'floppy-desktop-mode';
+	var FILE_RENDER_LIMIT = 300;
 	var badgeState = {
 		uploads: 0,
 		attention: 0,
@@ -22,6 +23,7 @@
 	};
 	var decoratedLauncherNodes = [];
 	var currentMount = null;
+	var hookRegistrations = [];
 	var FALLBACK_HOOKS = {
 		WINDOW_FOCUSED: 'desktop-mode.window.focused',
 		WINDOW_CLOSING: 'desktop-mode.window.closing',
@@ -48,10 +50,26 @@
 	var PANEL_LABELS = {
 		files: __( 'My Drive', 'floppy' ),
 		shared: __( 'Shared', 'floppy' ),
+		conflicts: __( 'Conflicts', 'floppy' ),
+		versions: __( 'Versions', 'floppy' ),
 		sync: __( 'Sync', 'floppy' ),
 		devices: __( 'Devices', 'floppy' ),
 		diagnostics: __( 'Diagnostics', 'floppy' ),
+		jobs: __( 'Jobs', 'floppy' ),
+		evidence: __( 'Evidence', 'floppy' ),
 		settings: __( 'Settings', 'floppy' )
+	};
+	var PANEL_ICONS = {
+		files: 'media-default',
+		shared: 'groups',
+		conflicts: 'warning',
+		versions: 'backup',
+		sync: 'update',
+		devices: 'desktop',
+		diagnostics: 'chart-area',
+		jobs: 'hourglass',
+		evidence: 'clipboard',
+		settings: 'admin-generic'
 	};
 	var OS_VISIBILITY_LABELS = {
 		desktop: __( 'Desktop', 'floppy' ),
@@ -70,6 +88,34 @@
 		size: __( 'Size', 'floppy' ),
 		updated: __( 'Modified', 'floppy' )
 	};
+	var REQUIRED_DESKTOP_HOOKS = [
+		'WINDOW_FOCUSED',
+		'NATIVE_WINDOW_AFTER_RENDER',
+		'NATIVE_WINDOW_BEFORE_CLOSE',
+		'FILE_DROP_FILES_DETECTED',
+		'FILE_DROP_BEFORE_UPLOAD',
+		'FILE_DROP_UPLOAD_STARTED',
+		'FILE_DROP_UPLOAD_PROGRESS',
+		'FILE_DROP_AFTER_UPLOAD',
+		'FILE_DROP_UPLOAD_FAILED',
+		'DOCK_TILE_CLASS',
+		'DOCK_TILE_ELEMENT',
+		'DOCK_TILE_RENDERED',
+		'DOCK_TILE_TOOLTIP',
+		'DESKTOP_ICON_CLICKED',
+		'DESKTOP_ICONS_RENDERED',
+		'DESKTOP_ICON_MENU_ITEMS'
+	];
+	var DESKTOP_FEATURES = [
+		{ key: 'openWindow', label: __( 'Native windows', 'floppy' ), test: function () { return desktop && typeof desktop.openWindow === 'function'; } },
+		{ key: 'commands', label: __( 'Command palette', 'floppy' ), test: function () { return desktop && typeof desktop.registerCommand === 'function'; } },
+		{ key: 'settings', label: __( 'OS Settings tab', 'floppy' ), test: function () { return desktop && typeof desktop.registerSettingsTab === 'function'; } },
+		{ key: 'titlebar', label: __( 'Title bar buttons', 'floppy' ), test: function () { return desktop && typeof desktop.registerTitleBarButton === 'function'; } },
+		{ key: 'fileOpener', label: __( 'File openers', 'floppy' ), test: function () { return desktop && desktop.files && typeof desktop.files.registerOpener === 'function'; } },
+		{ key: 'osSettings', label: __( 'OS placement settings', 'floppy' ), test: function () { return desktop && typeof desktop.getOsSettings === 'function' && typeof desktop.updateOsSettings === 'function'; } },
+		{ key: 'broadcasts', label: __( 'Broadcasts', 'floppy' ), test: function () { return desktop && typeof desktop.broadcast === 'function' && typeof desktop.subscribe === 'function'; } },
+		{ key: 'badges', label: __( 'Badges', 'floppy' ), test: function () { return !! ( desktop && ( ( desktop.icons && typeof desktop.icons.setBadge === 'function' ) || ( desktop.dock && typeof desktop.dock.setBadge === 'function' ) || ( desktop.taskbar && typeof desktop.taskbar.setBadge === 'function' ) ) ); } }
+	];
 
 	function refreshHostApis() {
 		desktop = wp && wp.desktop ? wp.desktop : desktop;
@@ -238,11 +284,25 @@
 			shareTarget: null,
 			health: null,
 			healthError: null,
+			deepHealth: null,
+			deepHealthError: null,
+			repairReport: null,
+			debugBundle: null,
 			devices: [],
 			deviceError: null,
 			sync: null,
 			syncEvents: [],
 			sharedEvents: [],
+			conflicts: [],
+			conflictError: null,
+			conflictEndpointAvailable: null,
+			versionTarget: null,
+			versions: [],
+			versionsError: null,
+			versionsEndpointAvailable: null,
+			exportJob: null,
+			exportJobError: null,
+			endpointAvailability: {},
 			syncCursor: 0,
 			uploading: 0,
 			selected: {},
@@ -267,12 +327,16 @@
 			'<div class="floppy-shell">',
 				'<aside class="floppy-sidebar">',
 					'<div class="floppy-brand"><span class="dashicons dashicons-archive"></span><div><strong>Floppy</strong><span data-floppy-status>Ready</span></div></div>',
-					renderNavButton( 'files', 'media-default', true ),
-					renderNavButton( 'shared', 'groups' ),
-					renderNavButton( 'sync', 'update' ),
-					renderNavButton( 'devices', 'desktop' ),
-					renderNavButton( 'diagnostics', 'chart-area' ),
-					renderNavButton( 'settings', 'admin-generic' ),
+					renderNavButton( 'files', true ),
+					renderNavButton( 'shared' ),
+					renderNavButton( 'conflicts' ),
+					renderNavButton( 'versions' ),
+					renderNavButton( 'sync' ),
+					renderNavButton( 'devices' ),
+					renderNavButton( 'diagnostics' ),
+					renderNavButton( 'jobs' ),
+					renderNavButton( 'evidence' ),
+					renderNavButton( 'settings' ),
 				'</aside>',
 				'<main class="floppy-main">',
 					'<header class="floppy-toolbar">',
@@ -298,9 +362,9 @@
 		var titleNode = container.querySelector( '[data-toolbar-title]' );
 		var subtitleNode = container.querySelector( '[data-toolbar-subtitle]' );
 
-		function renderNavButton( panel, icon, active ) {
+		function renderNavButton( panel, active ) {
 			return '<button class="floppy-nav' + ( active ? ' is-active' : '' ) + '" data-panel="' + panel + '">' +
-				'<span class="dashicons dashicons-' + icon + '"></span><span>' + escapeHtml( PANEL_LABELS[ panel ] ) + '</span>' +
+				'<span class="dashicons dashicons-' + escapeHtml( PANEL_ICONS[ panel ] || 'admin-generic' ) + '"></span><span>' + escapeHtml( PANEL_LABELS[ panel ] ) + '</span>' +
 			'</button>';
 		}
 
@@ -384,6 +448,8 @@
 				wrap.innerHTML = '<div class="floppy-empty"><strong>' + escapeHtml( __( 'No matching files.', 'floppy' ) ) + '</strong><span>' + escapeHtml( __( 'Try a different search or filter.', 'floppy' ) ) + '</span></div>';
 				return;
 			}
+			var rendered = visible.slice( 0, FILE_RENDER_LIMIT );
+			var limitNotice = visible.length > rendered.length ? '<div class="floppy-list-limit"><span class="dashicons dashicons-performance" aria-hidden="true"></span><span>' + escapeHtml( __( 'Showing the first ', 'floppy' ) + String( rendered.length ) + __( ' matching items. Search, filter, sort, or load another page to narrow this large folder.', 'floppy' ) ) + '</span></div>' : '';
 			wrap.innerHTML = [
 				'<table class="floppy-file-table" aria-label="' + escapeHtml( __( 'Floppy files', 'floppy' ) ) + '">',
 					'<colgroup><col class="floppy-col-check" /><col class="floppy-col-name" /><col class="floppy-col-type" /><col class="floppy-col-size" /><col class="floppy-col-modified" /><col class="floppy-col-actions" /></colgroup>',
@@ -396,9 +462,10 @@
 						'<th scope="col" class="floppy-file-actions-heading"><span class="screen-reader-text">' + escapeHtml( __( 'Actions', 'floppy' ) ) + '</span></th>',
 					'</tr></thead>',
 					'<tbody>',
-						visible.map( renderFileRow ).join( '' ),
+						rendered.map( renderFileRow ).join( '' ),
 					'</tbody>',
 				'</table>',
+				limitNotice,
 				state.hasMore ? '<div class="floppy-file-footer"><button type="button" class="button" data-action="load-more" ' + ( state.loadingMore ? 'disabled' : '' ) + '>' + escapeHtml( state.loadingMore ? __( 'Loading...', 'floppy' ) : __( 'Load More', 'floppy' ) ) + '</button></div>' : ''
 			].join( '' );
 		}
@@ -431,7 +498,7 @@
 			var updated = item.updated_at_gmt ? formatDate( item.updated_at_gmt ) : '';
 			var key = targetKey( item );
 			var selected = !! state.selected[ key ];
-			return '<tr class="floppy-file-row' + ( selected ? ' is-selected' : '' ) + '" data-row-key="' + escapeHtml( key ) + '" data-kind="' + escapeHtml( item.kind ) + '" data-id="' + escapeHtml( String( item.id ) ) + '">' +
+			return '<tr class="floppy-file-row' + ( selected ? ' is-selected' : '' ) + '" tabindex="0" aria-selected="' + ( selected ? 'true' : 'false' ) + '" data-row-key="' + escapeHtml( key ) + '" data-kind="' + escapeHtml( item.kind ) + '" data-id="' + escapeHtml( String( item.id ) ) + '">' +
 				'<td class="floppy-file-check"><input type="checkbox" data-select-item="' + escapeHtml( key ) + '" ' + ( selected ? 'checked ' : '' ) + 'aria-label="' + escapeHtml( __( 'Select ', 'floppy' ) + item.name ) + '" /></td>' +
 				'<td class="floppy-file-name-cell"><button type="button" class="floppy-file-open" data-open-item="' + escapeHtml( key ) + '"><span class="dashicons dashicons-' + icon + '" aria-hidden="true"></span><span><strong>' + escapeHtml( item.name ) + '</strong><small>' + escapeHtml( itemSubtitle( item ) ) + '</small></span></button></td>' +
 				'<td>' + escapeHtml( kindLabel( item ) ) + '</td>' +
@@ -500,6 +567,140 @@
 					'<label><span>' + escapeHtml( __( 'Access', 'floppy' ) ) + '</span><select name="capability"><option value="read">' + escapeHtml( __( 'Read', 'floppy' ) ) + '</option><option value="write">' + escapeHtml( __( 'Write', 'floppy' ) ) + '</option></select></label>',
 					'<div class="floppy-form-actions"><button type="submit" class="button button-primary">' + escapeHtml( __( 'Share', 'floppy' ) ) + '</button><button type="button" class="button" data-action="unshare">' + escapeHtml( __( 'Revoke Exact Grant', 'floppy' ) ) + '</button></div>',
 				'</form>'
+			].join( '' );
+		}
+
+		function renderConflicts() {
+			updateChrome();
+			var cards = state.conflicts.length ? state.conflicts.map( renderConflictCard ).join( '' ) : '<div class="floppy-empty"><strong>' + escapeHtml( __( 'No conflicts found.', 'floppy' ) ) + '</strong><span>' + escapeHtml( __( 'Stale edits and rename collisions will appear here when the sync feed reports them.', 'floppy' ) ) + '</span></div>';
+			var endpointNotice = state.conflictEndpointAvailable === false ? '<div class="floppy-callout"><strong>' + escapeHtml( __( 'Server conflict queue not installed yet', 'floppy' ) ) + '</strong><span>' + escapeHtml( __( 'This beta shell is using conflict events from the sync feed until the optional conflicts endpoint is available.', 'floppy' ) ) + '</span></div>' : '';
+			panelRoot.innerHTML = [
+				'<div class="floppy-panel-grid">',
+					'<section class="floppy-stat"><span class="dashicons dashicons-warning"></span><strong>' + escapeHtml( String( state.conflicts.length ) ) + '</strong><small>' + escapeHtml( __( 'Open conflicts', 'floppy' ) ) + '</small></section>',
+					'<section class="floppy-stat"><span class="dashicons dashicons-update"></span><strong>' + escapeHtml( String( state.syncCursor || 0 ) ) + '</strong><small>' + escapeHtml( __( 'Sync cursor', 'floppy' ) ) + '</small></section>',
+					'<section class="floppy-panel floppy-panel--wide">',
+						'<div class="floppy-surface-head"><div><h2>' + escapeHtml( __( 'Conflict Center', 'floppy' ) ) + '</h2><p>' + escapeHtml( __( 'Review stale writes and collisions without overwriting user edits.', 'floppy' ) ) + '</p></div><div class="floppy-button-row"><button type="button" class="button" data-action="open-sync">' + escapeHtml( __( 'Open Sync Feed', 'floppy' ) ) + '</button><button type="button" class="button button-primary" data-action="conflict-refresh">' + escapeHtml( __( 'Refresh', 'floppy' ) ) + '</button></div></div>',
+						endpointNotice,
+						'<div class="floppy-card-list">' + cards + '</div>',
+					'</section>',
+				'</div>'
+			].join( '' );
+		}
+
+		function renderConflictCard( conflict ) {
+			var reason = conflict.reason || conflict.event_type || __( 'Conflict', 'floppy' );
+			var name = conflict.name || conflict.target_name || conflict.item_name || '';
+			var target = conflict.target_type ? conflict.target_type + ' #' + String( conflict.target_id || 0 ) : '';
+			return '<article class="floppy-card is-warning">' +
+				'<div><span class="dashicons dashicons-warning" aria-hidden="true"></span><div><strong>' + escapeHtml( reason ) + '</strong><small>' + escapeHtml( [ target, name, formatDate( conflict.created_at_gmt || conflict.updated_at_gmt ) ].filter( Boolean ).join( ' · ' ) ) + '</small></div></div>' +
+				'<p>' + escapeHtml( conflict.message || __( 'The server kept the canonical item and Floppy preserved the user edit as a separate conflict copy.', 'floppy' ) ) + '</p>' +
+			'</article>';
+		}
+
+		function renderVersions() {
+			updateChrome();
+			var files = state.items.filter( function ( item ) {
+				return item.kind === 'file';
+			} );
+			var target = currentVersionTarget();
+			var targetList = files.length ? files.map( function ( item ) {
+				var active = target && Number( target.id ) === Number( item.id );
+				return '<button type="button" class="floppy-target' + ( active ? ' is-active' : '' ) + '" data-version-target="' + escapeHtml( targetKey( item ) ) + '">' +
+					'<span class="dashicons dashicons-' + fileIcon( item.mime_type ) + '"></span>' +
+					'<span><strong>' + escapeHtml( item.name ) + '</strong><small>' + escapeHtml( formatBytes( item.size_bytes ) + ' · ' + ( item.content_version || __( 'current version', 'floppy' ) ) ) + '</small></span>' +
+				'</button>';
+			} ).join( '' ) : '<div class="floppy-empty"><strong>' + escapeHtml( __( 'No files loaded yet.', 'floppy' ) ) + '</strong><span>' + escapeHtml( __( 'Upload a file to see version evidence.', 'floppy' ) ) + '</span></div>';
+			var versionRows = state.versions.length ? state.versions.map( renderVersionRow ).join( '' ) : renderCurrentVersionFallback( target );
+			var endpointNotice = state.versionsEndpointAvailable === false ? '<div class="floppy-callout"><strong>' + escapeHtml( __( 'Version history endpoint not installed yet', 'floppy' ) ) + '</strong><span>' + escapeHtml( __( 'This shell shows the current content and metadata versions now, and will render full history when the optional endpoint exists.', 'floppy' ) ) + '</span></div>' : '';
+
+			panelRoot.innerHTML = [
+				'<div class="floppy-panel-grid">',
+					'<section class="floppy-panel">',
+						'<div class="floppy-surface-head"><div><h2>' + escapeHtml( __( 'Files', 'floppy' ) ) + '</h2><p>' + escapeHtml( __( 'Choose a file to inspect restore-ready version data.', 'floppy' ) ) + '</p></div></div>',
+						'<div class="floppy-target-list">' + targetList + '</div>',
+					'</section>',
+					'<section class="floppy-panel">',
+						'<div class="floppy-surface-head"><div><h2>' + escapeHtml( target ? target.name : __( 'Version History', 'floppy' ) ) + '</h2><p>' + escapeHtml( __( 'Version surfaces are authenticated and never use public media URLs.', 'floppy' ) ) + '</p></div><button type="button" class="button" data-action="version-refresh">' + escapeHtml( __( 'Refresh', 'floppy' ) ) + '</button></div>',
+						endpointNotice,
+						'<div class="floppy-card-list">' + versionRows + '</div>',
+					'</section>',
+				'</div>'
+			].join( '' );
+		}
+
+		function renderVersionRow( version ) {
+			return '<article class="floppy-card">' +
+				'<div><span class="dashicons dashicons-backup" aria-hidden="true"></span><div><strong>' + escapeHtml( version.label || version.content_version || __( 'Version', 'floppy' ) ) + '</strong><small>' + escapeHtml( [ formatBytes( version.size_bytes ), version.content_hash ? version.content_hash.slice( 0, 12 ) : '', formatDate( version.created_at_gmt || version.updated_at_gmt ) ].filter( Boolean ).join( ' · ' ) ) + '</small></div></div>' +
+			'</article>';
+		}
+
+		function renderCurrentVersionFallback( target ) {
+			if ( ! target ) {
+				return '<div class="floppy-empty"><strong>' + escapeHtml( __( 'Choose a file', 'floppy' ) ) + '</strong><span>' + escapeHtml( __( 'Current version metadata will appear here.', 'floppy' ) ) + '</span></div>';
+			}
+			return '<article class="floppy-card">' +
+				'<div><span class="dashicons dashicons-backup" aria-hidden="true"></span><div><strong>' + escapeHtml( __( 'Current version', 'floppy' ) ) + '</strong><small>' + escapeHtml( formatBytes( target.size_bytes ) + ' · ' + formatDate( target.updated_at_gmt ) ) + '</small></div></div>' +
+				'<dl class="floppy-definition-list"><div><dt>' + escapeHtml( __( 'Content version', 'floppy' ) ) + '</dt><dd>' + escapeHtml( target.content_version || '-' ) + '</dd></div><div><dt>' + escapeHtml( __( 'Metadata version', 'floppy' ) ) + '</dt><dd>' + escapeHtml( target.metadata_version || '-' ) + '</dd></div><div><dt>' + escapeHtml( __( 'Checksum', 'floppy' ) ) + '</dt><dd>' + escapeHtml( target.content_hash || '-' ) + '</dd></div></dl>' +
+			'</article>';
+		}
+
+		function renderJobs() {
+			updateChrome();
+			var queue = state.deepHealth && state.deepHealth.queues ? state.deepHealth.queues : {};
+			var byStatus = queue.by_status || {};
+			var exportMarkup = renderExportJob();
+			panelRoot.innerHTML = [
+				'<div class="floppy-panel-grid">',
+					'<section class="floppy-stat"><span class="dashicons dashicons-clock"></span><strong>' + escapeHtml( String( countObjectValues( byStatus ) ) ) + '</strong><small>' + escapeHtml( __( 'Known jobs', 'floppy' ) ) + '</small></section>',
+					'<section class="floppy-stat"><span class="dashicons dashicons-warning"></span><strong>' + escapeHtml( String( queue.stale_running || 0 ) ) + '</strong><small>' + escapeHtml( __( 'Stale running', 'floppy' ) ) + '</small></section>',
+					'<section class="floppy-panel">',
+						'<div class="floppy-surface-head"><div><h2>' + escapeHtml( __( 'Job Queues', 'floppy' ) ) + '</h2><p>' + escapeHtml( __( 'Queue counts come from the admin deep-health endpoint.', 'floppy' ) ) + '</p></div><button type="button" class="button" data-action="jobs-refresh">' + escapeHtml( __( 'Refresh', 'floppy' ) ) + '</button></div>',
+						renderStatusCounts( byStatus ),
+					'</section>',
+					'<section class="floppy-panel">',
+						'<div class="floppy-surface-head"><div><h2>' + escapeHtml( __( 'Export Drill', 'floppy' ) ) + '</h2><p>' + escapeHtml( __( 'Start an authenticated export job and track the redacted job response.', 'floppy' ) ) + '</p></div></div>',
+						exportMarkup,
+					'</section>',
+				'</div>'
+			].join( '' );
+		}
+
+		function renderExportJob() {
+			if ( state.exportJobError ) {
+				return '<div class="floppy-callout is-error"><strong>' + escapeHtml( __( 'Export unavailable', 'floppy' ) ) + '</strong><span>' + escapeHtml( state.exportJobError.message || __( 'The export endpoint is not available for this session.', 'floppy' ) ) + '</span></div><button type="button" class="button button-primary" data-action="export-start">' + escapeHtml( __( 'Try Export Drill', 'floppy' ) ) + '</button>';
+			}
+			if ( ! state.exportJob ) {
+				return '<div class="floppy-callout"><strong>' + escapeHtml( __( 'No export drill started', 'floppy' ) ) + '</strong><span>' + escapeHtml( __( 'Use this before a beta tag to prove users can leave with metadata and files intact.', 'floppy' ) ) + '</span></div><button type="button" class="button button-primary" data-action="export-start">' + escapeHtml( __( 'Start Export Drill', 'floppy' ) ) + '</button>';
+			}
+			return '<div class="floppy-card-list">' +
+				'<article class="floppy-card"><div><span class="dashicons dashicons-download" aria-hidden="true"></span><div><strong>' + escapeHtml( state.exportJob.status || __( 'queued', 'floppy' ) ) + '</strong><small>' + escapeHtml( state.exportJob.job_uuid || state.exportJob.uuid || '' ) + '</small></div></div>' + renderJobProgress( state.exportJob ) + '</article>' +
+				'</div><div class="floppy-button-row"><button type="button" class="button" data-action="export-check">' + escapeHtml( __( 'Check Status', 'floppy' ) ) + '</button><button type="button" class="button button-primary" data-action="export-download" ' + ( state.exportJob.status === 'complete' ? '' : 'disabled' ) + '>' + escapeHtml( __( 'Download Export', 'floppy' ) ) + '</button></div>';
+		}
+
+		function renderEvidence() {
+			updateChrome();
+			var evidence = buildReleaseEvidence();
+			var gates = releaseGates( evidence );
+			var gateRows = gates.map( function ( gate ) {
+				return '<article class="floppy-gate is-' + escapeHtml( gate.status ) + '"><span class="dashicons dashicons-' + ( gate.status === 'pass' ? 'yes-alt' : gate.status === 'fail' ? 'dismiss' : 'warning' ) + '"></span><div><strong>' + escapeHtml( gate.label ) + '</strong><small>' + escapeHtml( gate.message ) + '</small></div></article>';
+			} ).join( '' );
+			panelRoot.innerHTML = [
+				'<div class="floppy-panel-grid">',
+					'<section class="floppy-stat"><span class="dashicons dashicons-clipboard"></span><strong>' + escapeHtml( String( gates.filter( function ( gate ) { return gate.status === 'pass'; } ).length ) ) + '</strong><small>' + escapeHtml( __( 'Passing gates', 'floppy' ) ) + '</small></section>',
+					'<section class="floppy-stat"><span class="dashicons dashicons-admin-links"></span><strong>' + escapeHtml( evidence.support.correlation_id || '-' ) + '</strong><small>' + escapeHtml( __( 'Support correlation', 'floppy' ) ) + '</small></section>',
+					'<section class="floppy-panel floppy-panel--wide">',
+						'<div class="floppy-surface-head"><div><h2>' + escapeHtml( __( 'Release Evidence', 'floppy' ) ) + '</h2><p>' + escapeHtml( __( 'A redacted Desktop Mode sidecar for beta release notes and support handoff.', 'floppy' ) ) + '</p></div><div class="floppy-button-row"><button type="button" class="button" data-action="evidence-refresh">' + escapeHtml( __( 'Refresh', 'floppy' ) ) + '</button><button type="button" class="button" data-action="debug-download">' + escapeHtml( __( 'Debug Bundle', 'floppy' ) ) + '</button><button type="button" class="button button-primary" data-action="evidence-download">' + escapeHtml( __( 'Download Evidence JSON', 'floppy' ) ) + '</button></div></div>',
+						'<div class="floppy-gate-list">' + gateRows + '</div>',
+					'</section>',
+					'<section class="floppy-panel">',
+						'<h2>' + escapeHtml( __( 'Desktop Mode Smoke', 'floppy' ) ) + '</h2>',
+						renderHookAudit( evidence.desktop_mode ),
+					'</section>',
+					'<section class="floppy-panel">',
+						'<div class="floppy-surface-head"><div><h2>' + escapeHtml( __( 'Repair Dry Run', 'floppy' ) ) + '</h2><p>' + escapeHtml( __( 'Admin-only repair evidence without applying changes.', 'floppy' ) ) + '</p></div><button type="button" class="button" data-action="repair-dry-run">' + escapeHtml( __( 'Run Dry Run', 'floppy' ) ) + '</button></div>',
+						renderRepairSummary( state.repairReport ),
+					'</section>',
+				'</div>'
 			].join( '' );
 		}
 
@@ -680,6 +881,39 @@
 			} );
 		}
 
+		function optionalRequest( path, key ) {
+			return apiRequest( path ).then( function ( data ) {
+				state.endpointAvailability[ key ] = {
+					available: true,
+					checked_at: new Date().toISOString()
+				};
+				return data;
+			} ).catch( function ( error ) {
+				state.endpointAvailability[ key ] = {
+					available: false,
+					status: errorStatus( error ),
+					message: error && error.message ? error.message : __( 'Endpoint unavailable.', 'floppy' ),
+					checked_at: new Date().toISOString()
+				};
+				return null;
+			} );
+		}
+
+		function ensureSyncEvents() {
+			if ( state.syncEvents.length ) {
+				return Promise.resolve( state.syncEvents );
+			}
+			return apiRequest( 'sync/changes?cursor=0&limit=50' ).then( function ( data ) {
+				state.sync = data;
+				state.syncCursor = data.next_cursor || 0;
+				state.syncEvents = data.events || [];
+				return state.syncEvents;
+			} ).catch( function () {
+				state.syncEvents = [];
+				return state.syncEvents;
+			} );
+		}
+
 		function loadHealth() {
 			return apiRequest( 'health' ).then( function ( data ) {
 				state.health = data;
@@ -697,6 +931,84 @@
 			renderLoading( __( 'Loading diagnostics', 'floppy' ) );
 			return loadHealth().then( function () {
 				renderDiagnostics();
+				markReady( ctx );
+			} ).catch( showError );
+		}
+
+		function loadDeepHealth() {
+			return optionalRequest( 'maintenance/deep-health', 'deep_health' ).then( function ( data ) {
+				state.deepHealth = data;
+				state.deepHealthError = data ? null : state.endpointAvailability.deep_health;
+				return data;
+			} );
+		}
+
+		function loadRepairDryRun() {
+			return optionalRequest( 'maintenance/repair', 'repair' ).then( function ( data ) {
+				state.repairReport = data;
+				return data;
+			} );
+		}
+
+		function loadConflicts() {
+			markLoading( ctx );
+			renderLoading( __( 'Loading conflicts', 'floppy' ) );
+			return Promise.all( [
+				optionalRequest( 'conflicts?limit=50', 'conflicts' ),
+				ensureSyncEvents()
+			] ).then( function ( results ) {
+				var data = results[0];
+				state.conflictEndpointAvailable = !! data;
+				state.conflicts = normalizeConflictRows( data, state.syncEvents );
+				renderConflicts();
+				markReady( ctx );
+			} ).catch( showError );
+		}
+
+		function loadVersions() {
+			markLoading( ctx );
+			renderLoading( __( 'Loading versions', 'floppy' ) );
+			return fetchFiles( false ).then( function () {
+				var target = currentVersionTarget();
+				if ( ! target ) {
+					state.versions = [];
+					renderVersions();
+					markReady( ctx );
+					return null;
+				}
+				return optionalRequest( 'files/' + encodeURIComponent( target.id ) + '/versions?limit=25', 'versions' ).then( function ( data ) {
+					state.versionsEndpointAvailable = !! data;
+					state.versions = normalizeVersionRows( data );
+					renderVersions();
+					markReady( ctx );
+					return data;
+				} );
+			} ).catch( showError );
+		}
+
+		function loadJobs() {
+			markLoading( ctx );
+			renderLoading( __( 'Loading jobs', 'floppy' ) );
+			return loadDeepHealth().then( function () {
+				if ( state.exportJob && ( state.exportJob.job_uuid || state.exportJob.uuid ) ) {
+					return refreshExportJob();
+				}
+				return null;
+			} ).then( function () {
+				renderJobs();
+				markReady( ctx );
+			} ).catch( showError );
+		}
+
+		function loadEvidence() {
+			markLoading( ctx );
+			renderLoading( __( 'Loading release evidence', 'floppy' ) );
+			return Promise.all( [
+				loadHealth(),
+				loadDeepHealth(),
+				loadRepairDryRun()
+			] ).then( function () {
+				renderEvidence();
 				markReady( ctx );
 			} ).catch( showError );
 		}
@@ -961,6 +1273,216 @@
 			} );
 		}
 
+		function startExportJob() {
+			state.exportJobError = null;
+			return apiRequest( 'exports', {
+				method: 'POST'
+			} ).then( function ( data ) {
+				state.exportJob = data;
+				notify( __( 'Export drill queued.', 'floppy' ), 'success' );
+				renderJobs();
+			} ).catch( function ( error ) {
+				state.exportJobError = error;
+				renderJobs();
+			} );
+		}
+
+		function refreshExportJob() {
+			var uuid = state.exportJob && ( state.exportJob.job_uuid || state.exportJob.uuid );
+			if ( ! uuid ) {
+				return Promise.resolve( null );
+			}
+			return optionalRequest( 'jobs/' + encodeURIComponent( uuid ), 'job_status' ).then( function ( data ) {
+				if ( data ) {
+					state.exportJob = Object.assign( {}, state.exportJob, data );
+					state.exportJobError = null;
+				}
+				return data;
+			} );
+		}
+
+		function downloadExportJob() {
+			if ( ! state.exportJob ) {
+				return;
+			}
+			var url = state.exportJob.download_url;
+			var uuid = state.exportJob.job_uuid || state.exportJob.uuid;
+			if ( ! url && uuid ) {
+				url = config.restUrl + 'exports/' + encodeURIComponent( uuid ) + '/download';
+			}
+			if ( url ) {
+				window.open( url, '_blank', 'noopener' );
+			}
+		}
+
+		function downloadDebugBundle() {
+			return optionalRequest( 'debug-bundle', 'debug_bundle' ).then( function ( data ) {
+				if ( data ) {
+					state.debugBundle = data;
+					downloadJson( data, 'floppy-debug-bundle-' + safeFilenameStamp() + '.json' );
+				}
+			} );
+		}
+
+		function downloadEvidence() {
+			downloadJson( buildReleaseEvidence(), 'floppy-release-evidence-' + safeFilenameStamp() + '.json' );
+		}
+
+		function currentVersionTarget() {
+			var selected = selectedFileItems().filter( function ( item ) {
+				return item.kind === 'file';
+			} )[0];
+			if ( selected ) {
+				state.versionTarget = targetKey( selected );
+				return selected;
+			}
+			if ( state.versionTarget ) {
+				var fromState = itemByKey( state.versionTarget );
+				if ( fromState && fromState.kind === 'file' ) {
+					return fromState;
+				}
+			}
+			var firstFile = state.items.filter( function ( item ) {
+				return item.kind === 'file';
+			} )[0] || null;
+			if ( firstFile ) {
+				state.versionTarget = targetKey( firstFile );
+			}
+			return firstFile;
+		}
+
+		function normalizeConflictRows( data, events ) {
+			var rows = [];
+			if ( Array.isArray( data ) ) {
+				rows = data;
+			} else if ( data && Array.isArray( data.conflicts ) ) {
+				rows = data.conflicts;
+			} else if ( data && Array.isArray( data.items ) ) {
+				rows = data.items;
+			}
+			if ( rows.length ) {
+				return rows;
+			}
+			return ( events || [] ).filter( function ( event ) {
+				return String( event.event_type || '' ).indexOf( 'conflict' ) !== -1;
+			} ).map( function ( event ) {
+				var payload = event.payload || {};
+				return Object.assign( {}, payload, {
+					event_type: event.event_type,
+					target_type: event.target_type,
+					target_id: event.target_id,
+					created_at_gmt: event.created_at_gmt,
+					reason: payload.reason || event.event_type,
+					name: payload.name || payload.target_name || ''
+				} );
+			} );
+		}
+
+		function normalizeVersionRows( data ) {
+			if ( Array.isArray( data ) ) {
+				return data;
+			}
+			if ( data && Array.isArray( data.versions ) ) {
+				return data.versions;
+			}
+			if ( data && Array.isArray( data.items ) ) {
+				return data.items;
+			}
+			return [];
+		}
+
+		function countObjectValues( object ) {
+			return Object.keys( object || {} ).reduce( function ( total, key ) {
+				return total + Number( object[ key ] || 0 );
+			}, 0 );
+		}
+
+		function renderStatusCounts( counts ) {
+			var keys = Object.keys( counts || {} );
+			if ( ! keys.length ) {
+				return '<div class="floppy-empty"><strong>' + escapeHtml( __( 'No queue data yet.', 'floppy' ) ) + '</strong><span>' + escapeHtml( __( 'Refresh after background jobs have been created.', 'floppy' ) ) + '</span></div>';
+			}
+			return '<dl class="floppy-definition-list">' + keys.map( function ( key ) {
+				return '<div><dt>' + escapeHtml( key ) + '</dt><dd>' + escapeHtml( String( counts[ key ] ) ) + '</dd></div>';
+			} ).join( '' ) + '</dl>';
+		}
+
+		function renderJobProgress( job ) {
+			var progress = typeof job.progress === 'number' ? Math.max( 0, Math.min( 100, job.progress ) ) : null;
+			var result = job.result && typeof job.result === 'object' ? job.result : {};
+			return '<dl class="floppy-definition-list"><div><dt>' + escapeHtml( __( 'Progress', 'floppy' ) ) + '</dt><dd>' + escapeHtml( progress === null ? '-' : String( progress ) + '%' ) + '</dd></div><div><dt>' + escapeHtml( __( 'Attempts', 'floppy' ) ) + '</dt><dd>' + escapeHtml( String( job.attempts || 0 ) ) + '</dd></div><div><dt>' + escapeHtml( __( 'Updated', 'floppy' ) ) + '</dt><dd>' + escapeHtml( formatDate( job.updated_at_gmt ) ) + '</dd></div><div><dt>' + escapeHtml( __( 'Result', 'floppy' ) ) + '</dt><dd>' + escapeHtml( result.files || result.folders ? ( String( result.files || 0 ) + ' files · ' + String( result.folders || 0 ) + ' folders' ) : '-' ) + '</dd></div></dl>';
+		}
+
+		function renderHookAudit( evidence ) {
+			var features = evidence.features.map( function ( feature ) {
+				return '<article class="floppy-gate is-' + ( feature.available ? 'pass' : 'warn' ) + '"><span class="dashicons dashicons-' + ( feature.available ? 'yes-alt' : 'warning' ) + '"></span><div><strong>' + escapeHtml( feature.label ) + '</strong><small>' + escapeHtml( feature.available ? __( 'Detected', 'floppy' ) : __( 'Graceful fallback active', 'floppy' ) ) + '</small></div></article>';
+			} ).join( '' );
+			var hooksMarkup = evidence.hooks.map( function ( hook ) {
+				return '<article class="floppy-gate is-' + ( hook.registered ? 'pass' : 'warn' ) + '"><span class="dashicons dashicons-' + ( hook.registered ? 'yes-alt' : 'warning' ) + '"></span><div><strong>' + escapeHtml( hook.key ) + '</strong><small>' + escapeHtml( hook.name + ( hook.has_constant ? ' · constant' : ' · fallback name' ) ) + '</small></div></article>';
+			} ).join( '' );
+			return '<div class="floppy-gate-list">' + features + hooksMarkup + '</div>';
+		}
+
+		function renderRepairSummary( repair ) {
+			if ( ! repair ) {
+				return '<div class="floppy-empty"><strong>' + escapeHtml( __( 'No repair dry run loaded.', 'floppy' ) ) + '</strong><span>' + escapeHtml( __( 'Run a dry run to include schema repair evidence in the sidecar.', 'floppy' ) ) + '</span></div>';
+			}
+			var report = repair.report || {};
+			var keys = Object.keys( report );
+			if ( ! keys.length ) {
+				return '<div class="floppy-empty"><strong>' + escapeHtml( __( 'No repair findings.', 'floppy' ) ) + '</strong></div>';
+			}
+			return '<dl class="floppy-definition-list">' + keys.map( function ( key ) {
+				return '<div><dt>' + escapeHtml( key.replace( /_/g, ' ' ) ) + '</dt><dd>' + escapeHtml( summarizeObject( report[ key ] ) ) + '</dd></div>';
+			} ).join( '' ) + '</dl>';
+		}
+
+		function buildReleaseEvidence() {
+			var support = supportBlockFrom( state.health ) || supportBlockFrom( state.deepHealth ) || supportBlockFrom( state.repairReport ) || {};
+			return {
+				format: 'floppy-desktop-mode-release-evidence-v1',
+				generated_at: new Date().toISOString(),
+				support: support,
+				plugin: {
+					rest_url: redactUrl( config.restUrl || '' ),
+					desktop_mode_detected: !! config.desktopMode
+				},
+				desktop_mode: desktopSmokeEvidence(),
+				state: {
+					panel: state.panel,
+					files_loaded: state.items.length,
+					selected_count: selectedFileItems().length,
+					sync_cursor: state.syncCursor || 0,
+					sync_events_loaded: state.syncEvents.length,
+					conflicts_loaded: state.conflicts.length,
+					export_job_status: state.exportJob ? state.exportJob.status || 'queued' : '',
+					failed_health_checks: state.health ? failingCheckCount( state.health ) : null
+				},
+				endpoints: state.endpointAvailability,
+				health: state.health || null,
+				deep_health: state.deepHealth || null,
+				repair_dry_run: state.repairReport || null
+			};
+		}
+
+		function releaseGates( evidence ) {
+			var healthFailures = evidence.state.failed_health_checks;
+			var deepAvailable = evidence.endpoints.deep_health && evidence.endpoints.deep_health.available;
+			var repairAvailable = evidence.endpoints.repair && evidence.endpoints.repair.available;
+			var debugAvailable = evidence.endpoints.debug_bundle && evidence.endpoints.debug_bundle.available;
+			var hookMissing = evidence.desktop_mode.hooks.filter( function ( hook ) {
+				return ! hook.registered;
+			} ).length;
+			return [
+				{ label: __( 'Desktop Mode public hooks', 'floppy' ), status: hookMissing ? 'warn' : 'pass', message: hookMissing ? __( 'Some hooks are falling back or not registered in this shell.', 'floppy' ) : __( 'Required public hook registrations were detected.', 'floppy' ) },
+				{ label: __( 'Health endpoint', 'floppy' ), status: state.health ? ( healthFailures ? 'warn' : 'pass' ) : 'fail', message: state.health ? plural( healthFailures || 0, 'failed check', 'failed checks' ) : __( 'Health endpoint did not return.', 'floppy' ) },
+				{ label: __( 'Deep health endpoint', 'floppy' ), status: deepAvailable ? 'pass' : 'warn', message: deepAvailable ? __( 'Admin deep-health evidence loaded.', 'floppy' ) : __( 'Deep-health endpoint unavailable or unauthorized.', 'floppy' ) },
+				{ label: __( 'Repair dry run', 'floppy' ), status: repairAvailable ? 'pass' : 'warn', message: repairAvailable ? __( 'Repair dry-run evidence loaded without applying changes.', 'floppy' ) : __( 'Repair dry-run evidence has not loaded.', 'floppy' ) },
+				{ label: __( 'Debug bundle', 'floppy' ), status: debugAvailable || state.debugBundle ? 'pass' : 'warn', message: debugAvailable || state.debugBundle ? __( 'Debug bundle endpoint verified.', 'floppy' ) : __( 'Download the debug bundle before tagging.', 'floppy' ) },
+				{ label: __( 'Export drill', 'floppy' ), status: state.exportJob ? 'pass' : 'warn', message: state.exportJob ? __( 'Export job evidence exists in this session.', 'floppy' ) : __( 'Run an export drill before the beta tag.', 'floppy' ) }
+			];
+		}
+
 		function switchPanel( panel ) {
 			state.panel = panel || 'files';
 			updateChrome();
@@ -968,12 +1490,20 @@
 				loadFiles();
 			} else if ( state.panel === 'shared' ) {
 				loadShared();
+			} else if ( state.panel === 'conflicts' ) {
+				loadConflicts();
+			} else if ( state.panel === 'versions' ) {
+				loadVersions();
 			} else if ( state.panel === 'sync' ) {
 				loadSync( true );
 			} else if ( state.panel === 'devices' ) {
 				loadDevicePanel();
 			} else if ( state.panel === 'diagnostics' ) {
 				loadDiagnostics();
+			} else if ( state.panel === 'jobs' ) {
+				loadJobs();
+			} else if ( state.panel === 'evidence' ) {
+				loadEvidence();
 			} else {
 				refreshOsSettings( false ).then( renderSettings );
 			}
@@ -982,12 +1512,20 @@
 		function reloadCurrentPanel() {
 			if ( state.panel === 'shared' ) {
 				loadShared();
+			} else if ( state.panel === 'conflicts' ) {
+				loadConflicts();
+			} else if ( state.panel === 'versions' ) {
+				loadVersions();
 			} else if ( state.panel === 'sync' ) {
 				loadSync( true );
 			} else if ( state.panel === 'devices' ) {
 				loadDevicePanel();
 			} else if ( state.panel === 'diagnostics' ) {
 				loadDiagnostics();
+			} else if ( state.panel === 'jobs' ) {
+				loadJobs();
+			} else if ( state.panel === 'evidence' ) {
+				loadEvidence();
 			} else if ( state.panel === 'settings' ) {
 				refreshOsSettings( true );
 			} else {
@@ -1058,6 +1596,12 @@
 				trashItems( [ rowItem ] );
 			} else if ( name === 'unshare' ) {
 				unshareTarget();
+			} else if ( name === 'open-sync' ) {
+				switchPanel( 'sync' );
+			} else if ( name === 'conflict-refresh' ) {
+				loadConflicts();
+			} else if ( name === 'version-refresh' ) {
+				loadVersions();
 			} else if ( name === 'sync-reset' ) {
 				state.syncCursor = 0;
 				state.syncEvents = [];
@@ -1070,10 +1614,73 @@
 				loadDevicePanel();
 			} else if ( name === 'device-revoke' ) {
 				revokeDevice( action.getAttribute( 'data-device-uuid' ) );
+			} else if ( name === 'jobs-refresh' ) {
+				loadJobs();
+			} else if ( name === 'export-start' ) {
+				startExportJob();
+			} else if ( name === 'export-check' ) {
+				refreshExportJob().then( renderJobs );
+			} else if ( name === 'export-download' ) {
+				downloadExportJob();
+			} else if ( name === 'evidence-refresh' ) {
+				loadEvidence();
+			} else if ( name === 'evidence-download' ) {
+				downloadEvidence();
+			} else if ( name === 'debug-download' ) {
+				downloadDebugBundle();
+			} else if ( name === 'repair-dry-run' ) {
+				loadRepairDryRun().then( renderEvidence );
 			} else if ( name === 'settings-refresh' ) {
 				refreshOsSettings( true );
 			} else if ( name === 'desktop-settings' ) {
 				openDesktopSettings();
+			}
+		}
+
+		function handleKeyboardNavigation( event ) {
+			var activeTag = event.target && event.target.tagName ? event.target.tagName.toLowerCase() : '';
+			var isTextInput = activeTag === 'input' || activeTag === 'textarea' || activeTag === 'select';
+			if ( event.key === '/' && ! isTextInput ) {
+				var search = panelRoot.querySelector( '[data-file-search]' );
+				if ( search ) {
+					event.preventDefault();
+					search.focus();
+				}
+				return;
+			}
+			if ( event.key === 'Escape' && state.panel === 'files' ) {
+				state.selected = {};
+				paintFileList();
+				return;
+			}
+			if ( ( event.metaKey || event.ctrlKey ) && event.key.toLowerCase() === 'a' && state.panel === 'files' && ! isTextInput ) {
+				event.preventDefault();
+				setVisibleSelection( true );
+				return;
+			}
+
+			var row = event.target.closest ? event.target.closest( '.floppy-file-row' ) : null;
+			if ( ! row ) {
+				return;
+			}
+			if ( event.key === 'Enter' ) {
+				event.preventDefault();
+				openItemByKey( row.getAttribute( 'data-row-key' ) );
+			} else if ( event.key === ' ' ) {
+				event.preventDefault();
+				toggleSelectedItem( row.getAttribute( 'data-row-key' ) );
+			} else if ( event.key === 'ArrowDown' || event.key === 'ArrowUp' ) {
+				event.preventDefault();
+				focusSiblingRow( row, event.key === 'ArrowDown' ? 1 : -1 );
+			}
+		}
+
+		function focusSiblingRow( row, direction ) {
+			var rows = Array.prototype.slice.call( panelRoot.querySelectorAll( '.floppy-file-row' ) );
+			var index = rows.indexOf( row );
+			var next = rows[ index + direction ];
+			if ( next ) {
+				next.focus();
 			}
 		}
 
@@ -1089,6 +1696,13 @@
 			if ( targetButton ) {
 				state.shareTarget = targetButton.getAttribute( 'data-share-target' );
 				renderShared();
+				return;
+			}
+
+			var versionButton = event.target.closest( '[data-version-target]' );
+			if ( versionButton ) {
+				state.versionTarget = versionButton.getAttribute( 'data-version-target' );
+				loadVersions();
 				return;
 			}
 
@@ -1148,6 +1762,11 @@
 			if ( row && ! event.target.closest( 'button,input,a' ) ) {
 				openItemByKey( row.getAttribute( 'data-row-key' ) );
 			}
+		} );
+
+		container.addEventListener( 'keydown', function ( event ) {
+			currentMount = container;
+			handleKeyboardNavigation( event );
 		} );
 
 		container.addEventListener( 'input', function ( event ) {
@@ -1731,6 +2350,63 @@
 		return date.toLocaleString();
 	}
 
+	function errorStatus( error ) {
+		if ( error && error.data && error.data.data && error.data.data.status ) {
+			return Number( error.data.data.status );
+		}
+		if ( error && error.data && error.data.status ) {
+			return Number( error.data.status );
+		}
+		return 0;
+	}
+
+	function supportBlockFrom( value ) {
+		return value && value.support && typeof value.support === 'object' ? value.support : null;
+	}
+
+	function redactUrl( value ) {
+		try {
+			var url = new URL( value, window.location.href );
+			return url.origin + url.pathname;
+		} catch ( error ) {
+			return '';
+		}
+	}
+
+	function summarizeObject( value ) {
+		if ( value == null ) {
+			return '-';
+		}
+		if ( typeof value !== 'object' ) {
+			return String( value );
+		}
+		return Object.keys( value ).map( function ( key ) {
+			var item = value[ key ];
+			if ( typeof item === 'object' && item !== null ) {
+				item = JSON.stringify( item );
+			}
+			return key + ': ' + String( item );
+		} ).join( ' · ' );
+	}
+
+	function safeFilenameStamp() {
+		return new Date().toISOString().replace( /[:.]/g, '-' );
+	}
+
+	function downloadJson( data, filename ) {
+		var blob = new Blob( [ JSON.stringify( data, null, 2 ) + '\n' ], { type: 'application/json' } );
+		var url = URL.createObjectURL( blob );
+		var link = document.createElement( 'a' );
+		link.href = url;
+		link.download = filename;
+		document.body.appendChild( link );
+		link.click();
+		link.remove();
+		window.setTimeout( function () {
+			URL.revokeObjectURL( url );
+		}, 0 );
+	}
+
 	function plural( count, singular, many ) {
 		return String( count ) + ' ' + ( Number( count ) === 1 ? singular : many );
 	}
@@ -1768,6 +2444,49 @@
 		return 'update';
 	}
 
+	function desktopSmokeEvidence() {
+		refreshHostApis();
+		var registrations = uniqueHookRegistrations();
+		return {
+			format: 'floppy-desktop-mode-smoke-v1',
+			window_id: WINDOW_ID,
+			has_wp_hooks: !! ( hooks && typeof hooks.addAction === 'function' ),
+			has_wp_desktop: !! desktop,
+			native_window_callback: !! ( window.desktopModeNativeWindows && window.desktopModeNativeWindows[ WINDOW_ID ] ),
+			features: DESKTOP_FEATURES.map( function ( feature ) {
+				return {
+					key: feature.key,
+					label: feature.label,
+					available: !! feature.test()
+				};
+			} ),
+			hooks: REQUIRED_DESKTOP_HOOKS.map( function ( key ) {
+				var name = hookName( key );
+				return {
+					key: key,
+					name: name,
+					has_constant: !! ( desktop && desktop.HOOKS && desktop.HOOKS[ key ] ),
+					registered: registrations.some( function ( registration ) {
+						return registration.key === key;
+					} )
+				};
+			} ),
+			registrations: registrations
+		};
+	}
+
+	function uniqueHookRegistrations() {
+		var seen = {};
+		return hookRegistrations.filter( function ( registration ) {
+			var key = registration.type + ':' + registration.key + ':' + registration.namespace;
+			if ( seen[ key ] ) {
+				return false;
+			}
+			seen[ key ] = true;
+			return true;
+		} );
+	}
+
 	function escapeHtml( value ) {
 		return String( value == null ? '' : value ).replace( /[&<>"']/g, function ( char ) {
 			return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#039;' }[ char ];
@@ -1782,6 +2501,13 @@
 		var name = hookName( key );
 		if ( hooks && typeof hooks.addAction === 'function' && name ) {
 			hooks.addAction( name, namespace, callback );
+			hookRegistrations.push( {
+				type: 'action',
+				key: key,
+				name: name,
+				namespace: namespace,
+				has_constant: !! ( desktop && desktop.HOOKS && desktop.HOOKS[ key ] )
+			} );
 			if ( cleanup ) {
 				cleanup.push( function () {
 					if ( hooks && typeof hooks.removeAction === 'function' ) {
@@ -1796,6 +2522,13 @@
 		var name = hookName( key );
 		if ( hooks && typeof hooks.addFilter === 'function' && name ) {
 			hooks.addFilter( name, namespace, callback );
+			hookRegistrations.push( {
+				type: 'filter',
+				key: key,
+				name: name,
+				namespace: namespace,
+				has_constant: !! ( desktop && desktop.HOOKS && desktop.HOOKS[ key ] )
+			} );
 			if ( cleanup ) {
 				cleanup.push( function () {
 					if ( hooks && typeof hooks.removeFilter === 'function' ) {
@@ -1871,10 +2604,14 @@
 			[
 				{ slug: 'floppy/open', label: __( 'Open Floppy', 'floppy' ), panel: 'files' },
 				{ slug: 'floppy/shared', label: __( 'Floppy Shared Files', 'floppy' ), panel: 'shared' },
+				{ slug: 'floppy/conflicts', label: __( 'Floppy Conflicts', 'floppy' ), panel: 'conflicts' },
+				{ slug: 'floppy/versions', label: __( 'Floppy Versions', 'floppy' ), panel: 'versions' },
 				{ slug: 'floppy/sync', label: __( 'Floppy Sync Feed', 'floppy' ), panel: 'sync' },
 				{ slug: 'floppy/upload', label: __( 'Upload to Floppy', 'floppy' ), panel: 'files', upload: true },
 				{ slug: 'floppy/devices', label: __( 'Show Floppy Devices', 'floppy' ), panel: 'devices' },
 				{ slug: 'floppy/diagnostics', label: __( 'Run Floppy Diagnostics', 'floppy' ), panel: 'diagnostics' },
+				{ slug: 'floppy/jobs', label: __( 'Floppy Jobs', 'floppy' ), panel: 'jobs' },
+				{ slug: 'floppy/evidence', label: __( 'Floppy Release Evidence', 'floppy' ), panel: 'evidence' },
 				{ slug: 'floppy/settings', label: __( 'Floppy Settings', 'floppy' ), panel: 'settings' }
 			].forEach( function ( command ) {
 				desktop.registerCommand( {
@@ -1904,7 +2641,8 @@
 			[
 				{ id: 'floppy-upload', icon: 'dashicons-upload', label: __( 'Upload', 'floppy' ), panel: 'files', upload: true },
 				{ id: 'floppy-shared', icon: 'dashicons-groups', label: __( 'Shared', 'floppy' ), panel: 'shared' },
-				{ id: 'floppy-sync-status', icon: 'dashicons-update', label: __( 'Sync status', 'floppy' ), panel: 'sync' }
+				{ id: 'floppy-sync-status', icon: 'dashicons-update', label: __( 'Sync status', 'floppy' ), panel: 'sync' },
+				{ id: 'floppy-evidence', icon: 'dashicons-clipboard', label: __( 'Release evidence', 'floppy' ), panel: 'evidence' }
 			].forEach( function ( button ) {
 				desktop.registerTitleBarButton( {
 					id: button.id,

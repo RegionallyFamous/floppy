@@ -45,6 +45,14 @@ FloppyMac/Scripts/archive-notarize.sh
 
 See `docs/xcode-signing-ready.md` for target setup and `docs/archive-sign-notarize.md` for export options, notarytool setup, and manual verification commands.
 
+Before tagging a Mac beta, collect release evidence:
+
+```bash
+FloppyMac/Scripts/release-evidence.sh
+```
+
+The evidence report verifies the Xcode container, embedded File Provider extension, App Group entitlements, signing identity, notarization readiness, exported app signature, and notarization ZIP. See `docs/release-evidence.md`.
+
 ## Package The WordPress Plugin ZIP
 
 The GitHub-first onboarding expects a plugin ZIP whose root directory is `floppy/` and whose main file is `floppy/floppy.php`.

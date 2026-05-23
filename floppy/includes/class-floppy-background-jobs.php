@@ -167,6 +167,9 @@ final class Floppy_Background_Jobs {
 		} elseif ( 'folder_tree_status' === $job['job_type'] ) {
 			$payload = json_decode( (string) $job['payload_json'], true );
 			$result = is_array( $payload ) ? Floppy_Rest::run_folder_tree_status_job( $payload ) : array( 'ok' => false, 'message' => 'Invalid folder job payload.' );
+		} elseif ( 'thumbnail_generate' === $job['job_type'] ) {
+			$payload = json_decode( (string) $job['payload_json'], true );
+			$result = is_array( $payload ) ? Floppy_Rest::run_thumbnail_job( $payload ) : array( 'ok' => false, 'message' => 'Invalid thumbnail job payload.' );
 		}
 
 		$status = empty( $result['ok'] ) ? ( (int) $job['attempts'] >= 3 ? 'failed' : 'queued' ) : 'complete';

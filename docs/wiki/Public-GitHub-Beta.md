@@ -34,6 +34,8 @@ The first public beta is GitHub-first. Users install the WordPress plugin from a
 - The sync torture drill passes for offline edits, interrupted uploads, concurrent move/rename/delete, stale conflicts, quota failure, token revoke, and reconnect recovery.
 - Mac disconnect/revoke produces a clear repair/auth state and reconnects without orphaning the File Provider domain.
 - WordPress debug bundles and Mac diagnostics bundles share a support correlation ID and remain redacted.
+- The Desktop Mode Release Evidence panel can download a redacted evidence JSON sidecar, and CI creates `dist/floppy-release-evidence.json`.
+- The Desktop Mode hook audit passes with public `wp.desktop`, `wp.desktop.HOOKS`, and `wp.hooks` integration only.
 
 ## Required Beta Evidence
 
@@ -46,3 +48,4 @@ Keep these artifacts on the internal release issue for every public beta:
 - Mac diagnostics bundle and WordPress debug bundle with matching
   `support_correlation_id`.
 - Disconnect/revoke notes from a live WordPress site.
+- Desktop Mode hook-audit report and release evidence sidecar.

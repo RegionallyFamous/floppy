@@ -8,6 +8,7 @@ This wiki holds the technical material that should not crowd the public README:
 - [WordPress Plugin](WordPress-Plugin.md)
 - [macOS App](Mac-App.md)
 - [Security And Sync](Security-And-Sync.md)
+- [Desktop Mode And Release Evidence](Desktop-Mode-Release-Evidence.md)
 - [Release Checklist](Release-Checklist.md)
 - [Known Limits](Known-Limits.md)
 

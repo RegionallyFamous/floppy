@@ -397,6 +397,29 @@ public actor LocalLedger {
         }
     }
 
+    public func conflictCenterItems(accountID: String? = nil, limit: Int = 25) -> [FloppyConflictCenterItem] {
+        do {
+            let resolvedAccountID = try defaultAccountID(accountID)
+            return try store.conflictCenterItems(accountID: resolvedAccountID, limit: limit)
+        } catch {
+            FloppyDiagnostics.ledger.error("Failed loading conflict center items: \(error.localizedDescription, privacy: .public)")
+            return []
+        }
+    }
+
+    public func markConflictResolved(id: UUID, accountID: String? = nil) throws {
+        let resolvedAccountID = try defaultAccountID(accountID)
+        try store.updateConflictState(id: id, accountID: resolvedAccountID, state: "resolved")
+    }
+
+    public func discardLocalConflictCopy(id: UUID, accountID: String? = nil) throws {
+        let resolvedAccountID = try defaultAccountID(accountID)
+        if let path = try store.conflictMaterializedPath(id: id, accountID: resolvedAccountID), !path.isEmpty {
+            try? FileManager.default.removeItem(atPath: path)
+        }
+        try store.updateConflictState(id: id, accountID: resolvedAccountID, state: "resolved")
+    }
+
     public func integrityReport(accountID: String? = nil) -> FloppyLedgerIntegrityReport {
         do {
             let resolvedAccountID = try defaultAccountID(accountID)
@@ -842,6 +865,80 @@ private final class SQLiteLedgerStore {
             missingItemRecordCount: missingItemRecordCount,
             reasons: reasons
         )
+    }
+
+    func conflictCenterItems(accountID: String, limit: Int) throws -> [FloppyConflictCenterItem] {
+        let statement = try prepare("""
+            SELECT id, account_id, item_uuid, message, display_name, parent_id, parent_uuid, materialized_path, original_content_version, state, created_at
+            FROM conflicts
+            WHERE account_id = ?
+            ORDER BY
+                CASE WHEN state = 'resolved' THEN 1 ELSE 0 END ASC,
+                created_at DESC
+            LIMIT ?
+            """)
+        defer { sqlite3_finalize(statement) }
+
+        bind(accountID, to: statement, at: 1)
+        sqlite3_bind_int(statement, 2, Int32(max(1, min(limit, 100))))
+
+        var items: [FloppyConflictCenterItem] = []
+        while try step(statement) == SQLITE_ROW {
+            guard let id = UUID(uuidString: columnText(statement, 0)) else {
+                continue
+            }
+            let materializedPath = columnText(statement, 7)
+            let conflict = FloppyConflict(
+                id: id,
+                accountID: columnText(statement, 1),
+                itemUUID: columnText(statement, 2),
+                message: columnText(statement, 3),
+                displayName: columnText(statement, 4),
+                parentID: sqlite3_column_int64(statement, 5),
+                parentUUID: columnText(statement, 6),
+                materializedPath: materializedPath,
+                originalContentVersion: columnText(statement, 8),
+                state: columnText(statement, 9),
+                createdAt: Date(timeIntervalSinceReferenceDate: sqlite3_column_double(statement, 10))
+            )
+            items.append(FloppyConflictCenterPresenter.item(
+                from: conflict,
+                localFileExists: !materializedPath.isEmpty && FileManager.default.fileExists(atPath: materializedPath)
+            ))
+        }
+        return items
+    }
+
+    func updateConflictState(id: UUID, accountID: String, state: String) throws {
+        let statement = try prepare("""
+            UPDATE conflicts
+            SET state = ?
+            WHERE id = ? AND account_id = ?
+            """)
+        defer { sqlite3_finalize(statement) }
+
+        bind(state, to: statement, at: 1)
+        bind(id.uuidString, to: statement, at: 2)
+        bind(accountID, to: statement, at: 3)
+        try finish(statement)
+    }
+
+    func conflictMaterializedPath(id: UUID, accountID: String) throws -> String? {
+        let statement = try prepare("""
+            SELECT materialized_path
+            FROM conflicts
+            WHERE id = ? AND account_id = ?
+            LIMIT 1
+            """)
+        defer { sqlite3_finalize(statement) }
+
+        bind(id.uuidString, to: statement, at: 1)
+        bind(accountID, to: statement, at: 2)
+        guard try step(statement) == SQLITE_ROW else {
+            return nil
+        }
+        let path = columnText(statement, 0)
+        return path.isEmpty ? nil : path
     }
 
     func integrityReport(accountID: String) throws -> FloppyLedgerIntegrityReport {

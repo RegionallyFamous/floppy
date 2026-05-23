@@ -53,6 +53,179 @@ public struct FloppyMacDiagnosticsBundleV2: Codable, Equatable, Sendable {
     }
 }
 
+public struct FloppyMacDiagnosticsBundleV3: Codable, Equatable, Sendable {
+    public let format: String
+    public let createdAt: String
+    public let support: FloppySupportCorrelation
+    public let app: FloppyMacDiagnosticsAppInfo
+    public let selectedAccount: FloppyMacDiagnosticsSelectedAccount
+    public let ledger: FloppyMacDiagnosticsLedgerInfo
+    public let domains: [[String: String]]
+    public let keychain: FloppyMacDiagnosticsKeychainInfo
+    public let onboarding: FloppyMacDiagnosticsOnboardingInfo
+    public let fileProvider: FloppyFileProviderLifecycleDiagnostic
+    public let finderSync: FloppyMacDiagnosticsFinderSyncInfo
+    public let conflictCenter: FloppyMacDiagnosticsConflictCenterInfo
+    public let materialization: FloppyMacDiagnosticsMaterializationInfo
+    public let versionRestores: FloppyMacDiagnosticsVersionRestoreInfo
+    public let releaseBuild: FloppyReleaseBuildIdentity
+    public let releaseEvidence: FloppyReleaseEvidenceSummary
+    public let lastStatus: String
+
+    public init(
+        createdAt: String,
+        support: FloppySupportCorrelation,
+        app: FloppyMacDiagnosticsAppInfo,
+        selectedAccount: FloppyMacDiagnosticsSelectedAccount,
+        ledger: FloppyMacDiagnosticsLedgerInfo,
+        domains: [[String: String]],
+        keychain: FloppyMacDiagnosticsKeychainInfo,
+        onboarding: FloppyMacDiagnosticsOnboardingInfo,
+        fileProvider: FloppyFileProviderLifecycleDiagnostic,
+        finderSync: FloppyMacDiagnosticsFinderSyncInfo,
+        conflictCenter: FloppyMacDiagnosticsConflictCenterInfo,
+        materialization: FloppyMacDiagnosticsMaterializationInfo,
+        versionRestores: FloppyMacDiagnosticsVersionRestoreInfo,
+        releaseBuild: FloppyReleaseBuildIdentity,
+        releaseEvidence: FloppyReleaseEvidenceSummary,
+        lastStatus: String
+    ) {
+        self.format = "floppy-mac-diagnostics-v3"
+        self.createdAt = createdAt
+        self.support = support
+        self.app = app
+        self.selectedAccount = selectedAccount
+        self.ledger = ledger
+        self.domains = domains
+        self.keychain = keychain
+        self.onboarding = onboarding
+        self.fileProvider = fileProvider
+        self.finderSync = finderSync
+        self.conflictCenter = conflictCenter
+        self.materialization = materialization
+        self.versionRestores = versionRestores
+        self.releaseBuild = releaseBuild
+        self.releaseEvidence = releaseEvidence
+        self.lastStatus = lastStatus
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case format
+        case createdAt = "created_at"
+        case support
+        case app
+        case selectedAccount = "selected_account"
+        case ledger
+        case domains
+        case keychain
+        case onboarding
+        case fileProvider = "file_provider"
+        case finderSync = "finder_sync"
+        case conflictCenter = "conflict_center"
+        case materialization
+        case versionRestores = "version_restores"
+        case releaseBuild = "release_build"
+        case releaseEvidence = "release_evidence"
+        case lastStatus = "last_status"
+    }
+}
+
+public struct FloppyMacDiagnosticsFinderSyncInfo: Codable, Equatable, Sendable {
+    public let state: FloppyFinderSyncState
+    public let message: String
+    public let recoveryActions: [FloppyFileProviderRecoveryAction]
+    public let pendingOperations: Int
+    public let openConflicts: Int
+    public let activeEnumerators: Int
+    public let lastCursor: String
+    public let lastSyncAt: String
+
+    public init(
+        decision: FloppyRecoveryDecision,
+        pendingOperations: Int,
+        openConflicts: Int,
+        activeEnumerators: Int,
+        lastCursor: String,
+        lastSyncAt: String
+    ) {
+        self.state = decision.state
+        self.message = decision.message
+        self.recoveryActions = decision.actions
+        self.pendingOperations = pendingOperations
+        self.openConflicts = openConflicts
+        self.activeEnumerators = activeEnumerators
+        self.lastCursor = lastCursor
+        self.lastSyncAt = lastSyncAt
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case state
+        case message
+        case recoveryActions = "recovery_actions"
+        case pendingOperations = "pending_operations"
+        case openConflicts = "open_conflicts"
+        case activeEnumerators = "active_enumerators"
+        case lastCursor = "last_cursor"
+        case lastSyncAt = "last_sync_at"
+    }
+}
+
+public struct FloppyMacDiagnosticsConflictCenterInfo: Codable, Equatable, Sendable {
+    public let summary: FloppyConflictCenterSummary
+    public let recent: [FloppyConflictCenterItem]
+
+    public init(summary: FloppyConflictCenterSummary, recent: [FloppyConflictCenterItem]) {
+        self.summary = summary
+        self.recent = recent
+    }
+
+    public static var empty: FloppyMacDiagnosticsConflictCenterInfo {
+        FloppyMacDiagnosticsConflictCenterInfo(summary: .empty, recent: [])
+    }
+}
+
+public struct FloppyMacDiagnosticsMaterializationInfo: Codable, Equatable, Sendable {
+    public let retries: Int
+    public let checksumFailures: Int
+    public let partialFileQuarantineCount: Int
+    public let lastFailure: String
+
+    public init(retries: Int = 0, checksumFailures: Int = 0, partialFileQuarantineCount: Int = 0, lastFailure: String = "") {
+        self.retries = retries
+        self.checksumFailures = checksumFailures
+        self.partialFileQuarantineCount = partialFileQuarantineCount
+        self.lastFailure = lastFailure
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case retries
+        case checksumFailures = "checksum_failures"
+        case partialFileQuarantineCount = "partial_file_quarantine_count"
+        case lastFailure = "last_failure"
+    }
+}
+
+public struct FloppyMacDiagnosticsVersionRestoreInfo: Codable, Equatable, Sendable {
+    public let supportedByServer: String
+    public let restoresAttempted: Int
+    public let lastRestoreAt: String
+    public let lastError: String
+
+    public init(supportedByServer: String = "unknown", restoresAttempted: Int = 0, lastRestoreAt: String = "", lastError: String = "") {
+        self.supportedByServer = supportedByServer
+        self.restoresAttempted = restoresAttempted
+        self.lastRestoreAt = lastRestoreAt
+        self.lastError = lastError
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case supportedByServer = "supported_by_server"
+        case restoresAttempted = "restores_attempted"
+        case lastRestoreAt = "last_restore_at"
+        case lastError = "last_error"
+    }
+}
+
 public struct FloppyMacDiagnosticsAppInfo: Codable, Equatable, Sendable {
     public let version: String
     public let bundleID: String

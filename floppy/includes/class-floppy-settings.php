@@ -22,6 +22,9 @@ final class Floppy_Settings {
 			'site_quota_bytes'       => 0,
 			'sync_retention_days'    => 45,
 			'tombstone_retention_days' => 90,
+			'version_retention_limit' => 10,
+			'thumbnail_max_edge'      => 512,
+			'thumbnail_inline_max_size' => 20 * MB_IN_BYTES,
 			'allowed_mimes'          => array_keys( get_allowed_mime_types() ),
 			'enable_desktop_mode'    => true,
 		);
