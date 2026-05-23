@@ -6,6 +6,7 @@ CONFIGURATION="${CONFIGURATION:-release}"
 APP_NAME="Floppy.app"
 EXECUTABLE_NAME="FloppyMac"
 ZIP_PATH="$ROOT/.build/Floppy.zip"
+BUILD_NUMBER="${BUILD_NUMBER:-$(date +%Y%m%d%H%M%S)}"
 
 swift build --package-path "$ROOT" -c "$CONFIGURATION"
 
@@ -27,7 +28,7 @@ cp "$ROOT/Packaging/FloppyMenuBarTemplate.pdf" "$RESOURCES_DIR/FloppyMenuBarTemp
 chmod +x "$MACOS_DIR/$EXECUTABLE_NAME"
 
 /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString 0.1.0" "$CONTENTS_DIR/Info.plist"
-/usr/libexec/PlistBuddy -c "Set :CFBundleVersion 1" "$CONTENTS_DIR/Info.plist"
+/usr/libexec/PlistBuddy -c "Set :CFBundleVersion $BUILD_NUMBER" "$CONTENTS_DIR/Info.plist"
 /usr/libexec/PlistBuddy -c "Set :FloppyKeychainAccessGroup " "$CONTENTS_DIR/Info.plist"
 /usr/libexec/PlistBuddy -c "Set :FloppyAppGroupIdentifier group.com.floppy.mac" "$CONTENTS_DIR/Info.plist"
 

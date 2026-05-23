@@ -13,8 +13,8 @@
 	<exclude-pattern>floppy/tests/load/*</exclude-pattern>
 	<exclude-pattern>*/vendor/*</exclude-pattern>
 
-	<config name="testVersion" value="7.4-"/>
-	<config name="minimum_supported_wp_version" value="6.0"/>
+	<config name="testVersion" value="8.3-"/>
+	<config name="minimum_supported_wp_version" value="7.0"/>
 
 	<rule ref="PHPCompatibilityWP"/>
 	<rule ref="Generic.PHP.BacktickOperator"/>

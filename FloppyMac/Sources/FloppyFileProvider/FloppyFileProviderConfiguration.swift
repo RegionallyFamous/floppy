@@ -7,12 +7,7 @@ enum FloppyFileProviderConfiguration {
     static let tokenService = "com.floppy.mac.token"
 
     static func makeAPIClient(for domain: NSFileProviderDomain) throws -> FloppyAPIClient {
-        let userInfo: [AnyHashable: Any]
-        if #available(macOS 15.0, *) {
-            userInfo = domain.userInfo ?? [:]
-        } else {
-            userInfo = [:]
-        }
+        let userInfo = domain.userInfo ?? [:]
 
         let registryRecord: FloppyDomainRecord?
         do {

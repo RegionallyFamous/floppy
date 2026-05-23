@@ -41,8 +41,10 @@ final class Floppy_Desktop_Mode {
 			FLOPPY_URL . 'assets/js/desktop-mode.js',
 			array( 'wp-api-fetch', 'wp-hooks', 'wp-i18n' ),
 			FLOPPY_VERSION,
-			true
+			self::script_args()
 		);
+
+		wp_set_script_translations( self::SCRIPT_HANDLE, 'floppy' );
 
 		wp_add_inline_script(
 			self::SCRIPT_HANDLE,
@@ -61,6 +63,18 @@ final class Floppy_Desktop_Mode {
 				)
 			) . ';',
 			'before'
+		);
+	}
+
+	/**
+	 * Get core WordPress script-loading args.
+	 *
+	 * @return array<string, bool|string>
+	 */
+	private static function script_args(): array {
+		return array(
+			'in_footer' => true,
+			'strategy'  => 'defer',
 		);
 	}
 

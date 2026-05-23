@@ -215,6 +215,8 @@ struct SettingsView: View {
             }
 
             SettingsCard("Actions", systemImage: "bolt") {
+                SettingsInfoRow("Status", value: model.status, systemImage: model.isWorking ? "hourglass" : "info.circle", valueLineLimit: 2)
+
                 HStack(spacing: 10) {
                     SettingsActionButton("Open Folder", systemImage: "folder", prominence: .primary) {
                         model.openNativeFolder()
@@ -222,7 +224,7 @@ struct SettingsView: View {
                     .disabled(model.selectedAccount == nil)
 
                     SettingsActionButton("Refresh", systemImage: "arrow.clockwise") {
-                        Task { await model.refreshSelectedAccountIfStale(maxAge: 0) }
+                        model.refreshSelectedAccountFromSettings()
                     }
                     .disabled(!canRunNetworkAction)
 
@@ -535,12 +537,14 @@ private struct SettingsInfoRow: View {
     let value: String
     let systemImage: String
     let monospaced: Bool
+    let valueLineLimit: Int
 
-    init(_ title: String, value: String, systemImage: String, monospaced: Bool = false) {
+    init(_ title: String, value: String, systemImage: String, monospaced: Bool = false, valueLineLimit: Int = 1) {
         self.title = title
         self.value = value
         self.systemImage = systemImage
         self.monospaced = monospaced
+        self.valueLineLimit = valueLineLimit
     }
 
     var body: some View {
@@ -554,7 +558,7 @@ private struct SettingsInfoRow: View {
             Text(value)
                 .font(monospaced ? .system(.callout, design: .monospaced) : .callout)
                 .foregroundStyle(.secondary)
-                .lineLimit(1)
+                .lineLimit(valueLineLimit)
                 .truncationMode(.middle)
                 .multilineTextAlignment(.trailing)
         }
@@ -727,6 +731,8 @@ private struct SettingsActionButton: View {
         Button(role: role, action: action) {
             Label(title, systemImage: systemImage)
                 .labelStyle(.titleAndIcon)
+                .frame(minWidth: 82)
+                .contentShape(Rectangle())
         }
     }
 }

@@ -32,8 +32,8 @@ final class Floppy_Compatibility {
 
 		$checks = array();
 
-		$checks['php'] = self::check( version_compare( PHP_VERSION, '7.4', '>=' ), sprintf( 'PHP %s', PHP_VERSION ), 'PHP 7.4+ is required.' );
-		$checks['wordpress'] = self::check( version_compare( get_bloginfo( 'version' ), '6.0', '>=' ), 'WordPress ' . get_bloginfo( 'version' ), 'WordPress 6.0+ is required.' );
+		$checks['php'] = self::check( version_compare( PHP_VERSION, '8.3', '>=' ), sprintf( 'PHP %s', PHP_VERSION ), 'PHP 8.3+ is required.' );
+		$checks['wordpress'] = self::check( version_compare( get_bloginfo( 'version' ), '7.0', '>=' ), 'WordPress ' . get_bloginfo( 'version' ), 'WordPress 7.0+ is required.' );
 		$checks['desktop_mode'] = function_exists( 'desktop_mode_register_window' )
 			? self::check( true, 'Desktop Mode integration', '' )
 			: self::warning( 'Desktop Mode not detected', 'Desktop Mode is optional. Install it only if you want the browser-native Floppy desktop surface inside WordPress.' );

@@ -9,10 +9,18 @@ struct FloppyMacApp: App {
     init() {
         let model = FloppyAppModel()
         _model = StateObject(wrappedValue: model)
-        FloppyStatusItemController.shared.install(model: model)
     }
 
     var body: some Scene {
+        MenuBarExtra {
+            MenuBarView(model: model)
+        } label: {
+            FloppyMenuBarIcon()
+                .frame(width: 18, height: 18)
+                .accessibilityLabel("Floppy")
+        }
+        .menuBarExtraStyle(.window)
+
         Settings {
             SettingsView(model: model)
         }
@@ -26,34 +34,6 @@ final class FloppyAppDelegate: NSObject, NSApplicationDelegate {
                 FloppyURLRouter.shared.open(url)
             }
         }
-    }
-}
-
-@MainActor
-final class FloppySettingsWindowController {
-    static let shared = FloppySettingsWindowController()
-
-    private var window: NSWindow?
-
-    func show(model: FloppyAppModel) {
-        let window = window ?? makeWindow(model: model)
-        self.window = window
-        window.center()
-        window.makeKeyAndOrderFront(nil)
-        NSApp.activate()
-    }
-
-    private func makeWindow(model: FloppyAppModel) -> NSWindow {
-        let controller = NSHostingController(rootView: SettingsView(model: model))
-        let window = NSWindow(contentViewController: controller)
-        window.title = "Floppy Settings"
-        window.styleMask = [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView]
-        window.titlebarAppearsTransparent = true
-        window.toolbarStyle = .unifiedCompact
-        window.isReleasedWhenClosed = false
-        window.minSize = NSSize(width: 860, height: 560)
-        window.setContentSize(NSSize(width: 900, height: 620))
-        return window
     }
 }
 

@@ -4,8 +4,8 @@
  * Plugin URI: https://example.com/floppy
  * Description: Private, WordPress-owned file storage for Desktop Mode and Finder-native sync.
  * Version: 0.1.1
- * Requires at least: 6.0
- * Requires PHP: 7.4
+ * Requires at least: 7.0
+ * Requires PHP: 8.3
  * Author: Floppy Contributors
  * License: GPL-2.0-or-later
  * License URI: https://www.gnu.org/licenses/gpl-2.0.html

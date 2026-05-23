@@ -8,18 +8,14 @@ struct FloppyMenuBarIcon: View {
                 x: (proxy.size.width - side) / 2,
                 y: (proxy.size.height - side) / 2
             )
-            ZStack {
-                FloppyMenuBarSlashMark(origin: origin, side: side)
-                    .stroke(.primary, style: StrokeStyle(lineWidth: side * 0.106, lineCap: .round, lineJoin: .round))
-                FloppyMenuBarColonMark(origin: origin, side: side)
-                    .fill(.primary)
-            }
+            FloppyMenuBarMark(origin: origin, side: side)
+                .fill(.primary, style: FillStyle(eoFill: true))
         }
         .aspectRatio(1, contentMode: .fit)
     }
 }
 
-private struct FloppyMenuBarSlashMark: Shape {
+private struct FloppyMenuBarMark: Shape {
     let origin: CGPoint
     let side: CGFloat
 
@@ -27,28 +23,43 @@ private struct FloppyMenuBarSlashMark: Shape {
         var path = Path()
         let t = FloppyIconTransform(origin: origin, side: side)
 
-        path.move(to: t.point(2.4, 14.2))
-        path.addLine(to: t.point(5.5, 3.9))
-        path.addLine(to: t.point(8.6, 14.2))
-        path.move(to: t.point(3.5, 10.5))
-        path.addLine(to: t.point(7.5, 10.5))
-        path.move(to: t.point(15.6, 4.1))
-        path.addLine(to: t.point(12.5, 14.1))
+        addPolygon([
+            t.point(0.92, 15.25),
+            t.point(4.62, 2.85),
+            t.point(6.88, 2.85),
+            t.point(10.62, 15.25),
+            t.point(7.72, 15.25),
+            t.point(7.08, 12.78),
+            t.point(4.36, 12.78),
+            t.point(3.7, 15.25)
+        ], to: &path)
+        addPolygon([
+            t.point(4.52, 10.45),
+            t.point(6.92, 10.45),
+            t.point(5.72, 6.45)
+        ], to: &path)
+        path.addEllipse(in: t.rect(centerX: 11.65, centerY: 7.05, radius: 0.92))
+        path.addEllipse(in: t.rect(centerX: 11.65, centerY: 12.28, radius: 0.92))
+        addPolygon([
+            t.point(16.02, 2.85),
+            t.point(17.5, 2.85),
+            t.point(14.02, 15.25),
+            t.point(12.54, 15.25)
+        ], to: &path)
 
         return path
     }
-}
 
-private struct FloppyMenuBarColonMark: Shape {
-    let origin: CGPoint
-    let side: CGFloat
+    private func addPolygon(_ points: [CGPoint], to path: inout Path) {
+        guard let first = points.first else {
+            return
+        }
 
-    func path(in rect: CGRect) -> Path {
-        var path = Path()
-        let t = FloppyIconTransform(origin: origin, side: side)
-        path.addEllipse(in: t.rect(centerX: 10.6, centerY: 7.6, radius: 0.85))
-        path.addEllipse(in: t.rect(centerX: 10.6, centerY: 12.0, radius: 0.85))
-        return path
+        path.move(to: first)
+        for point in points.dropFirst() {
+            path.addLine(to: point)
+        }
+        path.closeSubpath()
     }
 }
 

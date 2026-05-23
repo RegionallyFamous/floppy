@@ -15,9 +15,17 @@ public enum FloppyTokenStoreError: Error, LocalizedError {
     public var errorDescription: String? {
         switch self {
         case .keychain(let status):
-            "Keychain operation failed with status \(status)."
+            if status == errSecInteractionNotAllowed {
+                return "Keychain access is unavailable for this development build. Reconnect this site, or use the signed Developer ID build once Apple approves the account."
+            }
+
+            if let message = SecCopyErrorMessageString(status, nil) as String? {
+                return "Keychain operation failed: \(message)"
+            }
+
+            return "Keychain operation failed with status \(status)."
         case .timeout:
-            "Keychain operation timed out."
+            return "Keychain operation timed out."
         }
     }
 }

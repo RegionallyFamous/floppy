@@ -64,17 +64,17 @@ struct MenuBarView: View {
                 } label: {
                     Image(systemName: "arrow.clockwise")
                 }
-                .buttonStyle(FloppyIconButtonStyle())
+                .buttonStyle(.borderless)
+                .controlSize(.small)
                 .help("Sync now")
                 .accessibilityLabel("Sync now")
                 .disabled(model.selectedAccount == nil || model.isWorking)
 
-                Button {
-                    model.openSettingsWindow()
-                } label: {
+                SettingsLink {
                     Image(systemName: "gearshape")
                 }
-                .buttonStyle(FloppyIconButtonStyle())
+                .buttonStyle(.borderless)
+                .controlSize(.small)
                 .help("Settings")
                 .accessibilityLabel("Open Floppy Settings")
             }
@@ -82,57 +82,7 @@ struct MenuBarView: View {
     }
 
     private var connectPanel: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text("Connect WordPress")
-                .font(.system(size: 15, weight: .semibold))
-
-            TextField("https://example.com", text: $model.siteURLText)
-                .textFieldStyle(.roundedBorder)
-                .accessibilityLabel("WordPress site URL")
-                .accessibilityHint("Enter the WordPress site to connect with Floppy.")
-
-            HStack(spacing: 8) {
-                Button {
-                    model.startBrowserApproval()
-                } label: {
-                    Label(model.isOnboarding ? "Connecting" : "Install & Connect", systemImage: model.onboardingStep.systemImage)
-                }
-                .buttonStyle(FloppyPrimaryButtonStyle())
-                .accessibilityHint("Opens WordPress in your browser to approve this Mac.")
-                .disabled(model.isOnboarding)
-
-                if model.isOnboarding {
-                    Button {
-                        model.cancelOnboarding()
-                    } label: {
-                        Image(systemName: "xmark")
-                    }
-                    .buttonStyle(FloppyIconButtonStyle())
-                    .help("Cancel")
-                    .accessibilityLabel("Cancel setup")
-                }
-            }
-
-            DisclosureGroup(isExpanded: $showsAdvanced) {
-                VStack(alignment: .leading, spacing: 7) {
-                    TextField("GitHub release ZIP", text: $model.githubPluginZipURLText)
-                        .textFieldStyle(.roundedBorder)
-                        .accessibilityLabel("GitHub release ZIP URL")
-                    TextField("Plugin file", text: $model.pluginMainFile)
-                        .textFieldStyle(.roundedBorder)
-                        .accessibilityLabel("Plugin main file")
-                    TextField("Device name", text: $model.deviceName)
-                        .textFieldStyle(.roundedBorder)
-                        .accessibilityLabel("Device name")
-                }
-                .padding(.top, 6)
-            } label: {
-                Label("Advanced", systemImage: "slider.horizontal.3")
-                    .font(.system(size: 12, weight: .medium))
-            }
-        }
-        .padding(12)
-        .background(.quaternary.opacity(0.36), in: RoundedRectangle(cornerRadius: 9, style: .continuous))
+        FloppyOnboardingFlowView(model: model, showsAdvanced: $showsAdvanced, layout: .compact)
     }
 
     private var connectedPanel: some View {
@@ -144,7 +94,8 @@ struct MenuBarView: View {
                     Label("Open Folder", systemImage: "folder")
                         .frame(maxWidth: .infinity)
                 }
-                .buttonStyle(FloppyPrimaryButtonStyle())
+                .buttonStyle(.borderedProminent)
+                .controlSize(.large)
 
                 Button {
                     model.chooseFilesForUpload()
@@ -152,7 +103,8 @@ struct MenuBarView: View {
                     Label("Add Files", systemImage: "plus")
                         .frame(maxWidth: .infinity)
                 }
-                .buttonStyle(FloppySecondaryButtonStyle())
+                .buttonStyle(.bordered)
+                .controlSize(.large)
                 .disabled(model.isWorking || !model.isNetworkReachable)
             }
 
@@ -256,12 +208,11 @@ struct MenuBarView: View {
 
                 Spacer(minLength: 8)
 
-                Button {
-                    model.openSettingsWindow()
-                } label: {
+                SettingsLink {
                     Label("Settings", systemImage: "gearshape")
                 }
-                .buttonStyle(FloppyFooterButtonStyle())
+                .buttonStyle(.bordered)
+                .controlSize(.small)
                 .accessibilityLabel("Open Floppy Settings")
 
                 Button {
@@ -269,7 +220,8 @@ struct MenuBarView: View {
                 } label: {
                     Label("Quit", systemImage: "power")
                 }
-                .buttonStyle(FloppyFooterButtonStyle())
+                .buttonStyle(.bordered)
+                .controlSize(.small)
                 .accessibilityLabel("Quit Floppy")
             }
         }
@@ -352,63 +304,5 @@ struct MenuBarView: View {
     private func recentItemAccessibilityLabel(_ item: FloppyItem) -> String {
         let kind = item.kind == .folder ? "Folder" : "File"
         return "\(kind), \(item.name), synced"
-    }
-}
-
-private struct FloppyPrimaryButtonStyle: ButtonStyle {
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .font(.system(size: 14, weight: .semibold))
-            .foregroundStyle(.white)
-            .padding(.horizontal, 12)
-            .frame(height: 38)
-            .background(
-                LinearGradient(
-                    colors: [
-                        Color(red: 0.13, green: 0.48, blue: 0.96),
-                        Color(red: 0.09, green: 0.36, blue: 0.84)
-                    ],
-                    startPoint: .top,
-                    endPoint: .bottom
-                ),
-                in: RoundedRectangle(cornerRadius: 8, style: .continuous)
-            )
-            .opacity(configuration.isPressed ? 0.82 : 1)
-    }
-}
-
-private struct FloppySecondaryButtonStyle: ButtonStyle {
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .font(.system(size: 14, weight: .semibold))
-            .foregroundStyle(.primary)
-            .padding(.horizontal, 12)
-            .frame(height: 38)
-            .background(.secondary.opacity(configuration.isPressed ? 0.22 : 0.14), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-            .overlay {
-                RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .stroke(.white.opacity(0.08), lineWidth: 1)
-            }
-    }
-}
-
-private struct FloppyIconButtonStyle: ButtonStyle {
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .font(.system(size: 13, weight: .semibold))
-            .foregroundStyle(.primary)
-            .frame(width: 30, height: 30)
-            .background(.secondary.opacity(configuration.isPressed ? 0.24 : 0.12), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-    }
-}
-
-private struct FloppyFooterButtonStyle: ButtonStyle {
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .font(.system(size: 12, weight: .semibold))
-            .foregroundStyle(.secondary)
-            .padding(.horizontal, 9)
-            .frame(height: 28)
-            .background(.secondary.opacity(configuration.isPressed ? 0.20 : 0.10), in: RoundedRectangle(cornerRadius: 7, style: .continuous))
     }
 }

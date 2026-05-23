@@ -28,13 +28,11 @@ enum FileProviderDomainController {
             displayName: record.displayName
         )
 
-        if #available(macOS 15.0, *) {
-            domain.userInfo = [
-                "accountID": record.accountID,
-                "siteURL": record.siteURL.absoluteString,
-                "restURL": record.restURL.absoluteString
-            ]
-        }
+        domain.userInfo = [
+            "accountID": record.accountID,
+            "siteURL": record.siteURL.absoluteString,
+            "restURL": record.restURL.absoluteString
+        ]
 
         do {
             try await addFileProviderDomain(domain, timeout: 5)

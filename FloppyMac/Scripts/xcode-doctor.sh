@@ -3,6 +3,9 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 XCODE_DEVELOPER_DIR="${DEVELOPER_DIR:-/Applications/Xcode.app/Contents/Developer}"
+if [[ "$XCODE_DEVELOPER_DIR" == *.app ]]; then
+    XCODE_DEVELOPER_DIR="$XCODE_DEVELOPER_DIR/Contents/Developer"
+fi
 ACTIVE_DEVELOPER_DIR="$(xcode-select -p 2>/dev/null || true)"
 SWIFT_SCRATCH_PATH="${SWIFT_SCRATCH_PATH:-${TMPDIR:-/tmp}/floppy-xcode-doctor-build}"
 

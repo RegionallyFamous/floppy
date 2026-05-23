@@ -4,7 +4,7 @@ import Foundation
 import FloppyCore
 import UniformTypeIdentifiers
 
-final class FloppyFileProviderExtension: NSObject, NSFileProviderReplicatedExtension {
+final class FloppyFileProviderExtension: NSObject, NSFileProviderReplicatedExtension, @unchecked Sendable {
     private let domain: NSFileProviderDomain
     private let apiClient: FloppyAPIClient?
     private let configurationError: Error?
@@ -36,7 +36,9 @@ final class FloppyFileProviderExtension: NSObject, NSFileProviderReplicatedExten
         completionHandler: @escaping (NSFileProviderItem?, Error?) -> Void
     ) -> Progress {
         let progress = Progress(totalUnitCount: 1)
+        let completionBox = FloppyUncheckedSendableBox(value: completionHandler)
         Task {
+            let completionHandler = completionBox.value
             if identifier == .rootContainer {
                 progress.completedUnitCount = 1
                 completionHandler(FloppyFileProviderItem(item: .rootFileProviderItem), nil)
@@ -82,7 +84,11 @@ final class FloppyFileProviderExtension: NSObject, NSFileProviderReplicatedExten
             return progress
         }
 
+        let completionBox = FloppyUncheckedSendableBox(value: completionHandler)
+        let requestedVersionBox = FloppyUncheckedSendableBox(value: requestedVersion)
         let task = Task {
+            let completionHandler = completionBox.value
+            let requestedVersion = requestedVersionBox.value
             do {
                 guard let apiClient else {
                     throw NSFileProviderError(.notAuthenticated)
@@ -135,7 +141,13 @@ final class FloppyFileProviderExtension: NSObject, NSFileProviderReplicatedExten
         completionHandler: @escaping (NSFileProviderItem?, NSFileProviderItemFields, Bool, Error?) -> Void
     ) -> Progress {
         let progress = Progress(totalUnitCount: 100)
+        let itemTemplateBox = FloppyUncheckedSendableBox(value: itemTemplate)
+        let fieldsBox = FloppyUncheckedSendableBox(value: fields)
+        let completionBox = FloppyUncheckedSendableBox(value: completionHandler)
         let task = Task {
+            let itemTemplate = itemTemplateBox.value
+            let fields = fieldsBox.value
+            let completionHandler = completionBox.value
             do {
                 guard let apiClient else {
                     throw NSFileProviderError(.notAuthenticated)
@@ -186,7 +198,15 @@ final class FloppyFileProviderExtension: NSObject, NSFileProviderReplicatedExten
             return progress
         }
 
+        let itemBox = FloppyUncheckedSendableBox(value: item)
+        let versionBox = FloppyUncheckedSendableBox(value: version)
+        let changedFieldsBox = FloppyUncheckedSendableBox(value: changedFields)
+        let completionBox = FloppyUncheckedSendableBox(value: completionHandler)
         let task = Task {
+            let item = itemBox.value
+            let version = versionBox.value
+            let changedFields = changedFieldsBox.value
+            let completionHandler = completionBox.value
             do {
                 guard let apiClient else {
                     throw NSFileProviderError(.notAuthenticated)
@@ -265,7 +285,13 @@ final class FloppyFileProviderExtension: NSObject, NSFileProviderReplicatedExten
             return progress
         }
 
+        let completionBox = FloppyUncheckedSendableBox(value: completionHandler)
+        let versionBox = FloppyUncheckedSendableBox(value: version)
+        let optionsBox = FloppyUncheckedSendableBox(value: options)
         let task = Task {
+            let completionHandler = completionBox.value
+            let version = versionBox.value
+            let options = optionsBox.value
             do {
                 guard let item = await resolveItem(identifier) else {
                     throw NSFileProviderError(.cannotSynchronize)

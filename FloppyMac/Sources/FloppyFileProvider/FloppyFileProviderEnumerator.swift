@@ -2,7 +2,7 @@ import FileProvider
 import Foundation
 import FloppyCore
 
-final class FloppyFileProviderEnumerator: NSObject, NSFileProviderEnumerator {
+final class FloppyFileProviderEnumerator: NSObject, NSFileProviderEnumerator, @unchecked Sendable {
     private enum Scope {
         case folder(NSFileProviderItemIdentifier)
         case workingSet
@@ -31,7 +31,9 @@ final class FloppyFileProviderEnumerator: NSObject, NSFileProviderEnumerator {
     }
 
     func enumerateItems(for observer: NSFileProviderEnumerationObserver, startingAt page: NSFileProviderPage) {
+        let observerBox = FloppyUncheckedSendableBox(value: observer)
         Task {
+            let observer = observerBox.value
             do {
                 switch scope {
                 case .folder(let containerItemIdentifier):
@@ -57,7 +59,9 @@ final class FloppyFileProviderEnumerator: NSObject, NSFileProviderEnumerator {
     }
 
     func enumerateChanges(for observer: NSFileProviderChangeObserver, from syncAnchor: NSFileProviderSyncAnchor) {
+        let observerBox = FloppyUncheckedSendableBox(value: observer)
         Task {
+            let observer = observerBox.value
             do {
                 let cursor = UInt64(syncAnchor.floppyToken ?? "0") ?? 0
                 let response = try await apiClient.syncChanges(cursor: cursor, limit: 500)
@@ -86,7 +90,9 @@ final class FloppyFileProviderEnumerator: NSObject, NSFileProviderEnumerator {
     }
 
     func currentSyncAnchor(completionHandler: @escaping (NSFileProviderSyncAnchor?) -> Void) {
+        let completionBox = FloppyUncheckedSendableBox(value: completionHandler)
         Task {
+            let completionHandler = completionBox.value
             completionHandler(await ledger.currentSyncAnchor().map(NSFileProviderSyncAnchor.init(floppyToken:)))
         }
     }

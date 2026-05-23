@@ -122,6 +122,7 @@ final class Floppy_Rest {
 				'methods'             => WP_REST_Server::READABLE,
 				'callback'            => array( __CLASS__, 'search' ),
 				'permission_callback' => array( __CLASS__, 'require_read' ),
+				'args'                => self::search_args(),
 			)
 		);
 
@@ -2685,11 +2686,63 @@ final class Floppy_Rest {
 	 */
 	private static function collection_args(): array {
 		return array(
-			'parent_id' => array( 'sanitize_callback' => 'absint', 'default' => 0 ),
-			'after_id'  => array( 'sanitize_callback' => 'absint', 'default' => 0 ),
-			'cursor'    => array( 'sanitize_callback' => 'sanitize_text_field', 'default' => '' ),
-			'shared'    => array( 'sanitize_callback' => 'rest_sanitize_boolean', 'default' => false ),
-			'limit'     => array( 'sanitize_callback' => 'absint', 'default' => 50 ),
+			'parent_id' => array(
+				'type'              => 'integer',
+				'default'           => 0,
+				'minimum'           => 0,
+				'sanitize_callback' => 'absint',
+			),
+			'after_id'  => array(
+				'type'              => 'integer',
+				'default'           => 0,
+				'minimum'           => 0,
+				'sanitize_callback' => 'absint',
+			),
+			'cursor'    => array(
+				'type'              => 'string',
+				'default'           => '',
+				'pattern'           => '^(folder|file):[0-9]+$|^$',
+				'sanitize_callback' => 'sanitize_text_field',
+			),
+			'shared'    => array(
+				'type'              => 'boolean',
+				'default'           => false,
+				'sanitize_callback' => 'rest_sanitize_boolean',
+			),
+			'limit'     => array(
+				'type'              => 'integer',
+				'default'           => 50,
+				'minimum'           => 1,
+				'maximum'           => 100,
+				'sanitize_callback' => 'absint',
+			),
+		);
+	}
+
+	/**
+	 * Search args.
+	 */
+	private static function search_args(): array {
+		return array(
+			'q'        => array(
+				'type'              => 'string',
+				'required'          => false,
+				'default'           => '',
+				'sanitize_callback' => 'sanitize_text_field',
+			),
+			'limit'    => array(
+				'type'              => 'integer',
+				'default'           => 50,
+				'minimum'           => 1,
+				'maximum'           => 100,
+				'sanitize_callback' => 'absint',
+			),
+			'after_id' => array(
+				'type'              => 'integer',
+				'default'           => 0,
+				'minimum'           => 0,
+				'sanitize_callback' => 'absint',
+			),
 		);
 	}
 

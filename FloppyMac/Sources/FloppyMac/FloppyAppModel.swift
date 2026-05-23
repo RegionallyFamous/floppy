@@ -86,7 +86,6 @@ final class FloppyAppModel: ObservableObject {
         startNetworkMonitoring()
         startBackgroundSyncScheduler()
         accounts = await ledger.accounts()
-        await prepareNativeDomainsIfAvailable(for: accounts)
         selectedAccountID = accounts.first?.id
         if let selectedAccountID {
             items = await ledger.items(accountID: selectedAccountID)
@@ -480,23 +479,9 @@ final class FloppyAppModel: ObservableObject {
         }
 
         status = reason
-        await reconcileSelectedNativeDomain()
+        nativeFolderReadiness = FileProviderDomainController.readiness()
         await syncSelectedAccount(trigger: reason)
         lastAutomaticSyncAt = Date()
-    }
-
-    private func prepareNativeDomainsIfAvailable(for accounts: [FloppyAccount]) async {
-        guard nativeFolderReadiness.isReady else {
-            return
-        }
-
-        for account in accounts {
-            do {
-                try await FileProviderDomainController.register(account: account)
-            } catch {
-                FloppyDiagnostics.fileProvider.error("Native domain preparation failed: \(error.localizedDescription, privacy: .public)")
-            }
-        }
     }
 
     private func pluginInstallState(client: FloppyAPIClient) async throws -> PluginInstallState {
@@ -526,15 +511,18 @@ final class FloppyAppModel: ObservableObject {
             health = nil
             openConflictCount = 0
             pendingTransferCount = 0
+            status = "Connect a WordPress site before refreshing."
             return
         }
 
         guard !refreshInProgress, !syncInProgress else {
+            status = syncInProgress ? "Sync is already running." : "Refresh is already running."
             return
         }
 
         refreshInProgress = true
         isWorking = true
+        status = "Refreshing \(account.siteURL.host ?? account.siteURL.absoluteString)..."
         defer {
             refreshInProgress = false
             isWorking = false
@@ -573,6 +561,22 @@ final class FloppyAppModel: ObservableObject {
         }
 
         await refreshSelectedAccount()
+    }
+
+    func refreshSelectedAccountFromSettings() {
+        guard selectedAccount != nil else {
+            status = "Connect a WordPress site before refreshing."
+            return
+        }
+
+        guard isNetworkReachable else {
+            status = "Floppy is offline. Reconnect before refreshing."
+            return
+        }
+
+        Task {
+            await refreshSelectedAccount()
+        }
     }
 
     func syncSelectedAccount(trigger: String = "Manual sync") async {
@@ -714,7 +718,11 @@ final class FloppyAppModel: ObservableObject {
     }
 
     func openSettingsWindow() {
-        FloppySettingsWindowController.shared.show(model: self)
+        NSApp.activate(ignoringOtherApps: true)
+        let selector = Selector(("showSettingsWindow:"))
+        if !NSApp.sendAction(selector, to: nil, from: nil) {
+            status = "Open Floppy settings from the app menu."
+        }
     }
 
     func openNativeFolder() {
@@ -1022,38 +1030,82 @@ final class FloppyAppModel: ObservableObject {
 
     func disconnectSelectedAccount() {
         guard let account = selectedAccount else {
+            status = "No WordPress site is connected."
             return
         }
+
+        guard !isWorking else {
+            status = "Finish the current Floppy operation before disconnecting."
+            return
+        }
+
+        status = "Disconnecting \(account.siteURL.host ?? account.siteURL.absoluteString)..."
 
         Task {
             isWorking = true
             defer { isWorking = false }
 
             var revokeError: Error?
+            let revokeToken: String?
             do {
-                let client = try await client(for: account)
-                try await client.revokeDevice(deviceUUID: account.deviceUUID)
-                FloppyDiagnostics.app.info("Revoked device token for \(FloppyDiagnostics.redactedURL(account.siteURL), privacy: .public)")
+                revokeToken = try await loadToken(accountID: account.id, timeout: 1.5)
             } catch {
+                revokeToken = nil
                 revokeError = error
-                FloppyDiagnostics.app.error("Server device revoke failed: \(error.localizedDescription, privacy: .public)")
+                FloppyDiagnostics.app.error("Could not read token before local disconnect: \(error.localizedDescription, privacy: .public)")
             }
 
+            var tokenDeleteError: Error?
+            let tokenStore = self.tokenStore
+            let domainIdentifier = FloppyDomainRegistry.domainIdentifier(for: account)
             do {
-                let tokenStore = self.tokenStore
-                let domainIdentifier = FloppyDomainRegistry.domainIdentifier(for: account)
                 try await performTokenOperation {
                     try tokenStore.delete(accountID: account.id)
                     try? tokenStore.delete(accountID: domainIdentifier)
                 }
+            } catch {
+                tokenDeleteError = error
+                FloppyDiagnostics.app.error("Local token cleanup failed during disconnect: \(error.localizedDescription, privacy: .public)")
+            }
+
+            do {
                 try? await FileProviderDomainController.remove(account: account)
                 try await ledger?.removeAccount(id: account.id)
                 accounts = await ledger?.accounts() ?? []
-                selectAccount(id: accounts.first?.id)
-                if let revokeError {
-                    status = "Disconnected locally. Server revoke failed: \(revokeError.localizedDescription)"
+                let nextAccountID = accounts.first?.id
+                if nextAccountID == nil {
+                    selectedAccountID = nil
+                    items = []
+                    health = nil
+                    openConflictCount = 0
+                    pendingTransferCount = 0
+                    lastRefreshAt = nil
+                    lastHealthCheckAt = nil
+                    lastHealthError = ""
                 } else {
-                    status = "Revoked and disconnected \(account.siteURL.host ?? account.siteURL.absoluteString)."
+                    selectAccount(id: nextAccountID)
+                }
+
+                if let token = revokeToken {
+                    Task {
+                        do {
+                            let client = FloppyAPIClient(siteURL: account.siteURL, restURL: account.restURL, token: token)
+                            try await client.revokeDevice(deviceUUID: account.deviceUUID)
+                            FloppyDiagnostics.app.info("Revoked device token for \(FloppyDiagnostics.redactedURL(account.siteURL), privacy: .public)")
+                        } catch {
+                            FloppyDiagnostics.app.error("Server device revoke failed after local disconnect: \(error.localizedDescription, privacy: .public)")
+                        }
+                    }
+                }
+
+                if let tokenDeleteError {
+                    status = "Disconnected locally. Token cleanup failed: \(tokenDeleteError.localizedDescription)"
+                } else if revokeToken != nil {
+                    status = "Disconnected locally. Server token revoke is running in the background."
+                } else if let revokeError {
+                    status = "Disconnected locally. Server revoke skipped: \(revokeError.localizedDescription)"
+                } else {
+                    status = "Disconnected \(account.siteURL.host ?? account.siteURL.absoluteString)."
                 }
             } catch {
                 status = error.localizedDescription
@@ -1072,7 +1124,7 @@ final class FloppyAppModel: ObservableObject {
         return FloppyAPIClient(siteURL: account.siteURL, restURL: account.restURL, token: token)
     }
 
-    private func loadToken(accountID: String) async throws -> String? {
+    private func loadToken(accountID: String, timeout: TimeInterval = 15) async throws -> String? {
         let tokenStore = self.tokenStore
         return try await withCheckedThrowingContinuation { continuation in
             let gate = TokenLoadContinuationGate()
@@ -1083,7 +1135,7 @@ final class FloppyAppModel: ObservableObject {
                     gate.resume(continuation, with: .failure(error))
                 }
             }
-            DispatchQueue.global().asyncAfter(deadline: .now() + 15) {
+            DispatchQueue.global().asyncAfter(deadline: .now() + timeout) {
                 gate.resume(continuation, with: .failure(FloppyTokenStoreError.timeout))
             }
         }
@@ -1392,11 +1444,11 @@ extension FloppyOnboardingStep {
     var title: String {
         switch self {
         case .idle:
-            "Ready"
+            "Ready to connect"
         case .waitingForWordPressAuthorization:
             "Approve in WordPress"
         case .installingPlugin:
-            "Prepare GitHub ZIP"
+            "Checking GitHub ZIP"
         case .waitingForManualGitHubInstall:
             "Install ZIP"
         case .activatingPlugin:
@@ -1413,13 +1465,13 @@ extension FloppyOnboardingStep {
     var detail: String {
         switch self {
         case .idle:
-            "Enter your site and GitHub ZIP URL."
+            "Enter your site. Floppy will guide the WordPress approval and plugin install."
         case .waitingForWordPressAuthorization:
-            "WordPress is asking you to approve a temporary Application Password."
+            "Approve the temporary WordPress connection so Floppy can finish setup."
         case .installingPlugin:
-            "Floppy is preparing the plugin ZIP for upload."
+            "Floppy is validating the GitHub release ZIP before WordPress installs it."
         case .waitingForManualGitHubInstall:
-            "Install the revealed ZIP in the WordPress upload screen."
+            "Install the ZIP in WordPress. Floppy will continue automatically after activation."
         case .activatingPlugin:
             "Floppy found the plugin and is activating it."
         case .creatingDeviceToken:
@@ -1508,7 +1560,7 @@ private struct PendingOnboarding: Codable {
     }
 }
 
-private extension URL {
+extension URL {
     static func floppySiteURL(from text: String) -> URL? {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else {
