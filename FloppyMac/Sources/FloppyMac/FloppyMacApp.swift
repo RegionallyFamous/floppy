@@ -15,9 +15,13 @@ struct FloppyMacApp: App {
         MenuBarExtra {
             MenuBarView(model: model)
         } label: {
-            FloppyMenuBarIcon()
-                .frame(width: 18, height: 18)
-                .accessibilityLabel("Floppy")
+            HStack(spacing: 5) {
+                FloppyMenuBarIcon()
+                    .frame(width: 16, height: 16)
+                Text("Floppy")
+                    .font(.system(size: 12, weight: .semibold))
+            }
+            .accessibilityLabel("Floppy")
         }
         .menuBarExtraStyle(.window)
 
