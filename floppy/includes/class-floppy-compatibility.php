@@ -36,7 +36,7 @@ final class Floppy_Compatibility {
 		$checks['wordpress'] = self::check( version_compare( get_bloginfo( 'version' ), '7.0', '>=' ), 'WordPress ' . get_bloginfo( 'version' ), 'WordPress 7.0+ is required.' );
 		$checks['desktop_mode'] = function_exists( 'desktop_mode_register_window' )
 			? self::check( true, 'Desktop Mode integration', '' )
-			: self::warning( 'Desktop Mode not detected', 'Desktop Mode is optional. Install it only if you want the browser-native Floppy desktop surface inside WordPress.' );
+			: self::check( false, 'Desktop Mode required', 'Install and activate Desktop Mode before using Floppy.' );
 		$checks['https'] = self::https_check();
 		$checks['rest'] = self::check( (bool) rest_url( 'floppy/v1/discovery' ), 'REST API', 'The REST API must be reachable.' );
 		$checks['upload_limit'] = self::check( wp_max_upload_size() >= MB_IN_BYTES, size_format( wp_max_upload_size() ), 'Upload limit should be at least 1 MB.' );

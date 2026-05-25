@@ -15,12 +15,13 @@
 - Run WordPress Plugin Check against the built release ZIP contents. Keep documented ignores limited to Floppy's custom-table and private-blob streaming architecture.
 - Verify activation, deactivation, reinstall, and uninstall behavior.
 - Verify HTTPS, REST API, upload limits, cron health, private storage, and DB table/index diagnostics.
+- Verify Desktop Mode is installed and active before Floppy activation.
 - Download a repair dry run and debug bundle from the admin screen and confirm they do not leak `storage_key` or private paths.
 - Download a Release Evidence JSON sidecar from the Desktop Mode Evidence panel and confirm it contains the support correlation ID, hook smoke, endpoint availability, repair dry-run status, and no tokens or private paths.
 - Run the 100k load budget before public beta tagging and fail the tag if hot-path query plans full-scan metadata tables.
 - Run the private-storage probe matrix for Studio, Apache, Nginx, and the target host. Production/LAN sites must block direct access before release.
 - Run an export/restore drill and confirm restored metadata, blobs, checksums, tombstones, and attachment links match the source site.
-- Confirm the release target still matches the current baseline: WordPress 7.0+ and PHP 8.3+.
+- Confirm the release target still matches the current baseline: WordPress 7.0+, PHP 8.3+, and Desktop Mode active.
 
 ### Dependency Notes
 

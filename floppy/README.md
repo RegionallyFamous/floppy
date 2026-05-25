@@ -1,6 +1,6 @@
 # Floppy
 
-Floppy is a private-by-default WordPress file service designed for Desktop Mode and Finder-native macOS sync.
+Floppy is a private-by-default WordPress file service designed for Desktop Mode and Finder-native macOS sync. The WordPress plugin requires the `desktop-mode` plugin to be installed and active.
 
 This repository currently contains a production-shaped WordPress plugin scaffold:
 

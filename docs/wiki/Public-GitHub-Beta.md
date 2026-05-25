@@ -7,6 +7,7 @@ Floppy does not use a hosted file, telemetry, diagnostics, or sync service. GitH
 ## Current Baseline
 
 - WordPress plugin target: WordPress 7.0+ and PHP 8.3+.
+- WordPress plugin dependency: Desktop Mode active as `desktop-mode`.
 - macOS app target: macOS 26.0+ with Swift tools 6.2.
 - The Mac app is signing-ready; public distribution requires the Developer ID, hardened runtime, notarization, stapling, and Gatekeeper release lane.
 - Desktop Mode support is tested through an executable public-API harness, not string matching.
@@ -23,7 +24,7 @@ Floppy does not use a hosted file, telemetry, diagnostics, or sync service. GitH
 
 ## Distribution
 
-- WordPress plugin: GitHub release ZIP containing `floppy/floppy.php`.
+- WordPress plugin: GitHub release ZIP containing `floppy/floppy.php`; activation requires Desktop Mode.
 - Mac app: signing-ready local build for beta testers, with notarized distribution as the next release lane.
 - Root README: marketing only.
 - Technical docs: this wiki.
@@ -31,6 +32,7 @@ Floppy does not use a hosted file, telemetry, diagnostics, or sync service. GitH
 ## Acceptance Checks
 
 - Plugin activates on HTTPS WordPress sites with REST API enabled.
+- Desktop Mode is installed and active before Floppy activation.
 - Direct private-file access probes fail.
 - The 10k load budget runner passes in CI.
 - The 100k load budget runner passes before tagging the beta.

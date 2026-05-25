@@ -109,6 +109,7 @@ final class Floppy_Diagnostics {
 				'repair'  => Floppy_Schema::repair( false ),
 			),
 			'desktop_mode'   => array(
+				'required' => true,
 				'detected' => function_exists( 'desktop_mode_register_window' ),
 				'enabled'  => ! empty( $settings['enable_desktop_mode'] ),
 			),

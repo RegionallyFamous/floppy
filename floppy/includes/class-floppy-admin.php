@@ -129,8 +129,14 @@ final class Floppy_Admin {
 						</div>
 						<div class="floppy-admin-metric">
 							<span><?php esc_html_e( 'Desktop Mode', 'floppy' ); ?></span>
-							<strong><?php echo function_exists( 'desktop_mode_register_window' ) ? esc_html__( 'Detected', 'floppy' ) : esc_html__( 'Optional', 'floppy' ); ?></strong>
-							<small><?php echo ! empty( $settings['enable_desktop_mode'] ) ? esc_html__( 'Launcher enabled', 'floppy' ) : esc_html__( 'Launcher disabled', 'floppy' ); ?></small>
+							<strong><?php echo function_exists( 'desktop_mode_register_window' ) ? esc_html__( 'Detected', 'floppy' ) : esc_html__( 'Missing', 'floppy' ); ?></strong>
+							<small>
+								<?php
+								echo function_exists( 'desktop_mode_register_window' )
+									? ( ! empty( $settings['enable_desktop_mode'] ) ? esc_html__( 'Launcher enabled', 'floppy' ) : esc_html__( 'Launcher disabled', 'floppy' ) )
+									: esc_html__( 'Required plugin not active', 'floppy' );
+								?>
+							</small>
 						</div>
 						<div class="floppy-admin-metric">
 							<span><?php esc_html_e( 'Approved Macs', 'floppy' ); ?></span>

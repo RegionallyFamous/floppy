@@ -4,6 +4,7 @@ Tags: media, files, private storage, desktop mode, sync
 Requires at least: 7.0
 Tested up to: 7.0
 Requires PHP: 8.3
+Requires Plugins: desktop-mode
 Stable tag: 0.1.1
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
@@ -28,11 +29,11 @@ The macOS client design stores the approved device token in Keychain and communi
 
 == Installation ==
 
-1. Confirm the site runs WordPress 7.0+ and PHP 8.3+.
+1. Confirm the site runs WordPress 7.0+, PHP 8.3+, and an active Desktop Mode plugin.
 2. Upload the `floppy` folder to `/wp-content/plugins/`.
 3. Activate Floppy.
 4. Open Floppy in wp-admin and run the health checks.
-5. Install Desktop Mode for the native desktop window experience.
+5. Open Desktop Mode for the native desktop window experience.
 
 == Production Notes ==
 

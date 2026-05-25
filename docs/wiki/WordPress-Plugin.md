@@ -6,6 +6,7 @@ The WordPress plugin is the authoritative storage and permissions system for Flo
 
 - WordPress 7.0+.
 - PHP 8.3+.
+- Desktop Mode installed and active (`desktop-mode` plugin dependency).
 - REST API enabled.
 - HTTPS for production private sync and device tokens.
 - A database engine capable of the Floppy custom tables and indexes.
@@ -44,7 +45,8 @@ Local loopback Studio sites may show a warning instead of a hard failure so uplo
 
 ## Desktop Mode And HTTPS Checks
 
-- Desktop Mode is optional for the WordPress browser-native surface. The Finder-native Mac app does not require Desktop Mode.
+- Desktop Mode is a required plugin dependency because Floppy's browser control surface is registered as a Desktop Mode native window and launcher.
+- Finder-native sync uses Floppy's REST API, but the WordPress plugin still declares Desktop Mode as a required dependency for the beta package.
 - HTTPS is required for production device tokens and private file sync.
 - `http://localhost` and loopback IPs are allowed only for local Studio smoke tests.
 
