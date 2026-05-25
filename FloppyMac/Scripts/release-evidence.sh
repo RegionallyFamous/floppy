@@ -108,7 +108,8 @@ else
 fi
 
 if [[ -n "$APP_PATH" ]]; then
-    if codesign -d --verbose=4 "$APP_PATH" 2>&1 | grep -qi "runtime"; then
+    app_signature_details="$(codesign -d --verbose=4 "$APP_PATH" 2>&1 || true)"
+    if grep -Eiq "flags=.*runtime|Runtime Version" <<<"$app_signature_details"; then
         add_check "hardened-runtime" "pass" "Exported app has hardened runtime enabled." "$(redact_path "$APP_PATH")"
     else
         add_check "hardened-runtime" "fail" "Exported app is missing hardened runtime." "$(redact_path "$APP_PATH")"
@@ -134,7 +135,9 @@ if [[ -f "$ZIP_PATH" ]]; then
     if ! command -v zipinfo >/dev/null; then
         add_check "notarization-zip" "fail" "Notarization ZIP could not be inspected because zipinfo is unavailable." "zipinfo not found"
     elif zip_entries="$(zipinfo -1 "$ZIP_PATH" 2>/dev/null)"; then
-        if printf '%s\n' "$zip_entries" | grep -Eq '(^|/)[^/]+\.app/Contents/Info\.plist$' && \
+        if printf '%s\n' "$zip_entries" | grep -Eq '(^__MACOSX/|/\._|^\._|/\.DS_Store$|^\.DS_Store$)'; then
+            add_check "notarization-zip" "fail" "Notarization ZIP contains macOS metadata entries that can break code signing after extraction." "$(redact_path "$ZIP_PATH")"
+        elif printf '%s\n' "$zip_entries" | grep -Eq '(^|/)[^/]+\.app/Contents/Info\.plist$' && \
             printf '%s\n' "$zip_entries" | grep -Eq '(^|/)[^/]+\.app/Contents/PlugIns/FloppyFileProviderExtension\.appex/Contents/Info\.plist$'; then
             add_check "notarization-zip" "pass" "Notarization ZIP contains the exported app and embedded File Provider extension." "$(redact_path "$ZIP_PATH")"
         else

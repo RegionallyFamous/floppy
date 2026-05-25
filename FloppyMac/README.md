@@ -45,6 +45,15 @@ FloppyMac/Scripts/archive-notarize.sh
 
 See `docs/xcode-signing-ready.md` for target setup and `docs/archive-sign-notarize.md` for export options, notarytool setup, and manual verification commands.
 
+Create a drag-to-Applications DMG from the stapled app:
+
+```bash
+APP_PATH=FloppyMac/.build/export/FloppyMac.app \
+DMG_SIGN_IDENTITY="Developer ID Application: NICHOLAS NABIL HAMZE (3J8H48TP7P)" \
+NOTARY_PROFILE=floppy-notary \
+FloppyMac/Scripts/package-dmg.sh
+```
+
 Before tagging a Mac beta, collect release evidence:
 
 ```bash

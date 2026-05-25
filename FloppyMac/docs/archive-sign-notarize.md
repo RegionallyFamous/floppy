@@ -44,6 +44,7 @@ The script writes:
 - `.build/archives/FloppyMac.xcarchive`
 - `.build/export/Floppy.app` or the exported app name from Xcode
 - `.build/FloppyMac-notarization.zip`
+- `.build/FloppyMac.dmg` when `Scripts/package-dmg.sh` is run after notarization
 
 ## Notarization
 
@@ -66,6 +67,19 @@ FloppyMac/Scripts/archive-notarize.sh
 ```
 
 The script submits the ZIP, waits for notarization, staples the exported app, verifies signing, and rebuilds the ZIP around the stapled app.
+
+## DMG Installer
+
+After the app is notarized and stapled, create a drag-to-Applications DMG:
+
+```bash
+APP_PATH=FloppyMac/.build/export/FloppyMac.app \
+DMG_SIGN_IDENTITY="Developer ID Application: Your Name (TEAMID12345)" \
+NOTARY_PROFILE=floppy-notary \
+FloppyMac/Scripts/package-dmg.sh
+```
+
+`APP_BUNDLE_NAME` defaults to `Floppy.app` inside the DMG. The script verifies the stapled app, creates `.build/FloppyMac.dmg`, optionally signs and notarizes the DMG when credentials are provided, staples the DMG ticket, and validates the final image.
 
 After export, create the beta evidence report:
 

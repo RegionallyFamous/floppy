@@ -86,6 +86,32 @@ if [[ -n "$NOTARY_KEY_PATH" || -n "$NOTARY_KEY_ID" || -n "$NOTARY_ISSUER_ID" ]];
     fi
 fi
 
+create_notarization_zip() {
+    local app_path="$1"
+    local zip_path="$2"
+    local app_parent
+    local app_name
+    local zip_parent
+    local zip_name
+
+    app_parent="$(cd "$(dirname "$app_path")" && pwd)"
+    app_name="$(basename "$app_path")"
+    mkdir -p "$(dirname "$zip_path")"
+    zip_parent="$(cd "$(dirname "$zip_path")" && pwd)"
+    zip_name="$(basename "$zip_path")"
+
+    rm -f "$zip_parent/$zip_name"
+    (
+        cd "$app_parent"
+        COPYFILE_DISABLE=1 /usr/bin/zip -qry -X --symlinks "$zip_parent/$zip_name" "$app_name"
+    )
+
+    if /usr/bin/zipinfo -1 "$zip_parent/$zip_name" | grep -Eq '(^__MACOSX/|/\._|^\._|/\.DS_Store$|^\.DS_Store$)'; then
+        echo "Notarization ZIP contains macOS metadata entries that can break code signing after extraction." >&2
+        exit 4
+    fi
+}
+
 mkdir -p "$(dirname "$ARCHIVE_PATH")" "$EXPORT_PATH"
 rm -rf "$ARCHIVE_PATH" "$EXPORT_PATH" "$ZIP_PATH"
 
@@ -196,7 +222,7 @@ if [[ "$ALLOW_NOTARIZATION_SKIP" == "1" ]] && ! spctl --assess --type execute --
     echo "Gatekeeper assessment failed for a local development build; continuing because ALLOW_NOTARIZATION_SKIP=1."
 fi
 
-ditto -c -k --keepParent "$APP_PATH" "$ZIP_PATH"
+create_notarization_zip "$APP_PATH" "$ZIP_PATH"
 echo "Created notarization ZIP: $ZIP_PATH"
 
 NOTARYTOOL_KEY_PATH="${NOTARY_KEY_PATH:-$APP_STORE_CONNECT_KEY_PATH}"
@@ -234,7 +260,7 @@ codesign --verify --strict --verbose=2 "$EXTENSION_PATH"
 spctl --assess --type execute --verbose "$APP_PATH"
 
 rm -f "$ZIP_PATH"
-ditto -c -k --keepParent "$APP_PATH" "$ZIP_PATH"
+create_notarization_zip "$APP_PATH" "$ZIP_PATH"
 
 echo "$APP_PATH"
 echo "$ZIP_PATH"
