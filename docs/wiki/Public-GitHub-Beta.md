@@ -25,7 +25,7 @@ Floppy does not use a hosted file, telemetry, diagnostics, or sync service. GitH
 ## Distribution
 
 - WordPress plugin: GitHub release ZIP containing `floppy/floppy.php`; activation requires Desktop Mode.
-- Mac app: signing-ready local build for beta testers, with notarized distribution as the next release lane.
+- Mac app: signed, notarized, stapled drag-to-Applications DMG attached to the GitHub release.
 - Root README: marketing only.
 - Technical docs: this wiki.
 
@@ -51,6 +51,7 @@ Floppy does not use a hosted file, telemetry, diagnostics, or sync service. GitH
 - WordPress Plugin Check passes against the built GitHub release ZIP contents, with documented ignores for Floppy's custom-table and private-blob streaming paths.
 - Composer dependency freshness passes through the safe compatibility lane. PHPUnit remains on the WordPress-compatible 9.6 line until the WordPress test harness no longer depends on APIs removed in newer PHPUnit majors.
 - Swift build/tests pass on the current macOS runner, and Xcode doctor verifies the local release setup before shipping Mac artifacts.
+- The Mac DMG validates with `xcrun stapler validate`, `codesign --verify`, and `hdiutil verify`.
 
 ## Required Beta Evidence
 
@@ -64,3 +65,4 @@ Keep these artifacts on the internal release issue for every public beta:
   `support_correlation_id`.
 - Disconnect/revoke notes from a live WordPress site.
 - Desktop Mode hook-audit report and release evidence sidecar.
+- Stapled Mac DMG and `FloppyMac/.build/release-evidence/floppy-mac-release-evidence.json`.

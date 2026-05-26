@@ -40,6 +40,9 @@
 - Verify App Group and File Provider entitlements.
 - Build an archive with Developer ID signing settings.
 - Notarize before distributing outside local beta testers.
+- Package the stapled app with `FloppyMac/Scripts/package-dmg.sh`.
+- Verify the DMG with `xcrun stapler validate`, `codesign --verify --verbose=4`, and `hdiutil verify`.
+- Confirm the mounted DMG opens with the custom Finder background, app icon, and Applications symlink.
 - Test disconnect/revoke behavior against a live WordPress site.
 - Run the sync torture drill against a live WordPress site: offline edit, interrupted upload, stale edit conflict, concurrent move/rename/delete, expired cursor full resync, quota failure, token revoke, and reconnect recovery.
 - Confirm the Mac diagnostics bundle includes the support correlation ID, selected account, domain registry state, cursor, pending/conflict counts, active enumerators, last sync error, and last onboarding error without leaking tokens or query strings.
@@ -50,7 +53,7 @@
 - Confirm the `Floppy Beta Checks` workflow is green.
 - Confirm `dist/floppy-release-evidence.json` exists in the workflow artifacts or release issue evidence bundle.
 - Attach the plugin ZIP.
-- Attach the Mac build artifact only when signing/notarization status is explicit.
+- Attach the signed, notarized, stapled Mac DMG.
 - Link this wiki from the release notes.
 - State known beta limits plainly.
 - Include the support correlation ID from the final WordPress debug bundle and Mac diagnostics bundle in the internal release issue.

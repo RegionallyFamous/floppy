@@ -94,7 +94,7 @@ The current build includes:
 
 - a WordPress plugin for private storage, REST APIs, permissions, diagnostics, jobs, versions, conflicts, trash, and export/recovery tooling, with Desktop Mode declared as a required plugin dependency
 - a Desktop Mode control center for My Drive, Recents, Trash, Versions, Conflicts, Shared, Sync, Devices, Diagnostics, Jobs, Evidence, and Settings
-- a native macOS companion app moving toward signed and notarized File Provider distribution
+- a signed and notarized native macOS companion app packaged as a drag-to-Applications DMG, with File Provider distribution checks
 - release gates for Composer validation/audit, dependency freshness, PHP lint, WordPress PHPUnit/MySQL tests, plugin ZIP shape, WordPress Plugin Check, Desktop Mode executable hook audit, Swift build/tests, Xcode doctor, and query-budget evidence
 
 The goal is not a toy demo. The goal is boring reliability for private files under bad networks, stale clients, broken hosts, token revokes, quota failures, large libraries, and support/debug situations.
