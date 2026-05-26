@@ -172,7 +172,9 @@ if [[ -f "$ROOT/Packaging/FloppyIcon.icns" ]]; then
 fi
 if command -v SetFile >/dev/null; then
     SetFile -a V "$STAGING_DIR/.background" || true
-    [[ -f "$STAGING_DIR/.VolumeIcon.icns" ]] && SetFile -a V "$STAGING_DIR/.VolumeIcon.icns" || true
+    if [[ -f "$STAGING_DIR/.VolumeIcon.icns" ]]; then
+        SetFile -a V "$STAGING_DIR/.VolumeIcon.icns" || true
+    fi
 fi
 
 rm -f "$DMG_PATH" "$RW_DMG"
@@ -196,8 +198,10 @@ if [[ -z "$MOUNT_DIR" || ! -d "$MOUNT_DIR" ]]; then
     exit 4
 fi
 if command -v SetFile >/dev/null; then
-    [[ -f "$MOUNT_DIR/.VolumeIcon.icns" ]] && SetFile -a V "$MOUNT_DIR/.VolumeIcon.icns" || true
-    [[ -f "$MOUNT_DIR/.VolumeIcon.icns" ]] && SetFile -a C "$MOUNT_DIR" || true
+    if [[ -f "$MOUNT_DIR/.VolumeIcon.icns" ]]; then
+        SetFile -a V "$MOUNT_DIR/.VolumeIcon.icns" || true
+        SetFile -a C "$MOUNT_DIR" || true
+    fi
 fi
 customize_finder_window "$MOUNT_DIR"
 sync
