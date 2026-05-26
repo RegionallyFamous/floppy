@@ -112,6 +112,20 @@ create_notarization_zip() {
     fi
 }
 
+verify_exported_resources() {
+    local app_path="$1"
+    local resources_dir="$app_path/Contents/Resources"
+    local resource
+
+    for resource in FloppyIcon.icns FloppyMenuBarTemplate.pdf; do
+        if [[ ! -f "$resources_dir/$resource" ]]; then
+            echo "Exported app is missing Contents/Resources/$resource." >&2
+            echo "Regenerate the Xcode project from project.yml and make sure Packaging/$resource is in the app resources build phase." >&2
+            exit 4
+        fi
+    done
+}
+
 mkdir -p "$(dirname "$ARCHIVE_PATH")" "$EXPORT_PATH"
 rm -rf "$ARCHIVE_PATH" "$EXPORT_PATH" "$ZIP_PATH"
 
@@ -195,6 +209,7 @@ if [[ -z "$APP_PATH" ]]; then
     echo "Export succeeded, but no .app was found in $EXPORT_PATH" >&2
     exit 3
 fi
+verify_exported_resources "$APP_PATH"
 
 codesign --verify --deep --strict --verbose=2 "$APP_PATH"
 APP_SIGNATURE_DETAILS="$(codesign -d --verbose=4 "$APP_PATH" 2>&1)"

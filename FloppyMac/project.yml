@@ -34,9 +34,10 @@ targets:
     platform: macOS
     sources:
       - path: Sources/FloppyMac
-    resources:
       - path: Packaging/FloppyIcon.icns
+        buildPhase: resources
       - path: Packaging/FloppyMenuBarTemplate.pdf
+        buildPhase: resources
     dependencies:
       - target: FloppyCore
       - target: FloppyFileProviderExtension

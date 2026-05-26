@@ -23,6 +23,12 @@ With full Xcode installed, run the doctor first:
 FloppyMac/Scripts/xcode-doctor.sh
 ```
 
+If the Xcode project needs to be regenerated from the checked-in spec:
+
+```bash
+(cd FloppyMac && xcodegen generate --spec project.yml)
+```
+
 If `xcode-select` still points at Command Line Tools, switch it:
 
 ```bash
@@ -53,6 +59,8 @@ DMG_SIGN_IDENTITY="Developer ID Application: NICHOLAS NABIL HAMZE (3J8H48TP7P)" 
 NOTARY_PROFILE=floppy-notary \
 FloppyMac/Scripts/package-dmg.sh
 ```
+
+The DMG uses `Packaging/FloppyDMGBackground.svg` to render a custom HiDPI Finder background. `rsvg-convert` is required; macOS `sips` and `tiffutil` are used for the Retina TIFF background.
 
 Before tagging a Mac beta, collect release evidence:
 

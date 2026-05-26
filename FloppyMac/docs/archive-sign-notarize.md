@@ -19,6 +19,12 @@ Run the doctor first:
 FloppyMac/Scripts/xcode-doctor.sh
 ```
 
+If you are using the checked-in XcodeGen spec, regenerate the project before archiving:
+
+```bash
+(cd FloppyMac && xcodegen generate --spec project.yml)
+```
+
 ## Archive And Export
 
 Point the script at the project or workspace that contains the app and extension targets:
@@ -79,7 +85,9 @@ NOTARY_PROFILE=floppy-notary \
 FloppyMac/Scripts/package-dmg.sh
 ```
 
-`APP_BUNDLE_NAME` defaults to `Floppy.app` inside the DMG. The script verifies the stapled app, creates `.build/FloppyMac.dmg`, optionally signs and notarizes the DMG when credentials are provided, staples the DMG ticket, and validates the final image.
+`APP_BUNDLE_NAME` defaults to `Floppy.app` inside the DMG. The script verifies the stapled app, confirms the app icon resource is present, creates `.build/FloppyMac.dmg`, optionally signs and notarizes the DMG when credentials are provided, staples the DMG ticket, and validates the final image.
+
+By default, `Scripts/package-dmg.sh` renders `Packaging/FloppyDMGBackground.svg` into a Retina-ready TIFF background for Finder. Override `DMG_BACKGROUND_SVG`, `DMG_BACKGROUND_PNG`, `DMG_BACKGROUND_SCALE`, or the `DMG_*_ICON_*` position variables when cutting alternate installer art.
 
 After export, create the beta evidence report:
 
