@@ -12,6 +12,11 @@ defined( 'ABSPATH' ) || exit;
  */
 final class Floppy_Schema {
 	/**
+	 * Maximum rows each repair pass should inspect or mutate in one request.
+	 */
+	private const REPAIR_BATCH_LIMIT = 1000;
+
+	/**
 	 * Return fully qualified table name.
 	 */
 	public static function table( string $name ): string {
@@ -658,24 +663,24 @@ final class Floppy_Schema {
 		$now = current_time( 'mysql', true );
 		$created = 0;
 		$conflicts = 0;
+		$scan_limited = false;
 
 		foreach ( array( 'folders' => 'folder', 'files' => 'file' ) as $source => $target_type ) {
+			$source_table = self::table( $source );
 			$rows = $wpdb->get_results(
-				'SELECT id, parent_id, normalized_name FROM ' . self::table( $source ) . " WHERE status != 'deleted'",
+				$wpdb->prepare(
+					"SELECT s.id, s.parent_id, s.normalized_name FROM $source_table s LEFT JOIN $table n ON n.target_type = %s AND n.target_id = s.id WHERE s.status != 'deleted' AND n.id IS NULL LIMIT %d", // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared
+					$target_type,
+					self::REPAIR_BATCH_LIMIT + 1
+				),
 				ARRAY_A
-			); // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared
-			foreach ( $rows as $row ) {
-				$exists = $wpdb->get_var(
-					$wpdb->prepare(
-						"SELECT id FROM $table WHERE target_type = %s AND target_id = %d LIMIT 1", // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared
-						$target_type,
-						(int) $row['id']
-					)
-				);
-				if ( $exists ) {
-					continue;
-				}
+			);
+			if ( count( $rows ) > self::REPAIR_BATCH_LIMIT ) {
+				array_pop( $rows );
+				$scan_limited = true;
+			}
 
+			foreach ( $rows as $row ) {
 				if ( $apply ) {
 					$inserted = $wpdb->insert(
 						$table,
@@ -702,8 +707,9 @@ final class Floppy_Schema {
 		}
 
 		return array(
-			'missing'   => $created,
-			'conflicts' => $conflicts,
+			'missing'      => $created,
+			'conflicts'    => $conflicts,
+			'scan_limited' => $scan_limited,
 		);
 	}
 
@@ -714,27 +720,58 @@ final class Floppy_Schema {
 		global $wpdb;
 
 		$table = self::table( 'item_names' );
-		$rows = $wpdb->get_results( "SELECT id, target_type, target_id FROM $table", ARRAY_A ); // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared
-		$orphans = 0;
-		foreach ( $rows as $row ) {
-			$source = 'folder' === $row['target_type'] ? self::table( 'folders' ) : self::table( 'files' );
-			$target = $wpdb->get_var(
-				$wpdb->prepare(
-					"SELECT id FROM $source WHERE id = %d AND status != 'deleted' LIMIT 1", // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared
-					(int) $row['target_id']
-				)
-			);
-			if ( $target ) {
-				continue;
+		$rows = array();
+		foreach ( array( 'folder' => 'folders', 'file' => 'files' ) as $target_type => $source ) {
+			$source_table = self::table( $source );
+			$remaining = ( self::REPAIR_BATCH_LIMIT + 1 ) - count( $rows );
+			if ( $remaining <= 0 ) {
+				break;
 			}
 
+			$rows = array_merge(
+				$rows,
+				$wpdb->get_results(
+					$wpdb->prepare(
+						"SELECT n.id FROM $table n LEFT JOIN $source_table s ON n.target_id = s.id AND s.status != 'deleted' WHERE n.target_type = %s AND s.id IS NULL LIMIT %d", // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared
+						$target_type,
+						$remaining
+					),
+					ARRAY_A
+				)
+			);
+		}
+
+		$remaining = ( self::REPAIR_BATCH_LIMIT + 1 ) - count( $rows );
+		if ( $remaining > 0 ) {
+			$rows = array_merge(
+				$rows,
+				$wpdb->get_results(
+					$wpdb->prepare(
+						"SELECT id FROM $table WHERE target_type NOT IN ('folder','file') LIMIT %d", // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared
+						$remaining
+					),
+					ARRAY_A
+				)
+			);
+		}
+
+		$scan_limited = count( $rows ) > self::REPAIR_BATCH_LIMIT;
+		if ( $scan_limited ) {
+			array_pop( $rows );
+		}
+
+		$orphans = 0;
+		foreach ( $rows as $row ) {
 			++$orphans;
 			if ( $apply ) {
 				$wpdb->delete( $table, array( 'id' => (int) $row['id'] ), array( '%d' ) );
 			}
 		}
 
-		return array( 'orphaned' => $orphans );
+		return array(
+			'orphaned'     => $orphans,
+			'scan_limited' => $scan_limited,
+		);
 	}
 
 	/**
@@ -744,20 +781,48 @@ final class Floppy_Schema {
 		global $wpdb;
 
 		$table = self::table( 'acl_grants' );
-		$rows = $wpdb->get_results( "SELECT id, target_type, target_id FROM $table LIMIT 2000", ARRAY_A ); // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared
-		$orphans = 0;
-		foreach ( $rows as $row ) {
-			$source = 'folder' === $row['target_type'] ? self::table( 'folders' ) : self::table( 'files' );
-			$target = $wpdb->get_var(
-				$wpdb->prepare(
-					"SELECT id FROM $source WHERE id = %d AND status != 'deleted' LIMIT 1", // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared
-					(int) $row['target_id']
-				)
-			);
-			if ( $target ) {
-				continue;
+		$rows = array();
+		foreach ( array( 'folder' => 'folders', 'file' => 'files' ) as $target_type => $source ) {
+			$source_table = self::table( $source );
+			$remaining = ( self::REPAIR_BATCH_LIMIT + 1 ) - count( $rows );
+			if ( $remaining <= 0 ) {
+				break;
 			}
 
+			$rows = array_merge(
+				$rows,
+				$wpdb->get_results(
+					$wpdb->prepare(
+						"SELECT g.id FROM $table g LEFT JOIN $source_table s ON g.target_id = s.id AND s.status != 'deleted' WHERE g.target_type = %s AND s.id IS NULL LIMIT %d", // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared
+						$target_type,
+						$remaining
+					),
+					ARRAY_A
+				)
+			);
+		}
+
+		$remaining = ( self::REPAIR_BATCH_LIMIT + 1 ) - count( $rows );
+		if ( $remaining > 0 ) {
+			$rows = array_merge(
+				$rows,
+				$wpdb->get_results(
+					$wpdb->prepare(
+						"SELECT id FROM $table WHERE target_type NOT IN ('folder','file') LIMIT %d", // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared
+						$remaining
+					),
+					ARRAY_A
+				)
+			);
+		}
+
+		$scan_limited = count( $rows ) > self::REPAIR_BATCH_LIMIT;
+		if ( $scan_limited ) {
+			array_pop( $rows );
+		}
+
+		$orphans = 0;
+		foreach ( $rows as $row ) {
 			++$orphans;
 			if ( $apply ) {
 				$wpdb->delete( $table, array( 'id' => (int) $row['id'] ), array( '%d' ) );
@@ -766,7 +831,7 @@ final class Floppy_Schema {
 
 		return array(
 			'orphaned'     => $orphans,
-			'scan_limited' => count( $rows ) >= 2000,
+			'scan_limited' => $scan_limited,
 		);
 	}
 
@@ -1111,20 +1176,9 @@ final class Floppy_Schema {
 			return array( 'candidates' => 0, 'scanned' => 0, 'scan_limited' => false );
 		}
 
-		$known = array_fill_keys(
-			array_filter(
-				array_merge(
-					$wpdb->get_col( 'SELECT storage_key FROM ' . self::table( 'files' ) . " WHERE storage_key != ''" ), // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared
-					$wpdb->get_col( 'SELECT storage_key FROM ' . self::table( 'file_versions' ) . " WHERE storage_key != ''" ), // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared
-					$wpdb->get_col( 'SELECT storage_key FROM ' . self::table( 'upload_sessions' ) . " WHERE storage_key != ''" ), // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared
-					$wpdb->get_col( 'SELECT storage_key FROM ' . self::table( 'thumbnails' ) . " WHERE storage_key != ''" ) // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared
-				)
-			),
-			true
-		);
-		$candidates = 0;
+		$keys = array();
 		$scanned = 0;
-		$limit = 1000;
+		$limit = self::REPAIR_BATCH_LIMIT;
 		$root_path = trailingslashit( $root['path'] );
 		$iterator = new RecursiveIteratorIterator( new RecursiveDirectoryIterator( $root_path, FilesystemIterator::SKIP_DOTS ) );
 		foreach ( $iterator as $file ) {
@@ -1136,11 +1190,36 @@ final class Floppy_Schema {
 			if ( in_array( $key, array( '.htaccess', 'web.config', 'index.php' ), true ) ) {
 				continue;
 			}
-			if ( empty( $known[ $key ] ) && 0 !== strpos( $key, 'exports/' ) ) {
-				++$candidates;
+			if ( 0 !== strpos( $key, 'exports/' ) ) {
+				$keys[] = $key;
 			}
 			if ( $scanned >= $limit ) {
 				break;
+			}
+		}
+
+		$known = array();
+		$keys = array_values( array_unique( $keys ) );
+		if ( ! empty( $keys ) ) {
+			$placeholders = implode( ',', array_fill( 0, count( $keys ), '%s' ) );
+			foreach ( array( 'files', 'file_versions', 'upload_sessions', 'thumbnails' ) as $source ) {
+				$known = array_merge(
+					$known,
+					$wpdb->get_col(
+						$wpdb->prepare(
+							'SELECT storage_key FROM ' . self::table( $source ) . " WHERE storage_key IN ($placeholders)", // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared
+							$keys
+						)
+					)
+				);
+			}
+		}
+
+		$known = array_fill_keys( array_filter( $known ), true );
+		$candidates = 0;
+		foreach ( $keys as $key ) {
+			if ( empty( $known[ $key ] ) ) {
+				++$candidates;
 			}
 		}
 

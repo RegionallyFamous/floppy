@@ -77,13 +77,12 @@ final class Floppy_Rate_Limiter {
 
 		$table = Floppy_Schema::table( 'rate_limits' );
 		if ( $wpdb->get_var( $wpdb->prepare( 'SHOW TABLES LIKE %s', $table ) ) !== $table ) {
-			$count = (int) get_transient( $key ) + 1;
-			set_transient( $key, $count, $window );
-			return $count;
+			return self::increment_transient_bucket( $key, $window );
 		}
 
 		$now = current_time( 'mysql', true );
 		$expires = gmdate( 'Y-m-d H:i:s', time() + max( 1, $window ) );
+		$rate_key = md5( $key );
 		$identity_hash = hash( 'sha256', $key );
 
 		$wpdb->query(
@@ -93,59 +92,81 @@ final class Floppy_Rate_Limiter {
 			)
 		); // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared
 
-		$existing = $wpdb->get_row(
+		$updated = $wpdb->query(
 			$wpdb->prepare(
-				'SELECT id, count, expires_at_gmt FROM ' . $table . ' WHERE rate_key = %s LIMIT 1',
-				md5( $key )
-			),
-			ARRAY_A
+				'INSERT INTO ' . $table . ' (rate_key, bucket, identity_hash, count, expires_at_gmt, created_at_gmt, updated_at_gmt) VALUES (%s, %s, %s, 1, %s, %s, %s) ON DUPLICATE KEY UPDATE count = IF(expires_at_gmt < %s, 1, count + 1), expires_at_gmt = IF(expires_at_gmt < %s, %s, expires_at_gmt), updated_at_gmt = %s',
+				$rate_key,
+				$bucket,
+				$identity_hash,
+				$expires,
+				$now,
+				$now,
+				$now,
+				$now,
+				$expires,
+				$now
+			)
 		); // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared
 
-		if ( $existing && strtotime( $existing['expires_at_gmt'] . ' GMT' ) >= time() ) {
-			$count = (int) $existing['count'] + 1;
-			$wpdb->update(
-				$table,
-				array(
-					'count'          => $count,
-					'updated_at_gmt' => $now,
-				),
-				array( 'id' => (int) $existing['id'] ),
-				array( '%d', '%s' ),
-				array( '%d' )
-			);
-			return $count;
+		if ( false === $updated ) {
+			return self::increment_transient_bucket( $key, $window );
 		}
 
-		if ( $existing ) {
-			$wpdb->update(
-				$table,
-				array(
-					'count'          => 1,
-					'expires_at_gmt' => $expires,
-					'updated_at_gmt' => $now,
-				),
-				array( 'id' => (int) $existing['id'] ),
-				array( '%d', '%s', '%s' ),
-				array( '%d' )
-			);
+		return (int) $wpdb->get_var(
+			$wpdb->prepare(
+				'SELECT count FROM ' . $table . ' WHERE rate_key = %s LIMIT 1',
+				$rate_key
+			)
+		); // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared
+	}
+
+	/**
+	 * Increment a transient fallback bucket with an atomic SQL update.
+	 */
+	private static function increment_transient_bucket( string $key, int $window ): int {
+		global $wpdb;
+
+		$count_option = '_transient_' . $key;
+		$timeout_option = '_transient_timeout_' . $key;
+		$now = time();
+		$timeout = (int) get_option( $timeout_option );
+		if ( $timeout && $timeout < $now ) {
+			delete_option( $count_option );
+			delete_option( $timeout_option );
+			$timeout = 0;
+		}
+
+		if ( ! $timeout ) {
+			add_option( $timeout_option, (string) ( $now + $window ), '', false );
+		}
+
+		if ( add_option( $count_option, '1', '', false ) ) {
 			return 1;
 		}
 
-		$wpdb->insert(
-			$table,
-			array(
-				'rate_key'       => md5( $key ),
-				'bucket'         => $bucket,
-				'identity_hash'  => $identity_hash,
-				'count'          => 1,
-				'expires_at_gmt' => $expires,
-				'created_at_gmt' => $now,
-				'updated_at_gmt' => $now,
-			),
-			array( '%s', '%s', '%s', '%d', '%s', '%s', '%s' )
+		$updated = $wpdb->query(
+			$wpdb->prepare(
+				"UPDATE $wpdb->options SET option_value = CAST(option_value AS UNSIGNED) + 1 WHERE option_name = %s", // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared
+				$count_option
+			)
 		);
 
-		return 1;
+		if ( false === $updated || 0 === (int) $updated ) {
+			if ( add_option( $count_option, '1', '', false ) ) {
+				return 1;
+			}
+
+			$count = (int) get_transient( $key ) + 1;
+			set_transient( $key, $count, $window );
+			return $count;
+		}
+
+		return (int) $wpdb->get_var(
+			$wpdb->prepare(
+				"SELECT option_value FROM $wpdb->options WHERE option_name = %s LIMIT 1", // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared
+				$count_option
+			)
+		);
 	}
 
 	/**

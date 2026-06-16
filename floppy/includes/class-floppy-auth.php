@@ -12,6 +12,11 @@ defined( 'ABSPATH' ) || exit;
  */
 final class Floppy_Auth {
 	/**
+	 * REST namespace that may accept scoped device bearer tokens.
+	 */
+	private const REST_NAMESPACE = 'floppy/v1';
+
+	/**
 	 * Register auth hooks.
 	 */
 	public static function init(): void {
@@ -242,12 +247,43 @@ final class Floppy_Auth {
 	 */
 	private static function is_floppy_rest_request(): bool {
 		$route = isset( $_GET['rest_route'] ) ? (string) wp_unslash( $_GET['rest_route'] ) : ''; // phpcs:ignore WordPress.Security.NonceVerification.Recommended,WordPress.Security.ValidatedSanitizedInput.InputNotSanitized
-		if ( 0 === strpos( $route, '/floppy/v1' ) ) {
+		if ( self::is_floppy_rest_route_path( $route ) ) {
 			return true;
 		}
 
 		$uri = isset( $_SERVER['REQUEST_URI'] ) ? (string) wp_unslash( $_SERVER['REQUEST_URI'] ) : ''; // phpcs:ignore WordPress.Security.ValidatedSanitizedInput.InputNotSanitized
-		return false !== strpos( $uri, '/' . rest_get_url_prefix() . '/floppy/v1' );
+		$path = (string) wp_parse_url( $uri, PHP_URL_PATH );
+		if ( '' === $path ) {
+			return false;
+		}
+
+		$path = '/' . ltrim( $path, '/' );
+		$rest_path = (string) wp_parse_url( rest_url( self::REST_NAMESPACE ), PHP_URL_PATH );
+		if ( '' === $rest_path ) {
+			return false;
+		}
+
+		$rest_path = '/' . trim( $rest_path, '/' );
+		if ( '/' === $rest_path ) {
+			return false;
+		}
+
+		return $path === $rest_path || 0 === strpos( $path, $rest_path . '/' );
+	}
+
+	/**
+	 * Whether a REST route path is exactly inside the Floppy namespace.
+	 */
+	private static function is_floppy_rest_route_path( string $route ): bool {
+		$route = trim( $route );
+		if ( '' === $route || '/' !== $route[0] ) {
+			return false;
+		}
+
+		$path = (string) strtok( $route, '?#' );
+		$path = '/' . ltrim( $path, '/' );
+		$namespace = '/' . self::REST_NAMESPACE;
+		return $path === $namespace || 0 === strpos( $path, $namespace . '/' );
 	}
 
 	/**
@@ -261,12 +297,6 @@ final class Floppy_Auth {
 	 * Allow local Studio smoke tests to use device tokens over loopback HTTP.
 	 */
 	private static function is_loopback_request(): bool {
-		$host = isset( $_SERVER['HTTP_HOST'] ) ? strtolower( (string) wp_unslash( $_SERVER['HTTP_HOST'] ) ) : ''; // phpcs:ignore WordPress.Security.ValidatedSanitizedInput.InputNotSanitized
-		$host = preg_replace( '/:\\d+$/', '', $host );
-		if ( in_array( $host, array( 'localhost', '127.0.0.1', '::1', '[::1]' ), true ) ) {
-			return true;
-		}
-
 		$remote_addr = isset( $_SERVER['REMOTE_ADDR'] ) ? (string) wp_unslash( $_SERVER['REMOTE_ADDR'] ) : ''; // phpcs:ignore WordPress.Security.ValidatedSanitizedInput.InputNotSanitized
 		return in_array( $remote_addr, array( '127.0.0.1', '::1' ), true );
 	}

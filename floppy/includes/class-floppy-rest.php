@@ -31,22 +31,25 @@ final class Floppy_Rest {
 	 * Public discovery.
 	 */
 	public static function discovery(): WP_REST_Response {
-		return new WP_REST_Response(
-			array(
-				'name'         => 'Floppy',
-				'version'      => FLOPPY_VERSION,
-				'namespace'    => self::NAMESPACE,
-				'rest_url'     => esc_url_raw( rest_url( self::NAMESPACE ) ),
-				'auth'         => array( 'browser_device_approval', 'device_code_exchange', 'wordpress_session', 'application_password_bootstrap' ),
-				'desktop_mode' => function_exists( 'desktop_mode_register_window' ),
-				'private'      => true,
-				'limits'       => array(
-					'max_file_size'   => (int) Floppy_Settings::get_value( 'max_file_size', wp_max_upload_size() ),
-					'max_batch_files' => (int) Floppy_Settings::get_value( 'max_batch_files', 50 ),
-					'max_chunk_size'  => self::max_upload_chunk_bytes(),
-				),
-			)
+		$data = array(
+			'name'         => 'Floppy',
+			'namespace'    => self::NAMESPACE,
+			'rest_url'     => esc_url_raw( rest_url( self::NAMESPACE ) ),
+			'auth'         => array( 'browser_device_approval', 'device_code_exchange', 'wordpress_session', 'application_password_bootstrap' ),
+			'desktop_mode' => function_exists( 'desktop_mode_register_window' ),
+			'private'      => true,
 		);
+
+		if ( is_user_logged_in() ) {
+			$data['version'] = FLOPPY_VERSION;
+			$data['limits'] = array(
+				'max_file_size'   => (int) Floppy_Settings::get_value( 'max_file_size', wp_max_upload_size() ),
+				'max_batch_files' => (int) Floppy_Settings::get_value( 'max_batch_files', 50 ),
+				'max_chunk_size'  => self::max_upload_chunk_bytes(),
+			);
+		}
+
+		return new WP_REST_Response( $data );
 	}
 
 	/**
@@ -501,22 +504,22 @@ final class Floppy_Rest {
 
 		$normalized = Floppy_Storage::normalize_lookup_name( $q );
 		$like = $wpdb->esc_like( $normalized ) . '%';
+		$folder_access = self::search_access_condition( 'folder', $user_id );
+		$file_access = self::search_access_condition( 'file', $user_id );
 		$folders = $wpdb->get_results(
 			$wpdb->prepare(
-				'SELECT * FROM ' . Floppy_Schema::table( 'folders' ) . " WHERE status = 'active' AND normalized_name LIKE %s ORDER BY updated_at_gmt DESC, id DESC LIMIT %d",
-				$like,
-				$limit
+				'SELECT f.* FROM ' . Floppy_Schema::table( 'folders' ) . " f WHERE f.status = 'active' AND f.normalized_name LIKE %s" . $folder_access['sql'] . ' ORDER BY f.updated_at_gmt DESC, f.id DESC LIMIT %d',
+				array_merge( array( $like ), $folder_access['values'], array( $limit ) )
 			),
 			ARRAY_A
-		);
+		); // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared
 		$files = $wpdb->get_results(
 			$wpdb->prepare(
-				'SELECT * FROM ' . Floppy_Schema::table( 'files' ) . " WHERE status = 'active' AND normalized_name LIKE %s ORDER BY updated_at_gmt DESC, id DESC LIMIT %d",
-				$like,
-				$limit
+				'SELECT f.* FROM ' . Floppy_Schema::table( 'files' ) . " f WHERE f.status = 'active' AND f.normalized_name LIKE %s" . $file_access['sql'] . ' ORDER BY f.updated_at_gmt DESC, f.id DESC LIMIT %d',
+				array_merge( array( $like ), $file_access['values'], array( $limit ) )
 			),
 			ARRAY_A
-		);
+		); // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared
 
 		$items = array();
 		foreach ( $folders as $row ) {
@@ -535,6 +538,40 @@ final class Floppy_Rest {
 				'items'      => array_slice( $items, 0, $limit ),
 				'query_mode' => 'prefix',
 			)
+		);
+	}
+
+	/**
+	 * SQL fragment limiting search candidates to the current user's own or directly shared rows.
+	 */
+	private static function search_access_condition( string $target_type, int $user_id ): array {
+		if ( user_can( $user_id, 'manage_options' ) ) {
+			return array( 'sql' => '', 'values' => array() );
+		}
+
+		if ( ! $user_id ) {
+			return array( 'sql' => ' AND 1 = 0', 'values' => array() );
+		}
+
+		$user = get_userdata( $user_id );
+		$principals = array( array( 'user', (string) $user_id ) );
+		if ( $user ) {
+			foreach ( (array) $user->roles as $role ) {
+				$principals[] = array( 'role', (string) $role );
+			}
+		}
+
+		$grant_clauses = array();
+		$grant_values = array();
+		foreach ( $principals as $principal ) {
+			$grant_clauses[] = '(g.principal_type = %s AND g.principal_ref = %s)';
+			$grant_values[] = $principal[0];
+			$grant_values[] = $principal[1];
+		}
+
+		return array(
+			'sql'    => ' AND (f.owner_id = %d OR EXISTS (SELECT 1 FROM ' . Floppy_Schema::table( 'acl_grants' ) . " g WHERE g.target_type = %s AND g.target_id = f.id AND g.state = 'accepted' AND g.capability IN ('read','write') AND (" . implode( ' OR ', $grant_clauses ) . ')))',
+			'values' => array_merge( array( $user_id, $target_type ), $grant_values ),
 		);
 	}
 
@@ -1790,7 +1827,7 @@ final class Floppy_Rest {
 		}
 
 		$cursor = absint( $request->get_param( 'cursor' ) );
-		$limit  = absint( $request->get_param( 'limit' ) ?: 250 );
+		$limit  = max( 1, min( 500, absint( $request->get_param( 'limit' ) ?: 250 ) ) );
 		$result = Floppy_Sync::get_changes( $cursor, $limit, get_current_user_id() );
 		if ( is_wp_error( $result ) ) {
 			return $result;

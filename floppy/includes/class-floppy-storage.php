@@ -467,7 +467,7 @@ final class Floppy_Storage {
 	 * Reject executable/server-interpreted extensions.
 	 */
 	public static function has_dangerous_extension( string $filename ): bool {
-		$dangerous = array( 'php', 'php3', 'php4', 'php5', 'phtml', 'phar', 'cgi', 'pl', 'asp', 'aspx', 'jsp', 'sh', 'bash', 'zsh' );
+		$dangerous = array( 'php', 'php3', 'php4', 'php5', 'php7', 'php8', 'phtml', 'phar', 'cgi', 'pl', 'asp', 'aspx', 'jsp', 'sh', 'bash', 'zsh' );
 		$ext = strtolower( pathinfo( $filename, PATHINFO_EXTENSION ) );
 
 		return in_array( $ext, $dangerous, true );

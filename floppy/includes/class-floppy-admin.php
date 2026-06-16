@@ -94,6 +94,10 @@ final class Floppy_Admin {
 		$devices = Floppy_Auth::list_devices( get_current_user_id() );
 		$approval = self::get_pending_device_approval();
 		$settings = Floppy_Settings::get();
+		$approved_open_url = '';
+		if ( ! empty( $_GET['floppy-approved'] ) && ! empty( $_GET['open'] ) ) { // phpcs:ignore WordPress.Security.NonceVerification.Recommended
+			$approved_open_url = self::sanitize_device_open_url( rawurldecode( (string) wp_unslash( $_GET['open'] ) ) ); // phpcs:ignore WordPress.Security.NonceVerification.Recommended,WordPress.Security.ValidatedSanitizedInput.InputNotSanitized
+		}
 		$active_devices = 0;
 		$revoked_devices = 0;
 		foreach ( $devices as $device ) {
@@ -193,11 +197,11 @@ final class Floppy_Admin {
 					</section>
 				<?php endif; ?>
 
-				<?php if ( ! empty( $_GET['floppy-approved'] ) && ! empty( $_GET['open'] ) ) : // phpcs:ignore WordPress.Security.NonceVerification.Recommended ?>
+				<?php if ( '' !== $approved_open_url ) : ?>
 					<section class="floppy-admin-panel floppy-approval-panel">
 						<h2><?php esc_html_e( 'Mac Approved', 'floppy' ); ?></h2>
 						<p><?php esc_html_e( 'Floppy for Mac can now finish setup and store the scoped device token. If the app does not open automatically, use the button below.', 'floppy' ); ?></p>
-						<p><a class="button button-primary" href="<?php echo esc_attr( rawurldecode( (string) wp_unslash( $_GET['open'] ) ) ); ?>"><?php esc_html_e( 'Open Floppy for Mac', 'floppy' ); ?></a></p>
+						<p><a class="button button-primary" href="<?php echo self::escape_device_open_url( $approved_open_url ); // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped ?>"><?php esc_html_e( 'Open Floppy for Mac', 'floppy' ); ?></a></p>
 					</section>
 				<?php endif; ?>
 
@@ -476,6 +480,21 @@ final class Floppy_Admin {
 	}
 
 	/**
+	 * Return a trusted Mac handoff URL or an empty string.
+	 */
+	private static function sanitize_device_open_url( string $open_url ): string {
+		$open_url = trim( $open_url );
+		return self::is_valid_device_callback( $open_url ) ? $open_url : '';
+	}
+
+	/**
+	 * Escape a validated Mac handoff URL.
+	 */
+	private static function escape_device_open_url( string $open_url ): string {
+		return esc_url( $open_url, array_merge( wp_allowed_protocols(), array( 'floppy' ) ) );
+	}
+
+	/**
 	 * Render the post-approval handoff without putting the raw token in an admin URL.
 	 */
 	private static function render_approved_device( string $open_url ): void {
@@ -491,7 +510,7 @@ final class Floppy_Admin {
 			<div class="wrap">
 				<h1><?php esc_html_e( 'Mac Approved', 'floppy' ); ?></h1>
 				<p><?php esc_html_e( 'Floppy for Mac can now finish setup and store the scoped device token. If the app does not open automatically, use the button below.', 'floppy' ); ?></p>
-				<p><a class="button button-primary button-hero" href="<?php echo esc_attr( $open_url ); ?>"><?php esc_html_e( 'Open Floppy for Mac', 'floppy' ); ?></a></p>
+				<p><a class="button button-primary button-hero" href="<?php echo self::escape_device_open_url( $open_url ); // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped ?>"><?php esc_html_e( 'Open Floppy for Mac', 'floppy' ); ?></a></p>
 			</div>
 		</body>
 		</html>
