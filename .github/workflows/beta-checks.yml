@@ -18,7 +18,7 @@ jobs:
     name: Repository Quality
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - name: Install shellcheck
         run: |
           sudo apt-get update
@@ -50,7 +50,7 @@ jobs:
       WP_CORE_DIR: /tmp/wordpress
       WP_TESTS_DIR: /tmp/wordpress-tests-lib
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: shivammathur/setup-php@v2
         with:
           php-version: "8.3"
@@ -126,7 +126,7 @@ jobs:
     name: macOS App
     runs-on: macos-26
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - name: Toolchain versions
         run: |
           sw_vers
@@ -146,7 +146,7 @@ jobs:
     runs-on: ubuntu-latest
     if: github.event_name == 'workflow_dispatch' && inputs.run_100k_release_gate == 'true'
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: shivammathur/setup-php@v2
         with:
           php-version: "8.3"
